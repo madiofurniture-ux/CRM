@@ -196,7 +196,7 @@ async def dashboard_stats(_: dict = Depends(get_current_user)):
     monthly = defaultdict(float)
     for s in sales:
         d = (s.get("date") or "")[:7]
-        if d:
+        if d and len(d) == 7 and d[4] == "-" and d[:4].isdigit() and d[5:].isdigit():
             monthly[d] += (s.get("value") or 0)
     monthly_revenue = sorted(
         [{"month": k, "value": v} for k, v in monthly.items()],

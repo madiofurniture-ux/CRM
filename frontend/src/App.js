@@ -43,7 +43,7 @@ function App() {
           <Route path="/inventory" element={<ProtectedRoute page="inventory"><Layout><Inventory /></Layout></ProtectedRoute>} />
           <Route path="/inventory/analytics" element={<ProtectedRoute page="inv-analytics"><Layout><InventoryAnalytics /></Layout></ProtectedRoute>} />
           <Route path="/tasks" element={<ProtectedRoute page="tasks"><Layout><Tasks /></Layout></ProtectedRoute>} />
-          <Route path="/admin/roles" element={<ProtectedRoute><Layout><RoleManager /></Layout></ProtectedRoute>} />
+          <Route path="/admin/roles" element={<ProtectedRoute page="roles"><Layout><RoleManager /></Layout></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
