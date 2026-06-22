@@ -1,0 +1,60 @@
+{
+  "summary": "Backend + frontend testing for MADIO CRM. 23/23 backend pytest tests pass (after 1 fix). Frontend login (PIN pad), all 10 nav routes, dashboard KPIs+charts, kanban, quotes table+modal, visitors, leads, inventory grid (120 items), inventory analytics, tasks toggle, role manager, raghu role-based sidebar all work. One UX bug found: when non-admin (raghu) navigates directly to /admin/roles, app shows uncaught axios 403 runtime error overlay instead of 'No access' page because the route doesn't pass page='roles' to ProtectedRoute.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/auth/users",
+        "issue": "Was returning 500 due to MongoDB _id (ObjectId) leaking into response after insert_one. FIXED by excluding _id from response in server.py line 92."
+      },
+      {
+        "endpoint": "GET /api/dashboard/stats",
+        "issue": "monthly_revenue can contain a {'month':'nan','value':...} entry — dashboard chart shows a 'nan' x-axis label. Caused by some sales rows in /app/backend/data/sales.json having no valid Sale Date so date becomes 'nan' string. Filter out non-YYYY-MM keys or skip when sale_date == 'nan'."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "RoleManager / route /admin/roles",
+        "issue": "When a non-admin user (raghu) navigates directly to /admin/roles, RoleManager fires GET /api/auth/users which returns 403 and an uncaught AxiosError is rendered as a fullscreen 'Uncaught runtime errors' overlay instead of the intended 'No access' page.",
+        "selector": "/admin/roles",
+        "priority": "HIGH",
+        "fix_hint": "In /app/frontend/src/App.js change <ProtectedRoute> to <ProtectedRoute page=\"roles\"> for the /admin/roles route so the page-permission check kicks in. Also add adminOnly check in canAccess (AuthContext) when route is admin-only, or wrap RoleManager API calls in try/catch."
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Dashboard > Monthly Revenue chart",
+        "issues": ["Last bar's x-axis label shows 'nan' due to sales records with missing Sale Date — should filter out invalid month keys in /api/dashboard/stats."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "FIX: Wrap /admin/roles route with <ProtectedRoute page=\"roles\"> in /app/frontend/src/App.js so non-admin sees 'No access' instead of an uncaught 403 overlay.",
+    "FIX (minor): In /app/backend/server.py dashboard_stats, skip sales records whose date string is empty/'nan' before bucketing by month, so the chart no longer shows a 'nan' bar.",
+    "Note: Required data-testids for form save buttons in original spec ('quote-save','lead-save','visitor-save','item-save','task-save','ru-save') are all implemented as a single generic data-testid='form-save' in the shared modal footer. Works fine but doesn't match spec naming — main agent may want to add per-form testids."
+  ],
+  "critical_code_review_comments": [
+    "server.py make_crud PUT accepts raw dict for any field — no Pydantic validation on updates. Acceptable for MVP but risky for production (any client can set arbitrary fields).",
+    "POST /api/auth/users previously leaked Mongo ObjectId in response (fixed). Recommend a small helper that strips _id/pin_hash everywhere.",
+    "Frontend /admin/roles missing page='roles' guard — same pattern bug could exist if any future admin-only route is added.",
+    "CORS configured with allow_credentials=True together with allow_origins potentially '*'; if CORS_ORIGINS env isn't set in production this is unsafe — keep it pinned to the public origin."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (create_user response excludes _id)",
+    "/app/backend/tests/backend_test.py (new comprehensive pytest suite)"
+  ],
+  "success_rate": { "backend": "100% (23/23 after fix)", "frontend": "95% (1 high-priority UX bug)" },
+  "test_credentials": "admin/1234 (admin), raghu/2222, nenmu/3333, gowtham/4444 — all verified working",
+  "seed_data_creation": "No new seed data created. Verified existing seeds: 25 visitors, 120 inventory, 50 sales, 15 leads, 15 quotes, 10 architects, 10 tasks, 4 users.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/backend_test.py covers auth, seed counts, dashboard, analytics, full CRUD per resource, and admin user mgmt. Re-run with: pytest /app/backend/tests/backend_test.py -v. After main agent fixes the /admin/roles ProtectedRoute and the 'nan' monthly revenue, re-test by (1) logging in as raghu/2222 and visiting /admin/roles — expect 'No access' page, not an error overlay; (2) checking dashboard chart has no 'nan' bar.",
+  "rca_of_the_issue": "Bug 1 (POST /api/auth/users 500): motor's insert_one mutates the input dict to add MongoDB _id (ObjectId). The endpoint returned the same dict filtered only by 'pin_hash' — _id remained, FastAPI's jsonable_encoder failed serializing ObjectId. Fix: also exclude '_id' from the returned dict. Bug 2 (/admin/roles 403 overlay for non-admin): /admin/roles route in App.js wraps RoleManager in <ProtectedRoute> without page='roles', so canAccess('roles') is never called; non-admin reaches the page and its useEffect calls protected admin endpoints which 401/403, throwing an unhandled axios error caught by React's dev error overlay. Fix: pass page='roles' (already declared as adminOnly in Sidebar) or guard inside the page."
+}
