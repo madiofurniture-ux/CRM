@@ -24,6 +24,10 @@ from models import (
     SaleCreate, Sale,
     InventoryCreate, InventoryItem,
     TaskCreate, Task,
+    InvoiceCreate, Invoice,
+    MeetCreate, Meet,
+    PettyCashCreate, PettyCash,
+    AttendanceCheckIn, OfficeSettings,
 )
 from seed import seed_all
 
@@ -154,6 +158,183 @@ make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
 make_crud(api, "sales", "sales", SaleCreate, Sale)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem)
 make_crud(api, "tasks", "tasks", TaskCreate, Task)
+make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice)
+make_crud(api, "meets", "meets", MeetCreate, Meet)
+make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash)
+
+
+# ---------- Outstanding report ----------
+@api.get("/outstanding")
+async def outstanding_report(_: dict = Depends(get_current_user)):
+    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
+    invoices = await db.invoices.find({}, {"_id": 0}).to_list(5000)
+    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
+
+    outstanding_sales = [s for s in sales if (s.get("balance") or 0) > 0]
+    outstanding_invoices = [i for i in invoices if (i.get("balance") or 0) > 0]
+    hot_quotes = [q for q in quotes if q.get("stage") in ("Negotiation", "Quoted") and (q.get("value") or 0) >= 100000]
+
+    total_sales_out = sum((s.get("balance") or 0) for s in outstanding_sales)
+    total_inv_out = sum((i.get("balance") or 0) for i in outstanding_invoices)
+    total_quote_pipeline = sum((q.get("value") or 0) for q in hot_quotes)
+
+    # aging buckets on sales balance (based on sale date)
+    from datetime import date as _date
+    today = _date.today()
+    def _age(d):
+        try:
+            y, m, dd = d.split("-")
+            return (today - _date(int(y), int(m), int(dd))).days
+        except Exception:
+            return 0
+    buckets = {"0-30": 0.0, "31-60": 0.0, "61-90": 0.0, "90+": 0.0}
+    for s in outstanding_sales:
+        a = _age((s.get("date") or "")[:10])
+        b = "0-30" if a <= 30 else "31-60" if a <= 60 else "61-90" if a <= 90 else "90+"
+        buckets[b] += (s.get("balance") or 0)
+
+    return {
+        "sales_outstanding": total_sales_out,
+        "invoice_outstanding": total_inv_out,
+        "hot_pipeline": total_quote_pipeline,
+        "aging": [{"bucket": k, "value": v} for k, v in buckets.items()],
+        "outstanding_sales": outstanding_sales,
+        "outstanding_invoices": outstanding_invoices,
+        "hot_quotes": hot_quotes,
+    }
+
+
+# ---------- Office Settings ----------
+async def _get_settings():
+    s = await db.settings.find_one({"_id": "office"})
+    if not s:
+        default = OfficeSettings().model_dump()
+        await db.settings.insert_one({"_id": "office", **default})
+        return default
+    s.pop("_id", None)
+    return s
+
+
+@api.get("/settings/office")
+async def get_office_settings(_: dict = Depends(get_current_user)):
+    return await _get_settings()
+
+
+@api.put("/settings/office")
+async def update_office_settings(payload: OfficeSettings, _: dict = Depends(require_admin)):
+    data = payload.model_dump()
+    await db.settings.update_one({"_id": "office"}, {"$set": data}, upsert=True)
+    return data
+
+
+# ---------- Attendance with geofencing ----------
+def _haversine_m(lat1, lng1, lat2, lng2):
+    import math
+    R = 6371000.0
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp/2)**2 + math.cos(p1) * math.cos(p2) * math.sin(dl/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def _today():
+    return now_iso()[:10]
+
+
+@api.get("/attendance/today")
+async def attendance_today(user: dict = Depends(get_current_user)):
+    rec = await db.attendance.find_one({"user_id": user["id"], "date": _today()}, {"_id": 0})
+    return rec
+
+
+@api.get("/attendance")
+async def list_attendance(
+    date: Optional[str] = None,
+    user_id: Optional[str] = None,
+    days: Optional[int] = None,
+    user: dict = Depends(get_current_user),
+):
+    q = {}
+    if date:
+        q["date"] = date
+    if user_id:
+        # only admin can query other users
+        if user["role"] != "admin" and user_id != user["id"]:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        q["user_id"] = user_id
+    else:
+        # non-admins only see own
+        if user["role"] != "admin":
+            q["user_id"] = user["id"]
+    if days:
+        from datetime import date as _date, timedelta
+        cutoff = (_date.today() - timedelta(days=days)).isoformat()
+        q["date"] = {"$gte": cutoff}
+    return await db.attendance.find(q, {"_id": 0}).sort("date", -1).to_list(500)
+
+
+@api.post("/attendance/check-in")
+async def check_in(payload: AttendanceCheckIn, user: dict = Depends(get_current_user)):
+    settings = await _get_settings()
+    dist = _haversine_m(payload.lat, payload.lng, settings["lat"], settings["lng"])
+    within = dist <= settings["radius_m"]
+    today = _today()
+    existing = await db.attendance.find_one({"user_id": user["id"], "date": today})
+    if existing and existing.get("check_in_at"):
+        raise HTTPException(status_code=400, detail="Already checked in today")
+    doc = {
+        "id": new_id(),
+        "user_id": user["id"],
+        "username": user["username"],
+        "name": user["name"],
+        "date": today,
+        "check_in_at": now_iso(),
+        "check_in_lat": payload.lat,
+        "check_in_lng": payload.lng,
+        "check_in_within": within,
+        "check_in_distance": round(dist, 1),
+        "note": payload.note,
+        "created_at": now_iso(),
+    }
+    if existing:
+        await db.attendance.update_one({"_id": existing["_id"]}, {"$set": {k: v for k, v in doc.items() if k != "id"}})
+        rec = await db.attendance.find_one({"user_id": user["id"], "date": today}, {"_id": 0})
+        return rec
+    await db.attendance.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.post("/attendance/check-out")
+async def check_out(payload: AttendanceCheckIn, user: dict = Depends(get_current_user)):
+    settings = await _get_settings()
+    dist = _haversine_m(payload.lat, payload.lng, settings["lat"], settings["lng"])
+    within = dist <= settings["radius_m"]
+    today = _today()
+    rec = await db.attendance.find_one({"user_id": user["id"], "date": today})
+    if not rec or not rec.get("check_in_at"):
+        raise HTTPException(status_code=400, detail="Not checked in yet")
+    if rec.get("check_out_at"):
+        raise HTTPException(status_code=400, detail="Already checked out today")
+    from datetime import datetime as _dt
+    try:
+        ci = _dt.fromisoformat(rec["check_in_at"].replace("Z", "+00:00"))
+        co = _dt.now(timezone.utc)
+        duration = int((co - ci).total_seconds() / 60)
+    except Exception:
+        duration = 0
+    out_time = now_iso()
+    await db.attendance.update_one({"_id": rec["_id"]}, {"$set": {
+        "check_out_at": out_time,
+        "check_out_lat": payload.lat,
+        "check_out_lng": payload.lng,
+        "check_out_within": within,
+        "check_out_distance": round(dist, 1),
+        "duration_min": duration,
+    }})
+    return await db.attendance.find_one({"_id": rec["_id"]}, {"_id": 0})
 
 
 # ---------- Dashboard / Analytics ----------

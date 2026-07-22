@@ -354,3 +354,119 @@ async def seed_all(db):
     await seed_architects(db)
     await seed_quotes(db)
     await seed_tasks(db)
+    await seed_invoices(db)
+    await seed_meets(db)
+    await seed_petty_cash(db)
+
+
+async def seed_invoices(db):
+    if await db.invoices.count_documents({}) > 0:
+        return
+    customers = [
+        ("Krishna Reddy", "Villa 12, Banjara Hills", "36AAACR1234A1Z5"),
+        ("Mahesh Industries", "Plot 45, IDA Uppal", "36AABCM5678B2Z8"),
+        ("Ar Manoj", "Hi-Tech City, Madhapur", ""),
+        ("Anja Reddy", "Kondapur", ""),
+        ("Sanjay Builders", "Gachibowli", "36AASCS1122C3Z1"),
+    ]
+    today = datetime.now(timezone.utc).date()
+    docs = []
+    for idx, (c, addr, gstin) in enumerate(customers, start=1):
+        subtotal = float(random.choice([85000, 145000, 220000, 380000, 520000]))
+        tax_pct = 18
+        is_igst = random.choice([False, False, False, True])
+        tax_total = subtotal * tax_pct / 100
+        cgst = 0 if is_igst else tax_total / 2
+        sgst = 0 if is_igst else tax_total / 2
+        igst = tax_total if is_igst else 0
+        total = subtotal + tax_total
+        paid = round(total * random.choice([1.0, 1.0, 0.5, 0.3]), 2)
+        line_items = [
+            {"sku": f"MAD-{100+i}", "description": random.choice(["3-Seater Sofa - Leather", "Dining Table 6-Seater", "Wardrobe Sliding Door", "MADIO Acrylic Paint 20L", "Teak Wood Door Frame"]),
+             "hsn": "9403", "qty": random.randint(1, 4), "rate": round(subtotal / random.randint(2, 4), 2),
+             "discount_pct": 0, "tax_pct": tax_pct}
+            for i in range(random.randint(2, 4))
+        ]
+        docs.append({
+            "id": new_id(),
+            "invoice_no": f"MAD/24-25/{idx:04d}",
+            "date": (today - timedelta(days=random.randint(1, 60))).isoformat(),
+            "customer": c,
+            "billing_address": addr,
+            "phone": f"9{random.randint(100000000, 999999999)}",
+            "gstin": gstin,
+            "place_of_supply": random.choice(["Telangana", "Andhra Pradesh", "Karnataka"]),
+            "is_igst": is_igst,
+            "line_items": line_items,
+            "subtotal": subtotal, "discount_total": 0,
+            "cgst": round(cgst, 2), "sgst": round(sgst, 2), "igst": round(igst, 2),
+            "total": round(total, 2), "paid": paid, "balance": round(total - paid, 2),
+            "by_user": random.choice(["Raghu MF", "Nenmu", "Gowtham Hive"]),
+            "status": "Paid" if paid >= total else "Sent",
+            "notes": "Thank you for your business. Warranty as per T&C.",
+            "created_at": now_iso(),
+        })
+    await db.invoices.insert_many(docs)
+
+
+async def seed_meets(db):
+    if await db.meets.count_documents({}) > 0:
+        return
+    today = datetime.now(timezone.utc).date()
+    seeds = [
+        ("Site visit - Krishna Reddy Villa", 0, "10:00", "11:30", "Banjara Hills", "Krishna Reddy", "Lead", "Krishna Reddy"),
+        ("Design review with Ar Manoj", 1, "14:00", "15:30", "Hi-Tech City", "Ar Manoj", "Architect", "Ar Manoj"),
+        ("Team standup", 0, "09:30", "09:45", "Showroom", "All", "Internal", ""),
+        ("Sample handover - Sumanth", 2, "11:00", "11:30", "Showroom", "Sumanth Tirupati", "Customer", "Sumanth Tirupati"),
+        ("Vendor call - Zhi Ran She", 3, "16:00", "16:45", "Zoom", "Vendor", "Internal", ""),
+        ("Follow-up call - Mahesh Industries", 4, "10:30", "11:00", "Phone", "Mahesh", "Customer", "Mahesh Industries"),
+        ("Site measurement - Sanjay Builders", 5, "08:00", "10:00", "Gachibowli", "Site engineer", "Customer", "Sanjay Builders"),
+    ]
+    docs = []
+    for i, (title, off, st, et, loc, person, rtype, rname) in enumerate(seeds):
+        d = (today + timedelta(days=off)).isoformat()
+        docs.append({
+            "id": new_id(),
+            "title": title,
+            "date": d,
+            "start_time": st, "end_time": et,
+            "location": loc,
+            "attendees": [random.choice(["Raghu MF", "Nenmu", "Gowtham Hive"])],
+            "with_person": person,
+            "ref_type": rtype, "ref_name": rname,
+            "agenda": random.choice(["Confirm final specs", "Show new catalogue", "Close deal", "Site measurement"]),
+            "status": "Scheduled" if off >= 0 else "Done",
+            "created_by": "admin",
+            "created_at": now_iso(),
+        })
+    await db.meets.insert_many(docs)
+
+
+async def seed_petty_cash(db):
+    if await db.petty_cash.count_documents({}) > 0:
+        return
+    today = datetime.now(timezone.utc).date()
+    entries = [
+        ("In", "Opening", "", "Opening balance", 25000, "Cash"),
+        ("Out", "Fuel", "IOCL Pump", "Delivery van fuel", 3200, "Cash"),
+        ("Out", "Food", "Zomato", "Team lunch", 1450, "UPI"),
+        ("Out", "Transport", "Auto", "Sample delivery", 450, "Cash"),
+        ("In", "Sale", "Anja Reddy", "Advance cash", 15000, "Cash"),
+        ("Out", "Repair", "Electrician", "Showroom light fix", 2200, "Cash"),
+        ("Out", "Stationery", "Local", "Printer paper", 680, "Cash"),
+        ("In", "Sale", "Walk-in customer", "Paint sample sale", 3500, "Cash"),
+        ("Out", "Fuel", "HP Pump", "Delivery van", 2800, "Cash"),
+        ("Out", "Courier", "Delhivery", "Sample dispatch", 780, "UPI"),
+    ]
+    docs = []
+    for i, (k, cat, party, desc, amt, mode) in enumerate(entries):
+        docs.append({
+            "id": new_id(),
+            "date": (today - timedelta(days=random.randint(0, 20))).isoformat(),
+            "kind": k, "category": cat, "party": party,
+            "description": desc, "amount": float(amt), "mode": mode,
+            "by_user": random.choice(["Raghu MF", "Nenmu", "Gowtham Hive"]),
+            "ref": "",
+            "created_at": now_iso(),
+        })
+    await db.petty_cash.insert_many(docs)

@@ -140,6 +140,11 @@ class QuoteBase(BaseModel):
     bank: Optional[float] = 0
     mode: Optional[str] = "Walk-in"
     remarks: Optional[str] = ""
+    line_items: Optional[List[dict]] = []
+    subtotal: Optional[float] = 0
+    tax_pct: Optional[float] = 18
+    tax_total: Optional[float] = 0
+    grand_total: Optional[float] = 0
 
 
 class QuoteCreate(QuoteBase):
@@ -223,3 +228,139 @@ class Task(TaskBase):
     id: str
     created_at: str
     created_by: Optional[str] = ""
+
+
+# ------- Line item (shared by Quotes / Invoices) -------
+class LineItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    sku: Optional[str] = ""
+    description: str = ""
+    hsn: Optional[str] = ""
+    qty: float = 1
+    rate: float = 0
+    discount_pct: Optional[float] = 0
+    tax_pct: Optional[float] = 18  # GST
+
+
+# ------- Invoice -------
+class InvoiceBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    invoice_no: str
+    date: str
+    customer: str
+    billing_address: Optional[str] = ""
+    phone: Optional[str] = ""
+    gstin: Optional[str] = ""
+    place_of_supply: Optional[str] = "Telangana"
+    is_igst: bool = False  # interstate → IGST, else CGST+SGST
+    line_items: List[LineItem] = []
+    subtotal: float = 0
+    discount_total: float = 0
+    cgst: float = 0
+    sgst: float = 0
+    igst: float = 0
+    total: float = 0
+    paid: float = 0
+    balance: float = 0
+    by_user: Optional[str] = ""
+    status: str = "Draft"  # Draft / Sent / Paid / Cancelled
+    notes: Optional[str] = ""
+
+
+class InvoiceCreate(InvoiceBase):
+    pass
+
+
+class Invoice(InvoiceBase):
+    id: str
+    created_at: str
+
+
+# ------- Meet Planner -------
+class MeetBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    title: str
+    date: str  # ISO date
+    start_time: str = "10:00"
+    end_time: str = "11:00"
+    location: Optional[str] = ""
+    attendees: List[str] = []
+    with_person: Optional[str] = ""
+    ref_type: Optional[str] = ""  # Lead / Architect / Customer / Internal
+    ref_name: Optional[str] = ""
+    agenda: Optional[str] = ""
+    status: str = "Scheduled"  # Scheduled / Done / Cancelled
+    created_by: Optional[str] = ""
+
+
+class MeetCreate(MeetBase):
+    pass
+
+
+class Meet(MeetBase):
+    id: str
+    created_at: str
+
+
+# ------- Petty Cash -------
+class PettyCashBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    date: str
+    kind: str = "Out"  # In / Out
+    category: str = "Misc"
+    party: Optional[str] = ""
+    description: str = ""
+    amount: float = 0
+    mode: str = "Cash"  # Cash / Bank / UPI
+    by_user: Optional[str] = ""
+    ref: Optional[str] = ""
+
+
+class PettyCashCreate(PettyCashBase):
+    pass
+
+
+class PettyCash(PettyCashBase):
+    id: str
+    created_at: str
+
+
+# ------- Attendance -------
+class AttendanceCheckIn(BaseModel):
+    lat: float
+    lng: float
+    note: Optional[str] = ""
+
+
+class AttendanceRecord(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    user_id: str
+    username: str
+    name: str
+    date: str  # YYYY-MM-DD
+    check_in_at: Optional[str] = None
+    check_in_lat: Optional[float] = None
+    check_in_lng: Optional[float] = None
+    check_in_within: Optional[bool] = None
+    check_in_distance: Optional[float] = None
+    check_out_at: Optional[str] = None
+    check_out_lat: Optional[float] = None
+    check_out_lng: Optional[float] = None
+    check_out_within: Optional[bool] = None
+    check_out_distance: Optional[float] = None
+    duration_min: Optional[int] = None
+    note: Optional[str] = ""
+    created_at: str
+
+
+# ------- Settings -------
+class OfficeSettings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str = "MADIO Head Office"
+    lat: float = 17.4065
+    lng: float = 78.4772
+    radius_m: int = 200
+    address: Optional[str] = "Hyderabad, Telangana"
+    gstin: Optional[str] = ""
+    invoice_prefix: Optional[str] = "MAD"
