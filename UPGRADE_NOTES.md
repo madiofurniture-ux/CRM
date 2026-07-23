@@ -80,6 +80,12 @@ Backend: `cd backend && pip install -r requirements.txt && uvicorn server:app --
 Frontend: `cd frontend && yarn install && yarn start` (needs `REACT_APP_BACKEND_URL`).
 Tests: `cd backend && python -m pytest tests/test_lifecycle.py -q`.
 
+**Build status:** `craco build` compiles clean (verified on Node 20 / npm 10). The one remaining
+ESLint `exhaustive-deps` warning is in the pre-existing `Attendance.jsx`, not the ported code.
+Note: `ajv@^8.17.1` was pinned as a devDependency to resolve a react-scripts/schema-utils
+`ajv` v6-vs-v8 hoisting conflict that otherwise breaks `craco build` (`Cannot find module
+'ajv/dist/compile/codegen'`).
+
 > Still not ported (deliberate): Google-Sheets *live* sync (N/A here — Mongo is the store;
 > Data Centre covers CSV import/export instead), Tally XML import, media/image library,
 > execution-events tracking, the `_safety` snapshot/rollback layer, and the offline queue

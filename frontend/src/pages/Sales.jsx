@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import FilterChips from "@/components/FilterChips";
@@ -21,19 +21,19 @@ export default function Sales() {
   const load = () => api.get("/sales").then((r) => setRows(r.data));
   useEffect(() => { load(); }, []);
 
-  const pred = (v) => (s) => {
+  const pred = useCallback((v) => (s) => {
     if (v === "all") return true;
     if (v === "unpaid") return (s.balance || 0) > 0;
     if (v === "mine") return s.by_user === me;
     if (v === "delivered") return s.stage === "Delivered";
     return true;
-  };
+  }, [me]);
   const views = useMemo(() => [
     { key: "all", label: "All", count: rows.length },
     { key: "unpaid", label: "💳 Unpaid", count: rows.filter(pred("unpaid")).length },
     { key: "delivered", label: "✅ Delivered", count: rows.filter(pred("delivered")).length },
     { key: "mine", label: "👤 My Sales", count: rows.filter(pred("mine")).length },
-  ], [rows, me]);
+  ], [rows, pred]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -43,7 +43,7 @@ export default function Sales() {
     );
     if (view === "unpaid") list = [...list].sort((a, b) => (b.balance || 0) - (a.balance || 0));
     return list;
-  }, [rows, search, fDiv, view]);
+  }, [rows, search, fDiv, view, pred]);
 
   const totals = useMemo(() => ({
     value: filtered.reduce((a, b) => a + (b.value || 0), 0),
