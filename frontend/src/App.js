@@ -8,16 +8,30 @@ import Layout from "@/components/Layout";
 
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
+import Alerts from "@/pages/Alerts";
 import Pipeline from "@/pages/Pipeline";
 import Quotes from "@/pages/Quotes";
 import Sales from "@/pages/Sales";
 import Visitors from "@/pages/Visitors";
 import Leads from "@/pages/Leads";
 import Architects from "@/pages/Architects";
+import Projects from "@/pages/Projects";
+import DWSurvey from "@/pages/DWSurvey";
+import Outstanding from "@/pages/Outstanding";
 import Inventory from "@/pages/Inventory";
 import InventoryAnalytics from "@/pages/InventoryAnalytics";
+import Invoices from "@/pages/Invoices";
+import PettyCash from "@/pages/PettyCash";
+import Meets from "@/pages/Meets";
+import Reports from "@/pages/Reports";
 import Tasks from "@/pages/Tasks";
+import Attendance from "@/pages/Attendance";
 import RoleManager from "@/pages/RoleManager";
+
+// page = the permission id from lib/nav.js that gates the route.
+const R = (page, El) => (
+  <ProtectedRoute page={page}><Layout>{El}</Layout></ProtectedRoute>
+);
 
 function App() {
   return (
@@ -26,24 +40,26 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute page="dashboard">
-                <Layout><Dashboard /></Layout>
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/pipeline" element={<ProtectedRoute page="pipeline"><Layout><Pipeline /></Layout></ProtectedRoute>} />
-          <Route path="/quotes" element={<ProtectedRoute page="quotes"><Layout><Quotes /></Layout></ProtectedRoute>} />
-          <Route path="/sales" element={<ProtectedRoute page="sales"><Layout><Sales /></Layout></ProtectedRoute>} />
-          <Route path="/visitors" element={<ProtectedRoute page="visitors"><Layout><Visitors /></Layout></ProtectedRoute>} />
-          <Route path="/leads" element={<ProtectedRoute page="leads"><Layout><Leads /></Layout></ProtectedRoute>} />
-          <Route path="/architects" element={<ProtectedRoute page="architects"><Layout><Architects /></Layout></ProtectedRoute>} />
-          <Route path="/inventory" element={<ProtectedRoute page="inventory"><Layout><Inventory /></Layout></ProtectedRoute>} />
-          <Route path="/inventory/analytics" element={<ProtectedRoute page="inv-analytics"><Layout><InventoryAnalytics /></Layout></ProtectedRoute>} />
-          <Route path="/tasks" element={<ProtectedRoute page="tasks"><Layout><Tasks /></Layout></ProtectedRoute>} />
-          <Route path="/admin/roles" element={<ProtectedRoute page="roles"><Layout><RoleManager /></Layout></ProtectedRoute>} />
+          <Route path="/" element={R("dashboard", <Dashboard />)} />
+          <Route path="/alerts" element={R("alerts", <Alerts />)} />
+          <Route path="/pipeline" element={R("pipeline", <Pipeline />)} />
+          <Route path="/quotes" element={R("quotes", <Quotes />)} />
+          <Route path="/sales" element={R("sales", <Sales />)} />
+          <Route path="/visitors" element={R("visitors", <Visitors />)} />
+          <Route path="/leads" element={R("leads", <Leads />)} />
+          <Route path="/architects" element={R("architects", <Architects />)} />
+          <Route path="/projects" element={R("projects", <Projects />)} />
+          <Route path="/dw-survey" element={R("dwsurvey", <DWSurvey />)} />
+          <Route path="/outstanding" element={R("outstanding", <Outstanding />)} />
+          <Route path="/inventory" element={R("inventory", <Inventory />)} />
+          <Route path="/inventory/analytics" element={R("inv-analytics", <InventoryAnalytics />)} />
+          <Route path="/invoices" element={R("invoice-gen", <Invoices />)} />
+          <Route path="/petty-cash" element={R("petty", <PettyCash />)} />
+          <Route path="/meets" element={R("meetplan", <Meets />)} />
+          <Route path="/reports" element={R("reports", <Reports />)} />
+          <Route path="/tasks" element={R("tasks", <Tasks />)} />
+          <Route path="/attendance" element={R("attendance", <Attendance />)} />
+          <Route path="/admin/roles" element={R("roles", <RoleManager />)} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

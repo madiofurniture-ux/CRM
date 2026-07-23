@@ -22,6 +22,12 @@ from models import (
     ArchitectCreate, Architect,
     QuoteCreate, Quote,
     SaleCreate, Sale,
+    QuoteLineCreate, QuoteLine,
+    PaymentCreate, Payment,
+    ActivityCreate, Activity,
+    ProjectCreate, Project,
+    DWSurveyCreate, DWSurvey,
+    DWOpeningCreate, DWOpening,
     InventoryCreate, InventoryItem,
     TaskCreate, Task,
     InvoiceCreate, Invoice,
@@ -29,6 +35,7 @@ from models import (
     PettyCashCreate, PettyCash,
     AttendanceCheckIn, OfficeSettings,
 )
+import lifecycle as lc
 from seed import seed_all
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -152,15 +159,220 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
 
 
 make_crud(api, "visitors", "visitors", VisitorCreate, Visitor)
-make_crud(api, "leads", "leads", LeadCreate, Lead)
 make_crud(api, "architects", "architects", ArchitectCreate, Architect)
-make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
 make_crud(api, "sales", "sales", SaleCreate, Sale)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem)
 make_crud(api, "tasks", "tasks", TaskCreate, Task)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice)
 make_crud(api, "meets", "meets", MeetCreate, Meet)
 make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash)
+make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
+make_crud(api, "activities", "activities", ActivityCreate, Activity)
+make_crud(api, "dw-openings", "dw_openings", DWOpeningCreate, DWOpening)
+
+
+# ---------- D&W surveys (auto DW- id) ----------
+@api.get("/dw-surveys")
+async def list_dw_surveys(_: dict = Depends(get_current_user)):
+    return await db.dw_surveys.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@api.post("/dw-surveys")
+async def create_dw_survey(payload: DWSurveyCreate, _: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    if not doc.get("date"):
+        doc["date"] = lc.today_iso()
+    if not doc.get("survey_id"):
+        existing = await db.dw_surveys.find({}, {"survey_id": 1, "_id": 0}).to_list(2000)
+        doc["survey_id"] = lc.next_survey_id(existing)
+    await db.dw_surveys.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/dw-surveys/{item_id}")
+async def update_dw_survey(item_id: str, payload: dict, _: dict = Depends(get_current_user)):
+    payload.pop("_id", None); payload.pop("id", None)
+    if not await db.dw_surveys.find_one({"id": item_id}):
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.dw_surveys.update_one({"id": item_id}, {"$set": payload})
+    return await db.dw_surveys.find_one({"id": item_id}, {"_id": 0})
+
+
+@api.delete("/dw-surveys/{item_id}")
+async def delete_dw_survey(item_id: str, _: dict = Depends(get_current_user)):
+    await db.dw_surveys.delete_one({"id": item_id})
+    await db.dw_openings.delete_many({"survey_id": item_id})
+    return {"ok": True}
+
+
+# ---------- Leads (auto-assigned LD- id, phone dedup on create) ----------
+@api.get("/leads")
+async def list_leads(_: dict = Depends(get_current_user)):
+    return await db.leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api.post("/leads")
+async def create_lead(payload: LeadCreate, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    if not doc.get("intake_date"):
+        doc["intake_date"] = lc.today_iso()
+    if not doc.get("lead_id"):
+        existing = await db.leads.find({}, {"lead_id": 1, "_id": 0}).to_list(5000)
+        doc["lead_id"] = lc.next_lead_id(existing)
+    # Surface a same-phone duplicate to the caller instead of silently merging.
+    key = lc.phone_key(doc.get("phone"))
+    dup = None
+    if key:
+        for l in await db.leads.find({}, {"_id": 0}).to_list(5000):
+            if lc.phone_key(l.get("phone")) == key:
+                dup = l.get("lead_id") or l.get("name")
+                break
+    await db.leads.insert_one(doc)
+    doc.pop("_id", None)
+    if dup:
+        doc["_duplicate_of"] = dup
+    return doc
+
+
+@api.put("/leads/{item_id}")
+async def update_lead(item_id: str, payload: dict, _: dict = Depends(get_current_user)):
+    payload.pop("_id", None); payload.pop("id", None)
+    if not await db.leads.find_one({"id": item_id}):
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.leads.update_one({"id": item_id}, {"$set": payload})
+    return await db.leads.find_one({"id": item_id}, {"_id": 0})
+
+
+@api.delete("/leads/{item_id}")
+async def delete_lead(item_id: str, _: dict = Depends(get_current_user)):
+    await db.leads.delete_one({"id": item_id})
+    return {"ok": True}
+
+
+# ---------- Quotes (with derived status enrichment on read) ----------
+@api.get("/quotes")
+async def list_quotes(_: dict = Depends(get_current_user)):
+    quotes = await db.quotes.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return [lc.enrich_quote(q) for q in quotes]
+
+
+@api.post("/quotes")
+async def create_quote(payload: QuoteCreate, _: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    if not doc.get("quote_no"):
+        existing = await db.quotes.find({}, {"quote_no": 1, "_id": 0}).to_list(5000)
+        doc["quote_no"] = lc.next_quote_no(existing)
+    lc.sanitize_quote(doc)
+    await db.quotes.insert_one(doc)
+    doc.pop("_id", None)
+    # Converting a quote closes the matching lead.
+    key = lc.phone_key(doc.get("phone"))
+    if key:
+        for l in await db.leads.find({}, {"_id": 0}).to_list(5000):
+            if lc.phone_key(l.get("phone")) == key and l.get("stage") not in lc.LEAD_CLOSED:
+                await db.leads.update_one({"id": l["id"]}, {"$set": {"stage": "Qualified"}})
+                break
+    return lc.enrich_quote(doc)
+
+
+@api.put("/quotes/{item_id}")
+async def update_quote(item_id: str, payload: dict, _: dict = Depends(get_current_user)):
+    payload.pop("_id", None); payload.pop("id", None)
+    if not await db.quotes.find_one({"id": item_id}):
+        raise HTTPException(status_code=404, detail="Not found")
+    lc.sanitize_quote(payload)
+    await db.quotes.update_one({"id": item_id}, {"$set": payload})
+    out = await db.quotes.find_one({"id": item_id}, {"_id": 0})
+    return lc.enrich_quote(out)
+
+
+@api.delete("/quotes/{item_id}")
+async def delete_quote(item_id: str, _: dict = Depends(get_current_user)):
+    await db.quotes.delete_one({"id": item_id})
+    return {"ok": True}
+
+
+# ---------- Payments (updates the linked sale's paid/balance) ----------
+@api.get("/payments")
+async def list_payments(_: dict = Depends(get_current_user)):
+    return await db.payments.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api.post("/payments")
+async def create_payment(payload: PaymentCreate, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    if not doc.get("date"):
+        doc["date"] = lc.today_iso()
+    existing = await db.payments.find({}, {"payment_id": 1, "_id": 0}).to_list(5000)
+    doc["payment_id"] = lc.next_payment_id(existing)
+    await db.payments.insert_one(doc)
+    doc.pop("_id", None)
+    # Roll the amount into the sale it is against and re-derive the balance.
+    if doc.get("against_sale_id") and doc.get("direction") != "Refund":
+        sale = await db.sales.find_one({"id": doc["against_sale_id"]})
+        if sale:
+            paid = lc.money(sale.get("paid")) + lc.money(doc.get("amount"))
+            value = lc.money(sale.get("value"))
+            balance = max(0.0, value - paid)
+            update = {"paid": paid, "balance": balance}
+            if balance == 0:
+                update["stage"] = "Payment Received"
+            await db.sales.update_one({"id": sale["id"]}, {"$set": update})
+    return doc
+
+
+@api.delete("/payments/{item_id}")
+async def delete_payment(item_id: str, _: dict = Depends(get_current_user)):
+    await db.payments.delete_one({"id": item_id})
+    return {"ok": True}
+
+
+# ---------- Projects (auto PM- id) ----------
+@api.get("/projects")
+async def list_projects(_: dict = Depends(get_current_user)):
+    return await db.projects.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api.post("/projects")
+async def create_project(payload: ProjectCreate, _: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    existing = await db.projects.find({}, {"id": 1, "_id": 0}).to_list(5000)
+    doc["project_no"] = lc.next_project_id([{"id": p.get("project_no", "")} for p in existing])
+    doc["balance"] = max(0.0, lc.money(doc.get("value")) - lc.money(doc.get("paid")))
+    await db.projects.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/projects/{item_id}")
+async def update_project(item_id: str, payload: dict, _: dict = Depends(get_current_user)):
+    payload.pop("_id", None); payload.pop("id", None)
+    if not await db.projects.find_one({"id": item_id}):
+        raise HTTPException(status_code=404, detail="Not found")
+    if "value" in payload or "paid" in payload:
+        cur = await db.projects.find_one({"id": item_id}, {"_id": 0})
+        value = lc.money(payload.get("value", cur.get("value")))
+        paid = lc.money(payload.get("paid", cur.get("paid")))
+        payload["balance"] = max(0.0, value - paid)
+    await db.projects.update_one({"id": item_id}, {"$set": payload})
+    return await db.projects.find_one({"id": item_id}, {"_id": 0})
+
+
+@api.delete("/projects/{item_id}")
+async def delete_project(item_id: str, _: dict = Depends(get_current_user)):
+    await db.projects.delete_one({"id": item_id})
+    return {"ok": True}
 
 
 # ---------- Outstanding report ----------
@@ -346,24 +558,28 @@ async def dashboard_stats(_: dict = Depends(get_current_user)):
     leads = await db.leads.find({}, {"_id": 0}).to_list(5000)
     visitors = await db.visitors.find({}, {"_id": 0}).to_list(5000)
 
-    pipeline_value = sum((q.get("value") or 0) for q in quotes if q.get("stage") in ("New", "Qualified", "Quoted", "Negotiation"))
-    total_sales = sum((s.get("value") or 0) for s in sales)
-    total_paid = sum((s.get("paid") or 0) for s in sales)
-    outstanding = sum((s.get("balance") or 0) for s in sales)
-    stock_mrp = sum((i.get("mrp") or 0) * (i.get("qty") or 0) for i in inventory)
-    stock_cost = sum((i.get("cost") or 0) * (i.get("qty") or 0) for i in inventory)
-    active_leads = sum(1 for l in leads if l.get("stage") not in ("Won", "Lost"))
+    pipeline_value = sum(lc.money(q.get("value")) for q in quotes if lc.quote_is_open(q))
+    total_sales = sum(lc.money(s.get("value")) for s in sales)
+    total_paid = sum(lc.money(s.get("paid")) for s in sales)
+    outstanding = sum(max(0.0, lc.money(s.get("balance"))) for s in sales)
+    # Dealer-catalog rows are a supplier's catalogue, not owned stock — keep them out of value.
+    stock = [i for i in inventory if i.get("status") not in lc.NON_STOCK_STATUSES]
+    stock_mrp = sum(lc.money(i.get("mrp")) * (i.get("qty") or 0) for i in stock)
+    stock_cost = sum(lc.money(i.get("cost")) * (i.get("qty") or 0) for i in stock)
+    active_leads = sum(1 for l in leads if l.get("stage") not in lc.LEAD_CLOSED)
 
     today = now_iso()[:10]
     todays_visitors = sum(1 for v in visitors if (v.get("date") or "")[:10] == today)
-    overdue = sum(1 for l in leads if l.get("follow_up_date") and l["follow_up_date"] < today and l.get("stage") not in ("Won", "Lost"))
+    overdue = sum(1 for l in leads
+                  if (lc.days_until(l.get("next_action_date")) or 0) < 0
+                  and l.get("next_action_date") and l.get("stage") not in lc.LEAD_CLOSED)
 
-    # pipeline by stage
-    stages = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"]
+    # pipeline by the quote sales-status axis
     by_stage = []
-    for s in stages:
-        items = [q for q in quotes if q.get("stage") == s]
-        by_stage.append({"stage": s, "count": len(items), "value": sum((q.get("value") or 0) for q in items)})
+    for s in lc.QUOTE_STATUSES:
+        items = [q for q in quotes if lc.quote_status(q) == s]
+        by_stage.append({"stage": s, "count": len(items),
+                         "value": sum(lc.money(q.get("value")) for q in items)})
 
     # division split
     divs = {}
@@ -433,6 +649,109 @@ async def inventory_analytics(_: dict = Depends(get_current_user)):
         "by_status": [{"name": k, "value": v} for k, v in by_status.items()],
         "top_items": top_items,
     }
+
+
+# ---------- Reports (division rollup + WhatsApp summary) ----------
+@api.get("/reports")
+async def reports(period: str = "thisweek", _: dict = Depends(get_current_user)):
+    leads = await db.leads.find({}, {"_id": 0}).to_list(5000)
+    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
+    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
+    payments = await db.payments.find({}, {"_id": 0}).to_list(5000)
+    report = lc.build_report(period, leads, quotes, sales, payments)
+    report["whatsapp"] = lc.whatsapp_summary(report)
+    return report
+
+
+# ---------- Alerts (follow-ups + money + dead stock) ----------
+@api.get("/alerts")
+async def alerts(_: dict = Depends(get_current_user)):
+    leads = await db.leads.find({}, {"_id": 0}).to_list(5000)
+    navaki = await db.visitors.find({"source": "Navaki"}, {"_id": 0}).to_list(5000)
+    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
+    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
+    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
+    items = lc.build_alerts(leads, navaki, sales, quotes, inventory)
+    counts: dict = {}
+    for a in items:
+        counts[a["group"]] = counts.get(a["group"], 0) + 1
+    return {"count": len(items), "by_group": counts, "alerts": items}
+
+
+# ---------- Customer journey (one timeline by phone) ----------
+@api.get("/journey/{phone}")
+async def journey(phone: str, _: dict = Depends(get_current_user)):
+    return lc.build_journey(
+        phone,
+        visitors=await db.visitors.find({}, {"_id": 0}).to_list(5000),
+        leads=await db.leads.find({}, {"_id": 0}).to_list(5000),
+        quotes=await db.quotes.find({}, {"_id": 0}).to_list(5000),
+        sales=await db.sales.find({}, {"_id": 0}).to_list(5000),
+        payments=await db.payments.find({}, {"_id": 0}).to_list(5000),
+        activities=await db.activities.find({}, {"_id": 0}).to_list(5000),
+    )
+
+
+# ---------- Conversions (lead → quote → sale) ----------
+@api.post("/convert/lead-to-quote/{lead_id}")
+async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
+    lead = await db.leads.find_one({"id": lead_id}, {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    existing = await db.quotes.find({}, {"quote_no": 1, "_id": 0}).to_list(5000)
+    quote = {
+        "id": new_id(), "created_at": now_iso(),
+        "quote_no": lc.next_quote_no(existing), "date": lc.today_iso(),
+        "customer": lead.get("name", ""), "phone": lead.get("phone", ""),
+        "reference": lead.get("referrer", ""), "division": lead.get("division", "Furniture"),
+        "by_user": user.get("name", ""), "stage": "Quoted", "status": "Sent",
+        "value": 0, "remarks": lead.get("requirement", ""), "version": 1,
+    }
+    await db.quotes.insert_one(dict(quote))
+    await db.leads.update_one({"id": lead_id}, {"$set": {"stage": "Quoted"}})
+    return quote
+
+
+@api.post("/convert/quote-to-sale/{quote_id}")
+async def quote_to_sale(quote_id: str, user: dict = Depends(get_current_user)):
+    quote = await db.quotes.find_one({"id": quote_id}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    existing = await db.sales.find({}, {"sale_no": 1, "_id": 0}).to_list(5000)
+    value = lc.money(quote.get("value"))
+    sale = {
+        "id": new_id(), "created_at": now_iso(),
+        "sale_no": lc.next_sale_no(existing), "date": lc.today_iso(),
+        "customer": quote.get("customer", ""), "phone": quote.get("phone", ""),
+        "division": quote.get("division", "Furniture"), "quote_ref": quote.get("quote_no", ""),
+        "by_user": user.get("name", ""), "value": value, "paid": 0, "balance": value,
+        "stage": "Confirmed", "remarks": "",
+    }
+    await db.sales.insert_one(dict(sale))
+    await db.quotes.update_one({"id": quote_id}, {"$set": {"stage": "Adv Received", "status": "Won"}})
+    return sale
+
+
+@api.post("/convert/survey-to-quote/{survey_id}")
+async def survey_to_quote(survey_id: str, user: dict = Depends(get_current_user)):
+    survey = await db.dw_surveys.find_one({"id": survey_id}, {"_id": 0})
+    if not survey:
+        raise HTTPException(status_code=404, detail="Survey not found")
+    openings = await db.dw_openings.find({"survey_id": survey_id}, {"_id": 0}).to_list(500)
+    total_area = round(sum(lc.money(lc.calc_opening(dict(o))["area"]) for o in openings), 2)
+    existing = await db.quotes.find({}, {"quote_no": 1, "_id": 0}).to_list(5000)
+    quote = {
+        "id": new_id(), "created_at": now_iso(),
+        "quote_no": lc.next_quote_no(existing), "date": lc.today_iso(),
+        "customer": survey.get("customer", ""), "phone": survey.get("phone", ""),
+        "division": "D&W", "by_user": user.get("name", ""),
+        "stage": "Quoted", "status": "Sent", "value": 0, "version": 1,
+        "remarks": f"From survey {survey.get('survey_id')} · "
+                   f"{len(openings)} openings · {total_area} sqft",
+    }
+    await db.quotes.insert_one(dict(quote))
+    await db.dw_surveys.update_one({"id": survey_id}, {"$set": {"status": "Quoted"}})
+    return quote
 
 
 # Mount

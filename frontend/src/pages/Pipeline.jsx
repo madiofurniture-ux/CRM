@@ -5,15 +5,21 @@ import { inr, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { GripVertical } from "lucide-react";
 
-const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
+// Kanban columns are the derived sales-status axis, not raw ops stages.
+const STAGES = ["Draft", "Sent", "Negotiation", "Won", "Lost"];
 const STAGE_TINTS = {
-  New: "border-t-[var(--ink-3)]",
-  Qualified: "border-t-blue-500",
-  Quoted: "border-t-[var(--warn)]",
+  Draft: "border-t-[var(--ink-3)]",
+  Sent: "border-t-[var(--warn)]",
   Negotiation: "border-t-[var(--brand)]",
   Won: "border-t-[var(--moss)]",
   Lost: "border-t-[var(--danger)]",
 };
+const DOT = {
+  Draft: "bg-[var(--ink-3)]", Sent: "bg-[var(--warn)]", Negotiation: "bg-[var(--brand)]",
+  Won: "bg-[var(--moss)]", Lost: "bg-[var(--danger)]",
+};
+// Moving a card to a status column also writes a matching ops stage so the two axes agree.
+const STAGE_FOR_STATUS = { Draft: "Quoted", Sent: "Quoted", Negotiation: "Quoted", Won: "Adv Received", Lost: "Cancelled" };
 
 export default function Pipeline() {
   const [quotes, setQuotes] = useState([]);
@@ -25,15 +31,16 @@ export default function Pipeline() {
   };
   useEffect(() => { load(); }, []);
 
-  const onDrop = async (stage) => {
+  const onDrop = async (status) => {
     if (!dragId) return;
     const q = quotes.find((x) => x.id === dragId);
-    if (!q || q.stage === stage) { setDragId(null); return; }
-    setQuotes((prev) => prev.map((x) => (x.id === dragId ? { ...x, stage } : x)));
+    if (!q || q.derived_status === status) { setDragId(null); return; }
+    const stage = STAGE_FOR_STATUS[status] || q.stage;
+    setQuotes((prev) => prev.map((x) => (x.id === dragId ? { ...x, status, derived_status: status, stage } : x)));
     setDragId(null);
     try {
-      await api.put(`/quotes/${q.id}`, { ...q, stage });
-      toast.success(`Moved to ${stage}`);
+      await api.put(`/quotes/${q.id}`, { ...q, status, stage });
+      toast.success(`Moved to ${status}`);
     } catch (e) {
       toast.error("Failed to update");
       load();
@@ -46,7 +53,7 @@ export default function Pipeline() {
       <div className="p-6" data-testid="pipeline-page">
         <div className="flex gap-4 overflow-x-auto pb-4">
           {STAGES.map((s) => {
-            const items = quotes.filter((q) => q.stage === s);
+            const items = quotes.filter((q) => (q.derived_status || q.stage) === s);
             const total = items.reduce((a, b) => a + (b.value || 0), 0);
             return (
               <div
@@ -58,13 +65,7 @@ export default function Pipeline() {
               >
                 <div className="flex items-center justify-between px-1 mb-3">
                   <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${
-                      s === "New" ? "bg-[var(--ink-3)]" :
-                      s === "Qualified" ? "bg-blue-500" :
-                      s === "Quoted" ? "bg-[var(--warn)]" :
-                      s === "Negotiation" ? "bg-[var(--brand)]" :
-                      s === "Won" ? "bg-[var(--moss)]" : "bg-[var(--danger)]"
-                    }`} />
+                    <div className={`w-2 h-2 rounded-full ${DOT[s] || "bg-[var(--ink-3)]"}`} />
                     <span className="font-heading font-semibold text-[var(--ink)] text-sm">{s}</span>
                     <span className="text-xs text-[var(--ink-3)] font-mono">{items.length}</span>
                   </div>

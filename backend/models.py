@@ -79,17 +79,25 @@ class Visitor(VisitorBase):
 
 
 # ------- Leads -------
+# Unified intake schema: walk-in visitors and Navaki enquiries both land here, deduped
+# by phone, so there is one queue to work instead of three. `source` records where the
+# lead came from and `source_ref` points back at the original row.
 class LeadBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    date: str
+    lead_id: Optional[str] = ""          # LD-YYMM-NNN, assigned server-side
+    source: str = "Walk-in"              # Walk-in / Navaki / Referral / Architect / Online
+    source_ref: Optional[str] = ""
+    intake_date: str = ""
     name: str
     phone: Optional[str] = ""
-    source: Optional[str] = ""
-    stage: str = "New"  # New, Contacted, Qualified, Quoted, Won, Lost
-    follow_up_date: Optional[str] = ""
+    referrer: Optional[str] = ""
+    requirement: Optional[str] = ""
+    division: str = "Furniture"
+    owner: Optional[str] = ""
+    stage: str = "New"                   # see lifecycle.LEAD_STAGES
+    next_action_date: Optional[str] = ""
+    last_contact_date: Optional[str] = ""
     remarks: Optional[str] = ""
-    assigned_to: Optional[str] = ""
-    value: Optional[float] = 0
 
 
 class LeadCreate(LeadBase):
@@ -134,17 +142,23 @@ class QuoteBase(BaseModel):
     phone: Optional[str] = ""
     division: str = "Furniture"  # Furniture / MAP / D&W
     by_user: Optional[str] = ""
-    stage: str = "Quoted"
+    stage: str = "Quoted"               # ops stage — see lifecycle.QUOTE_STAGES
+    status: Optional[str] = ""          # sales axis, derived when blank
     value: float = 0
     cash: Optional[float] = 0
     bank: Optional[float] = 0
     mode: Optional[str] = "Walk-in"
     remarks: Optional[str] = ""
-    line_items: Optional[List[dict]] = []
+    version: int = 1
+    discount: Optional[float] = 0
     subtotal: Optional[float] = 0
     tax_pct: Optional[float] = 18
     tax_total: Optional[float] = 0
     grand_total: Optional[float] = 0
+    approval: Optional[str] = ""        # "" / pending / approved / rejected
+    lost_reason: Optional[str] = ""
+    next_action_date: Optional[str] = ""
+    line_items: Optional[List[dict]] = []
 
 
 class QuoteCreate(QuoteBase):
@@ -162,6 +176,7 @@ class SaleBase(BaseModel):
     sale_no: str
     date: str
     customer: str
+    phone: Optional[str] = ""           # often blank on imported won-deals; see lifecycle.sale_phone
     division: str = "Furniture"
     quote_ref: Optional[str] = ""
     by_user: Optional[str] = ""
@@ -177,6 +192,158 @@ class SaleCreate(SaleBase):
 
 
 class Sale(SaleBase):
+    id: str
+    created_at: str
+
+
+# ------- Quote line items (per-version, in their own collection) -------
+class QuoteLineBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    quote_id: str
+    version: int = 1
+    description: str = ""
+    w: float = 0
+    h: float = 0
+    qty: float = 1
+    rate: float = 0
+    sft: Optional[float] = 0
+    amount: Optional[float] = 0
+
+
+class QuoteLineCreate(QuoteLineBase):
+    pass
+
+
+class QuoteLine(QuoteLineBase):
+    id: str
+    created_at: str
+
+
+# ------- Payments (against sales / quotes) -------
+class PaymentBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    date: str
+    division: str = "Furniture"
+    direction: str = "In"               # In / Out / Refund
+    amount: float = 0
+    mode: str = "Cash"                  # Cash / Bank / UPI / Cheque
+    kind: Optional[str] = "Advance"     # Advance / Part / Final / Refund
+    received_by: Optional[str] = ""
+    against_sale_id: Optional[str] = ""
+    against_quote_no: Optional[str] = ""
+    phone: Optional[str] = ""
+    remarks: Optional[str] = ""
+
+
+class PaymentCreate(PaymentBase):
+    pass
+
+
+class Payment(PaymentBase):
+    id: str
+    created_at: str
+
+
+# ------- Activity feed -------
+class ActivityBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    type: str = "Note"
+    date: str = ""
+    by_user: Optional[str] = ""
+    outcome: Optional[str] = ""
+    next_action: Optional[str] = ""
+    next_action_date: Optional[str] = ""
+    ref_id: Optional[str] = ""          # AF-/MF-/LD- the note hangs off
+    phone: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class ActivityCreate(ActivityBase):
+    pass
+
+
+class Activity(ActivityBase):
+    id: str
+    created_at: str
+
+
+# ------- MAP / project (8-stage applicator workflow) -------
+class ProjectBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    division: str = "MAP"
+    project_type: Optional[str] = ""
+    name: str
+    customer_name: Optional[str] = ""
+    phone: Optional[str] = ""
+    site_address: Optional[str] = ""
+    stage: str = "Customer Enquiry"     # see lifecycle.MAP_STAGES
+    status: str = "Active"
+    priority: str = "Normal"
+    value: float = 0
+    paid: float = 0
+    balance: float = 0
+    applicator: Optional[str] = ""
+    pm: Optional[str] = ""
+    lead_ref: Optional[str] = ""
+    quote_ref: Optional[str] = ""
+    start_date: Optional[str] = ""
+    target_date: Optional[str] = ""
+    actual_date: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class ProjectCreate(ProjectBase):
+    pass
+
+
+class Project(ProjectBase):
+    id: str
+    created_at: str
+
+
+# ------- D&W site survey + openings -------
+class DWSurveyBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    survey_id: Optional[str] = ""       # DW-YYMM-NNN, assigned server-side
+    date: str = ""
+    customer: str = ""
+    phone: Optional[str] = ""
+    site_address: Optional[str] = ""
+    by_user: Optional[str] = ""
+    status: str = "Draft"
+    remarks: Optional[str] = ""
+
+
+class DWSurveyCreate(DWSurveyBase):
+    pass
+
+
+class DWSurvey(DWSurveyBase):
+    id: str
+    created_at: str
+
+
+class DWOpeningBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    survey_id: str
+    room: Optional[str] = ""
+    type: str = "Window"                # see lifecycle.DWS_TYPES
+    w: float = 0                        # inches
+    h: float = 0                        # inches
+    qty: float = 1
+    area: Optional[float] = 0           # sqft, computed
+    frame: str = "uPVC"
+    glass: str = "Single"
+    mesh: bool = False
+    notes: Optional[str] = ""
+    image_url: Optional[str] = ""
+
+
+class DWOpeningCreate(DWOpeningBase):
+    pass
+
+
+class DWOpening(DWOpeningBase):
     id: str
     created_at: str
 

@@ -10,11 +10,16 @@ from models import now_iso, new_id
 DATA_DIR = Path(__file__).parent / "data"
 
 
+# Page ids must match lib/nav.js on the frontend.
+SALES_PAGES = ["dashboard", "alerts", "pipeline", "quotes", "sales", "visitors", "leads",
+               "architects", "projects", "dwsurvey", "outstanding", "inventory",
+               "inv-analytics", "meetplan", "reports", "tasks", "attendance"]
+
 SEED_USERS = [
     {"username": "admin", "name": "Admin", "pin": "1234", "role": "admin", "icon": "AD", "color": "#1A1D1A", "pages": None},
-    {"username": "raghu", "name": "Raghu MF", "pin": "2222", "role": "user", "icon": "RM", "color": "#C85A32", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "tasks"]},
-    {"username": "nenmu", "name": "Nenmu", "pin": "3333", "role": "user", "icon": "NM", "color": "#4A5D4E", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "tasks"]},
-    {"username": "gowtham", "name": "Gowtham Hive", "pin": "4444", "role": "user", "icon": "GH", "color": "#D48B30", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "tasks"]},
+    {"username": "raghu", "name": "Raghu MF", "pin": "2222", "role": "user", "icon": "RM", "color": "#C85A32", "pages": SALES_PAGES},
+    {"username": "nenmu", "name": "Nenmu", "pin": "3333", "role": "user", "icon": "NM", "color": "#4A5D4E", "pages": SALES_PAGES},
+    {"username": "gowtham", "name": "Gowtham Hive", "pin": "4444", "role": "user", "icon": "GH", "color": "#D48B30", "pages": SALES_PAGES},
 ]
 
 
@@ -220,24 +225,30 @@ async def seed_leads(db):
     names = ["Priya Nair", "Vikram Singh", "Sneha Patel", "Arjun Kumar", "Divya Reddy",
             "Kiran Rao", "Meera Joshi", "Rohan Mehta", "Sanjana Iyer", "Aditya Rao",
             "Tanvi Kapoor", "Karthik Reddy", "Pooja Sharma", "Naveen Babu", "Anjali Menon"]
-    sources = ["Walk-in", "WhatsApp", "Architect Ref", "Instagram", "Site Visit", "Referral"]
+    sources = ["Walk-in", "Navaki", "Architect", "Referral", "Online"]
+    divisions = ["Furniture", "MAP", "D&W"]
     docs = []
     today = datetime.now(timezone.utc).date()
     for i, n in enumerate(names):
-        stage = random.choice(["New", "Contacted", "Qualified", "Quoted", "Negotiation", "Won", "Lost"])
+        stage = random.choice(["New", "Contacted", "Follow-Up", "Qualified", "Dormant", "Lost", "Converted"])
         d = today - timedelta(days=random.randint(0, 60))
-        fu = today + timedelta(days=random.randint(-3, 14))
+        na = today + timedelta(days=random.randint(-3, 14))
         docs.append({
             "id": new_id(),
-            "date": d.isoformat(),
+            "lead_id": f"LD-{d.strftime('%y%m')}-{i + 1:03d}",
+            "source": random.choice(sources),
+            "source_ref": "",
+            "intake_date": d.isoformat(),
             "name": n,
             "phone": f"9{random.randint(100000000, 999999999)}",
-            "source": random.choice(sources),
+            "referrer": random.choice(["Naveen Smiley", "Architect ref", "", "Instagram"]),
+            "requirement": random.choice(["Sofa set", "Full home interior", "Wall texture", "uPVC windows", "Dining"]),
+            "division": random.choice(divisions),
+            "owner": random.choice(["Raghu MF", "Nenmu", "Gowtham Hive"]),
             "stage": stage,
-            "follow_up_date": fu.isoformat(),
+            "next_action_date": "" if stage in ("Lost", "Converted") else na.isoformat(),
+            "last_contact_date": "",
             "remarks": random.choice(["Interested in living room", "Asked for catalogue", "Site visit pending", "Quotation under review", "Negotiating price", "Wants paint sample"]),
-            "assigned_to": random.choice(["Raghu MF", "Nenmu", "Gowtham Hive"]),
-            "value": float(random.choice([50000, 120000, 180000, 250000, 450000, 800000])),
             "created_at": now_iso(),
         })
     await db.leads.insert_many(docs)
@@ -286,15 +297,18 @@ async def seed_quotes(db):
                  ("Ar Jeevan Project", "Raghu MF")]
     today = datetime.now(timezone.utc).date()
     docs = []
+    # Real ops-stage vocabulary — the sales-status axis (Sent/Won/Lost) is derived from these.
+    stages = ["Quoted", "Adv Received", "Design & Lock", "Site Not Ready",
+              "Rescheduled", "Delivered", "Cancelled"]
     for i, (c, r) in enumerate(customers, start=1):
-        stage = random.choice(["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"])
+        stage = random.choice(stages)
+        won = stage in ("Adv Received", "Design & Lock", "Delivered")
         value = float(random.choice([85000, 125000, 180000, 245000, 320000, 480000, 750000, 1200000]))
-        cash = round(value * random.uniform(0.1, 0.4), 2) if stage in ("Won", "Negotiation") else 0
-        bank = round(value * random.uniform(0.3, 0.6), 2) if stage in ("Won", "Negotiation") else 0
+        d = today - timedelta(days=random.randint(0, 90))
         docs.append({
             "id": new_id(),
-            "quote_no": f"AF-{i:04d}",
-            "date": (today - timedelta(days=random.randint(0, 90))).isoformat(),
+            "quote_no": f"AF-{d.strftime('%y%m')}-{i:03d}",
+            "date": d.isoformat(),
             "customer": c,
             "reference": r,
             "phone": f"9{random.randint(100000000, 999999999)}",
@@ -302,9 +316,12 @@ async def seed_quotes(db):
             "by_user": random.choice(["Raghu MF", "Nenmu", "Gowtham Hive"]),
             "stage": stage,
             "value": value,
-            "cash": cash,
-            "bank": bank,
+            "cash": round(value * random.uniform(0.1, 0.4), 2) if won else 0,
+            "bank": round(value * random.uniform(0.3, 0.6), 2) if won else 0,
             "mode": random.choice(["Walk-in", "WhatsApp", "Site Visit", "Phone"]),
+            "version": 1,
+            "next_action_date": "" if stage in ("Delivered", "Cancelled")
+                                else (today + timedelta(days=random.randint(-5, 10))).isoformat(),
             "remarks": random.choice(["Furniture set for living room", "Complete interior package", "Paint requirement", "Doors and windows for villa", "Bulk order for office"]),
             "created_at": now_iso(),
         })

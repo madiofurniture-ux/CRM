@@ -37,7 +37,8 @@ export default function Dashboard() {
   useEffect(() => { load(); }, []);
 
   const today = new Date().toISOString().slice(0, 10);
-  const overdue = leads.filter((l) => l.follow_up_date && l.follow_up_date < today && !["Won", "Lost"].includes(l.stage)).slice(0, 6);
+  // Unified-lead schema: next_action_date + Converted/Lost close states.
+  const overdue = leads.filter((l) => l.next_action_date && l.next_action_date < today && !["Converted", "Lost"].includes(l.stage)).slice(0, 6);
 
   return (
     <>
@@ -155,8 +156,8 @@ export default function Dashboard() {
                       <StageBadge stage={l.stage} />
                     </div>
                     <div className="flex items-center gap-3 mt-1.5 text-[11px] text-[var(--ink-3)]">
-                      <span className="flex items-center gap-1"><Calendar size={11} />{fmtDate(l.follow_up_date)}</span>
-                      <span>{l.assigned_to}</span>
+                      <span className="flex items-center gap-1"><Calendar size={11} />{fmtDate(l.next_action_date)}</span>
+                      <span>{l.owner}</span>
                     </div>
                   </div>
                 ))}
@@ -192,7 +193,7 @@ export default function Dashboard() {
                     <td className="px-4 py-3 font-medium text-[var(--ink)]">{q.customer}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)]">{q.division}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)]">{q.by_user}</td>
-                    <td className="px-4 py-3"><StageBadge stage={q.stage} /></td>
+                    <td className="px-4 py-3"><StageBadge stage={q.derived_status || q.stage} /></td>
                     <td className="px-4 py-3 text-right font-mono font-semibold text-[var(--ink)]">{inrFull(q.value)}</td>
                   </tr>
                 ))}

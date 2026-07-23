@@ -4,19 +4,7 @@ import api from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Shield, Trash2, X, Plus } from "lucide-react";
-
-const ALL_PAGES = [
-  { id: "dashboard", label: "Dashboard" },
-  { id: "pipeline", label: "Pipeline" },
-  { id: "quotes", label: "Quotations" },
-  { id: "sales", label: "Sales" },
-  { id: "visitors", label: "Visitors" },
-  { id: "leads", label: "Leads" },
-  { id: "architects", label: "Architects" },
-  { id: "inventory", label: "Inventory" },
-  { id: "inv-analytics", label: "Inventory Analytics" },
-  { id: "tasks", label: "Tasks" },
-];
+import { ALL_PAGES } from "@/lib/nav";
 
 const COLORS = ["#C85A32", "#4A5D4E", "#D48B30", "#B24040", "#1A1D1A", "#5C7AA1"];
 

@@ -16,6 +16,22 @@ const MAP = {
   Low: { bg: "bg-[var(--surface-2)]", text: "text-[var(--ink-2)]", dot: "bg-[var(--ink-3)]" },
   Medium: { bg: "bg-[var(--warn-soft)]", text: "text-[var(--warn)]", dot: "bg-[var(--warn)]" },
   High: { bg: "bg-[var(--danger-soft)]", text: "text-[var(--danger)]", dot: "bg-[var(--danger)]" },
+  // Quote sales-status axis
+  Draft: { bg: "bg-[var(--surface-2)]", text: "text-[var(--ink-2)]", dot: "bg-[var(--ink-3)]" },
+  Sent: { bg: "bg-[var(--warn-soft)]", text: "text-[var(--warn)]", dot: "bg-[var(--warn)]" },
+  Expired: { bg: "bg-blue-50", text: "text-blue-700", dot: "bg-blue-500" },
+  // Ops stages seen on quotes / sales
+  "Adv Received": { bg: "bg-[var(--moss-soft)]", text: "text-[var(--moss)]", dot: "bg-[var(--moss)]" },
+  "Design & Lock": { bg: "bg-[var(--moss-soft)]", text: "text-[var(--moss)]", dot: "bg-[var(--moss)]" },
+  "Site Not Ready": { bg: "bg-[var(--warn-soft)]", text: "text-[var(--warn)]", dot: "bg-[var(--warn)]" },
+  Rescheduled: { bg: "bg-[var(--warn-soft)]", text: "text-[var(--warn)]", dot: "bg-[var(--warn)]" },
+  Cancelled: { bg: "bg-[var(--danger-soft)]", text: "text-[var(--danger)]", dot: "bg-[var(--danger)]" },
+  Confirmed: { bg: "bg-blue-50", text: "text-blue-700", dot: "bg-blue-500" },
+  "Payment Received": { bg: "bg-[var(--moss-soft)]", text: "text-[var(--moss)]", dot: "bg-[var(--moss)]" },
+  // Lead stages
+  "Follow-Up": { bg: "bg-blue-50", text: "text-blue-700", dot: "bg-blue-500" },
+  Dormant: { bg: "bg-[var(--surface-2)]", text: "text-[var(--ink-2)]", dot: "bg-[var(--ink-3)]" },
+  Converted: { bg: "bg-[var(--moss-soft)]", text: "text-[var(--moss)]", dot: "bg-[var(--moss)]" },
 };
 
 export default function StageBadge({ stage }) {
