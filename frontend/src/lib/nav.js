@@ -5,6 +5,7 @@ import {
   LayoutDashboard, Bell, Columns3, FileText, Receipt, UserPlus, Sparkles,
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
+  Layers, Database,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
@@ -27,6 +28,7 @@ export const NAV = [
 
   // Stock
   { app: "stock", id: "inventory", to: "/inventory", label: "Stock", icon: Package },
+  { app: "stock", id: "stock-ledger", to: "/stock-ledger", label: "Stock Ledger", icon: Layers },
   { app: "stock", id: "inv-analytics", to: "/inventory/analytics", label: "Inv. Analytics", icon: BarChart3 },
 
   // Money
@@ -41,6 +43,7 @@ export const NAV = [
   { app: "command", id: "reports", to: "/reports", label: "Reports", icon: PieChart },
   { app: "command", id: "tasks", to: "/tasks", label: "Tasks", icon: ListTodo },
   { app: "command", id: "attendance", to: "/attendance", label: "Attendance", icon: Fingerprint },
+  { app: "command", id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database },
   { app: "command", id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
 ];
 

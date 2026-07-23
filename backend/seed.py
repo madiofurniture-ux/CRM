@@ -13,7 +13,8 @@ DATA_DIR = Path(__file__).parent / "data"
 # Page ids must match lib/nav.js on the frontend.
 SALES_PAGES = ["dashboard", "alerts", "pipeline", "quotes", "sales", "visitors", "leads",
                "architects", "projects", "dwsurvey", "outstanding", "inventory",
-               "inv-analytics", "meetplan", "reports", "tasks", "attendance"]
+               "stock-ledger", "inv-analytics", "meetplan", "reports", "tasks",
+               "attendance", "data-centre"]
 
 SEED_USERS = [
     {"username": "admin", "name": "Admin", "pin": "1234", "role": "admin", "icon": "AD", "color": "#1A1D1A", "pages": None},

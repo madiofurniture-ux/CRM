@@ -55,6 +55,24 @@ inline JavaScript they live in there.
 - **`Pipeline`** — Kanban columns switched to the sales-status axis.
 - **New shared components** — `JourneyDrawer` (customer-360 slide-over), `FilterChips`.
 
+## Round 2 modules
+
+- **Quote Workspace** (`QuoteWorkspace.jsx`, `/quotes/ws/:id`) — line-item builder
+  (W×H→sqft, area-or-qty billing), debounced per-line save, subtotal→discount→tax→grand
+  total roll-up, **>10% discount → admin approval gate** (blocks convert until approved),
+  and **Revise** (copies lines into a new version, reopens as Sent). Backend:
+  `/quotes/{id}/workspace|save-total|approve|revise` + `lifecycle.quote_total`.
+- **Stock Ledger** (`StockLedger.jsx`, `/stock-ledger`) — inventory movements
+  (Receipt/Issue/Transfer/Adjustment/Return), signed on-hand per SKU, transfers auto-book a
+  mirror receipt into the destination warehouse. Backend: `/stock-movements[/summary]` +
+  `lifecycle.signed_qty`/`stock_on_hand`/`stock_summary`.
+- **Data Centre** (`DataCentre.jsx`, `/data-centre`) — CSV export for any of 8 datasets;
+  admin-only CSV import that upserts on each dataset's id field. Export cells are guarded
+  against CSV formula injection (`=`/`+`/`-`/`@` → apostrophe-prefixed); the guard is stripped
+  on import so a round-trip is lossless. Backend: `/data-centre/collections|export|import`.
+
+`test_lifecycle.py` is now **30 tests** (added quote-total, stock-ledger, and CSV cases).
+
 ## Run
 
 Backend: `cd backend && pip install -r requirements.txt && uvicorn server:app --reload`
@@ -62,6 +80,7 @@ Backend: `cd backend && pip install -r requirements.txt && uvicorn server:app --
 Frontend: `cd frontend && yarn install && yarn start` (needs `REACT_APP_BACKEND_URL`).
 Tests: `cd backend && python -m pytest tests/test_lifecycle.py -q`.
 
-> Not yet ported from the web app (deliberate, larger follow-ups): Quote Workspace
-> line-item builder UI, Data Centre / Google-Sheets sync, Tally import, media library,
-> stock ledger & executions, `_safety` snapshot/rollback layer, offline queue.
+> Still not ported (deliberate): Google-Sheets *live* sync (N/A here — Mongo is the store;
+> Data Centre covers CSV import/export instead), Tally XML import, media/image library,
+> execution-events tracking, the `_safety` snapshot/rollback layer, and the offline queue
+> (both were single-file/localStorage-era safety nets, less critical with a real backend).

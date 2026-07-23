@@ -14,6 +14,8 @@ with it, because both read the same historical data:
 """
 from __future__ import annotations
 
+import csv
+import io
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
@@ -286,6 +288,16 @@ def lines_subtotal(lines: Iterable[dict]) -> float:
 
 def needs_approval(subtotal: float, discount: float) -> bool:
     return subtotal > 0 and money(discount) > subtotal * APPROVAL_DISC_PCT / 100
+
+
+def quote_total(subtotal: float, discount: float, tax_pct: float) -> dict:
+    """Roll lines → subtotal → discount → tax → grand total. Discount is an absolute ₹."""
+    sub = round(money(subtotal), 2)
+    disc = min(money(discount), sub)            # a discount never exceeds the subtotal
+    taxable = round(sub - disc, 2)
+    tax = round(taxable * money(tax_pct) / 100, 2)
+    return {"subtotal": sub, "discount": round(disc, 2), "tax_total": tax,
+            "grand_total": round(taxable + tax, 2), "value": round(taxable, 2)}
 
 
 # ------------------------------------------------------------- D&W surveys
@@ -608,3 +620,96 @@ def build_journey(phone: Any, *, visitors, leads, quotes, sales, payments, activ
         "linked": {"quotes": linked_quotes, "sales": linked_sales},
         "events": events,
     }
+
+
+# ------------------------------------------------------------- stock ledger
+# Movement types and the sign each applies to on-hand quantity. A transfer is
+# modelled as two rows (an Issue from one warehouse + a Receipt into another) so
+# the global on-hand nets to zero while per-warehouse balances move.
+STOCK_MOVE_TYPES = ["Receipt", "Issue", "Transfer", "Adjustment", "Return"]
+_MOVE_SIGN = {"Receipt": 1, "Return": 1, "Issue": -1, "Transfer": -1, "Adjustment": 1}
+
+
+def next_movement_id(moves: Iterable[dict]) -> str:
+    return _next_dated_id(moves, "movement_no", "MV")
+
+
+def signed_qty(move: dict) -> float:
+    """Quantity contribution to on-hand. Adjustment keeps its own sign (can be negative)."""
+    q = money(move.get("qty"))
+    t = str(move.get("type") or "")
+    if t == "Adjustment":
+        return q
+    return _MOVE_SIGN.get(t, 0) * abs(q)
+
+
+def stock_on_hand(movements: Iterable[dict]) -> dict:
+    """product_id → net on-hand quantity across every movement."""
+    on_hand: dict = {}
+    for m in movements:
+        pid = m.get("product_id")
+        if not pid:
+            continue
+        on_hand[pid] = on_hand.get(pid, 0) + signed_qty(m)
+    return on_hand
+
+
+def stock_summary(movements, inventory) -> dict:
+    """On-hand per product joined to its inventory name, plus movement-type counts."""
+    on_hand = stock_on_hand(movements)
+    by_name = {i.get("sku"): i.get("name") for i in inventory}
+    rows = [{"product_id": pid, "name": by_name.get(pid, pid), "on_hand": round(qty, 2)}
+            for pid, qty in sorted(on_hand.items())]
+    type_counts: dict = {}
+    for m in movements:
+        t = str(m.get("type") or "?")
+        type_counts[t] = type_counts.get(t, 0) + 1
+    return {"products": rows, "total_movements": len(list(movements) if not isinstance(movements, list) else movements),
+            "by_type": type_counts}
+
+
+# ------------------------------------------------------------- CSV I/O
+# Data-Centre import/export. Every exported cell is guarded against CSV formula
+# injection — a cell that starts with = + - @ (or a control char) is prefixed with
+# an apostrophe so a spreadsheet treats it as text, not a formula.
+_CSV_DANGEROUS = ("=", "+", "-", "@")
+
+
+def csv_cell(value: Any) -> str:
+    s = "" if value is None else str(value)
+    s = s.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    if s and s[0] in _CSV_DANGEROUS:
+        s = "'" + s
+    return s
+
+
+def to_csv(rows: list[dict], fields: list[str]) -> str:
+    """Serialise rows to CSV text using exactly `fields` as the header/column order."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(fields)
+    for r in rows:
+        writer.writerow([csv_cell(r.get(f)) for f in fields])
+    return buf.getvalue()
+
+
+def from_csv(text: str) -> list[dict]:
+    """Parse CSV text (first row = header) into a list of dicts. Strips a leading
+    apostrophe guard so a round-trip is lossless."""
+    reader = csv.reader(io.StringIO(text))
+    rows = list(reader)
+    if not rows:
+        return []
+    header = [h.strip() for h in rows[0]]
+    out = []
+    for raw in rows[1:]:
+        if not any(c.strip() for c in raw):        # skip blank lines
+            continue
+        rec = {}
+        for i, key in enumerate(header):
+            val = raw[i] if i < len(raw) else ""
+            if val.startswith("'") and len(val) > 1 and val[1] in _CSV_DANGEROUS:
+                val = val[1:]
+            rec[key] = val
+        out.append(rec)
+    return out

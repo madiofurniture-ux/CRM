@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import FilterChips from "@/components/FilterChips";
@@ -6,7 +7,7 @@ import JourneyDrawer from "@/components/JourneyDrawer";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
-import { Trash2, Edit2, X, Compass, ArrowRightCircle } from "lucide-react";
+import { Trash2, Edit2, X, Compass, ArrowRightCircle, LayoutList } from "lucide-react";
 
 const DIVISIONS = ["Furniture", "MAP", "D&W"];
 // Ops stages the sheet actually uses; the sales-status axis is derived server-side.
@@ -35,6 +36,7 @@ export default function Quotes() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [jny, setJny] = useState(null);
+  const nav = useNavigate();
 
   const empty = {
     quote_no: "", date: new Date().toISOString().slice(0, 10),
@@ -142,6 +144,7 @@ export default function Quotes() {
                     <td className="px-2 py-3">
                       <div className="flex items-center gap-1">
                         {q.phone && <button onClick={() => setJny({ phone: q.phone, name: q.customer })} title="Journey" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Compass size={13} /></button>}
+                        <button onClick={() => nav(`/quotes/ws/${q.id}`)} title="Workspace (line items)" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><LayoutList size={13} /></button>
                         {q.is_open && <button onClick={() => convert(q)} title="Convert to sale" className="p-1.5 rounded-md hover:bg-[var(--moss-soft)] text-[var(--moss)]"><ArrowRightCircle size={13} /></button>}
                         <button onClick={() => openEdit(q)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Edit2 size={13} /></button>
                         <button onClick={() => remove(q.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>

@@ -28,6 +28,7 @@ from models import (
     ProjectCreate, Project,
     DWSurveyCreate, DWSurvey,
     DWOpeningCreate, DWOpening,
+    StockMovementCreate, StockMovement,
     InventoryCreate, InventoryItem,
     TaskCreate, Task,
     InvoiceCreate, Invoice,
@@ -649,6 +650,191 @@ async def inventory_analytics(_: dict = Depends(get_current_user)):
         "by_status": [{"name": k, "value": v} for k, v in by_status.items()],
         "top_items": top_items,
     }
+
+
+# ---------- Quote Workspace (line items · versions · approval) ----------
+@api.get("/quotes/{quote_id}/workspace")
+async def quote_workspace(quote_id: str, _: dict = Depends(get_current_user)):
+    quote = await db.quotes.find_one({"id": quote_id}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    lc.sanitize_quote(quote)
+    version = quote.get("version", 1)
+    all_lines = await db.quote_lines.find({"quote_id": quote_id}, {"_id": 0}).to_list(500)
+    lines = [lc.calc_line(dict(l)) for l in all_lines if (l.get("version") or 1) == version]
+    subtotal = lc.lines_subtotal(lines)
+    versions = sorted({(l.get("version") or 1) for l in all_lines} | {version})
+    return {
+        "quote": lc.enrich_quote(quote),
+        "lines": lines,
+        "subtotal": subtotal,
+        "needs_approval": lc.needs_approval(subtotal, quote.get("discount")),
+        "totals": lc.quote_total(subtotal, quote.get("discount"), quote.get("tax_pct") or 18),
+        "versions": versions,
+    }
+
+
+@api.post("/quotes/{quote_id}/save-total")
+async def quote_save_total(quote_id: str, payload: dict, _: dict = Depends(get_current_user)):
+    """Recompute the quote's money from its current-version lines. If the discount crosses
+    the approval threshold, flag it pending and leave the value where the lines put it."""
+    quote = await db.quotes.find_one({"id": quote_id}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    version = quote.get("version", 1)
+    lines = [l for l in await db.quote_lines.find({"quote_id": quote_id}, {"_id": 0}).to_list(500)
+             if (l.get("version") or 1) == version]
+    subtotal = lc.lines_subtotal([lc.calc_line(dict(l)) for l in lines])
+    discount = lc.money(payload.get("discount", quote.get("discount")))
+    totals = lc.quote_total(subtotal, discount, quote.get("tax_pct") or 18)
+    update = {**totals, "discount": discount}
+    if lc.needs_approval(subtotal, discount):
+        update["approval"] = "pending"
+    await db.quotes.update_one({"id": quote_id}, {"$set": update})
+    out = await db.quotes.find_one({"id": quote_id}, {"_id": 0})
+    return lc.enrich_quote(out)
+
+
+@api.post("/quotes/{quote_id}/approve")
+async def quote_approve(quote_id: str, payload: dict, _: dict = Depends(require_admin)):
+    approved = bool(payload.get("approved"))
+    await db.quotes.update_one({"id": quote_id},
+                               {"$set": {"approval": "approved" if approved else "rejected"}})
+    out = await db.quotes.find_one({"id": quote_id}, {"_id": 0})
+    return lc.enrich_quote(out)
+
+
+@api.post("/quotes/{quote_id}/revise")
+async def quote_revise(quote_id: str, _: dict = Depends(get_current_user)):
+    """Start a new revision: copy the current version's lines forward, bump version,
+    reset the quote to Sent/Quoted with today's date."""
+    quote = await db.quotes.find_one({"id": quote_id}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    old_v = quote.get("version", 1)
+    new_v = old_v + 1
+    for l in await db.quote_lines.find({"quote_id": quote_id}, {"_id": 0}).to_list(500):
+        if (l.get("version") or 1) != old_v:
+            continue
+        copy = {k: v for k, v in l.items() if k not in ("id", "created_at")}
+        copy.update({"id": new_id(), "created_at": now_iso(), "version": new_v})
+        await db.quote_lines.insert_one(copy)
+    await db.quotes.update_one({"id": quote_id}, {"$set": {
+        "version": new_v, "stage": "Quoted", "status": "Sent",
+        "approval": "", "date": lc.today_iso(),
+    }})
+    out = await db.quotes.find_one({"id": quote_id}, {"_id": 0})
+    return lc.enrich_quote(out)
+
+
+# ---------- Stock ledger ----------
+@api.get("/stock-movements")
+async def list_stock_movements(_: dict = Depends(get_current_user)):
+    return await db.stock_movements.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+
+
+@api.post("/stock-movements")
+async def create_stock_movement(payload: StockMovementCreate, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    if not doc.get("date"):
+        doc["date"] = lc.today_iso()
+    if not doc.get("by_user"):
+        doc["by_user"] = user.get("name", "")
+    existing = await db.stock_movements.find({}, {"movement_no": 1, "_id": 0}).to_list(5000)
+    doc["movement_no"] = lc.next_movement_id(existing)
+    await db.stock_movements.insert_one(doc)
+    doc.pop("_id", None)
+    # A transfer is booked as an issue here + an offsetting receipt into the destination.
+    if doc["type"] == "Transfer" and doc.get("to_warehouse"):
+        mirror = {**doc, "id": new_id(), "type": "Receipt",
+                  "warehouse": doc.get("to_warehouse"), "to_warehouse": "",
+                  "movement_no": lc.next_movement_id(existing + [doc]),
+                  "reason": f"Transfer from {doc.get('warehouse')}", "created_at": now_iso()}
+        await db.stock_movements.insert_one(dict(mirror))
+    return doc
+
+
+@api.delete("/stock-movements/{item_id}")
+async def delete_stock_movement(item_id: str, _: dict = Depends(get_current_user)):
+    await db.stock_movements.delete_one({"id": item_id})
+    return {"ok": True}
+
+
+@api.get("/stock-movements/summary")
+async def stock_summary(_: dict = Depends(get_current_user)):
+    moves = await db.stock_movements.find({}, {"_id": 0}).to_list(5000)
+    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
+    return lc.stock_summary(moves, inventory)
+
+
+# ---------- Data Centre (CSV import / export per collection) ----------
+# name → (mongo collection, id field, exported columns)
+DC_COLLECTIONS = {
+    "leads": ("leads", "lead_id", ["lead_id", "source", "intake_date", "name", "phone",
+              "referrer", "requirement", "division", "owner", "stage", "next_action_date", "remarks"]),
+    "quotes": ("quotes", "quote_no", ["quote_no", "date", "customer", "phone", "reference",
+               "division", "by_user", "stage", "status", "value", "remarks"]),
+    "sales": ("sales", "sale_no", ["sale_no", "date", "customer", "phone", "division",
+              "quote_ref", "by_user", "value", "paid", "balance", "stage", "remarks"]),
+    "visitors": ("visitors", "id", ["date", "name", "phone", "location", "reference",
+                 "requirement", "attend_person", "stage", "remarks"]),
+    "inventory": ("inventory", "sku", ["sku", "name", "category", "vendor", "model_no",
+                  "qty", "cost", "mrp", "status", "location"]),
+    "architects": ("architects", "name", ["name", "firm", "type", "location", "phone",
+                   "assigned_to", "visited", "remarks"]),
+    "payments": ("payments", "payment_id", ["payment_id", "date", "division", "direction",
+                 "amount", "mode", "kind", "received_by", "against_sale_id", "remarks"]),
+    "projects": ("projects", "id", ["name", "division", "customer_name", "phone", "stage",
+                 "applicator", "value", "paid", "balance", "notes"]),
+}
+
+
+@api.get("/data-centre/collections")
+async def dc_collections(_: dict = Depends(get_current_user)):
+    out = []
+    for name, (coll, id_field, fields) in DC_COLLECTIONS.items():
+        out.append({"name": name, "id_field": id_field, "fields": fields,
+                    "count": await db[coll].count_documents({})})
+    return out
+
+
+@api.get("/data-centre/export/{name}")
+async def dc_export(name: str, _: dict = Depends(get_current_user)):
+    if name not in DC_COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown collection")
+    coll, _id, fields = DC_COLLECTIONS[name]
+    rows = await db[coll].find({}, {"_id": 0}).to_list(20000)
+    return {"name": name, "fields": fields, "csv": lc.to_csv(rows, fields), "count": len(rows)}
+
+
+@api.post("/data-centre/import/{name}")
+async def dc_import(name: str, request: Request, user: dict = Depends(require_admin)):
+    """Upsert rows from pasted CSV, keyed on the collection's id field. New rows get a uuid.
+    Import is admin-only because it writes across the whole dataset."""
+    if name not in DC_COLLECTIONS:
+        raise HTTPException(status_code=404, detail="Unknown collection")
+    coll, id_field, _fields = DC_COLLECTIONS[name]
+    body = await request.json()
+    records = lc.from_csv(body.get("csv", ""))
+    inserted = updated = skipped = 0
+    for rec in records:
+        rec = {k: v for k, v in rec.items() if k}
+        key = rec.get(id_field)
+        if not key:                                   # never create empty-keyed rows
+            skipped += 1
+            continue
+        existing = await db[coll].find_one({id_field: key})
+        if existing:
+            await db[coll].update_one({id_field: key}, {"$set": rec})
+            updated += 1
+        else:
+            rec["id"] = new_id()
+            rec["created_at"] = now_iso()
+            await db[coll].insert_one(rec)
+            inserted += 1
+    return {"inserted": inserted, "updated": updated, "skipped": skipped, "total": len(records)}
 
 
 # ---------- Reports (division rollup + WhatsApp summary) ----------

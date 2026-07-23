@@ -348,6 +348,31 @@ class DWOpening(DWOpeningBase):
     created_at: str
 
 
+# ------- Stock ledger (inventory movements) -------
+class StockMovementBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    movement_no: Optional[str] = ""      # MV-YYMM-NNN, assigned server-side
+    date: str = ""
+    type: str = "Receipt"                # see lifecycle.STOCK_MOVE_TYPES
+    product_id: str = ""                 # inventory sku
+    qty: float = 0
+    unit: str = "pc"
+    warehouse: Optional[str] = "Main"
+    to_warehouse: Optional[str] = ""     # for transfers
+    source_doc: Optional[str] = ""       # PO / sale / project reference
+    reason: Optional[str] = ""
+    by_user: Optional[str] = ""
+
+
+class StockMovementCreate(StockMovementBase):
+    pass
+
+
+class StockMovement(StockMovementBase):
+    id: str
+    created_at: str
+
+
 # ------- Inventory -------
 class InventoryBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

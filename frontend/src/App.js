@@ -11,6 +11,7 @@ import Dashboard from "@/pages/Dashboard";
 import Alerts from "@/pages/Alerts";
 import Pipeline from "@/pages/Pipeline";
 import Quotes from "@/pages/Quotes";
+import QuoteWorkspace from "@/pages/QuoteWorkspace";
 import Sales from "@/pages/Sales";
 import Visitors from "@/pages/Visitors";
 import Leads from "@/pages/Leads";
@@ -19,11 +20,13 @@ import Projects from "@/pages/Projects";
 import DWSurvey from "@/pages/DWSurvey";
 import Outstanding from "@/pages/Outstanding";
 import Inventory from "@/pages/Inventory";
+import StockLedger from "@/pages/StockLedger";
 import InventoryAnalytics from "@/pages/InventoryAnalytics";
 import Invoices from "@/pages/Invoices";
 import PettyCash from "@/pages/PettyCash";
 import Meets from "@/pages/Meets";
 import Reports from "@/pages/Reports";
+import DataCentre from "@/pages/DataCentre";
 import Tasks from "@/pages/Tasks";
 import Attendance from "@/pages/Attendance";
 import RoleManager from "@/pages/RoleManager";
@@ -44,6 +47,7 @@ function App() {
           <Route path="/alerts" element={R("alerts", <Alerts />)} />
           <Route path="/pipeline" element={R("pipeline", <Pipeline />)} />
           <Route path="/quotes" element={R("quotes", <Quotes />)} />
+          <Route path="/quotes/ws/:id" element={R("quotes", <QuoteWorkspace />)} />
           <Route path="/sales" element={R("sales", <Sales />)} />
           <Route path="/visitors" element={R("visitors", <Visitors />)} />
           <Route path="/leads" element={R("leads", <Leads />)} />
@@ -52,11 +56,13 @@ function App() {
           <Route path="/dw-survey" element={R("dwsurvey", <DWSurvey />)} />
           <Route path="/outstanding" element={R("outstanding", <Outstanding />)} />
           <Route path="/inventory" element={R("inventory", <Inventory />)} />
+          <Route path="/stock-ledger" element={R("stock-ledger", <StockLedger />)} />
           <Route path="/inventory/analytics" element={R("inv-analytics", <InventoryAnalytics />)} />
           <Route path="/invoices" element={R("invoice-gen", <Invoices />)} />
           <Route path="/petty-cash" element={R("petty", <PettyCash />)} />
           <Route path="/meets" element={R("meetplan", <Meets />)} />
           <Route path="/reports" element={R("reports", <Reports />)} />
+          <Route path="/data-centre" element={R("data-centre", <DataCentre />)} />
           <Route path="/tasks" element={R("tasks", <Tasks />)} />
           <Route path="/attendance" element={R("attendance", <Attendance />)} />
           <Route path="/admin/roles" element={R("roles", <RoleManager />)} />

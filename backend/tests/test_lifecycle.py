@@ -115,6 +115,21 @@ def test_needs_approval_threshold():
     assert not lc.needs_approval(0, 5000)
 
 
+def test_quote_total_rolls_discount_and_tax():
+    t = lc.quote_total(100000, 10000, 18)
+    assert t["subtotal"] == 100000
+    assert t["discount"] == 10000
+    assert t["value"] == 90000                   # taxable
+    assert t["tax_total"] == 16200               # 18% of 90000
+    assert t["grand_total"] == 106200
+
+
+def test_quote_total_caps_discount_at_subtotal():
+    t = lc.quote_total(5000, 99999, 18)
+    assert t["discount"] == 5000
+    assert t["value"] == 0
+
+
 # --------------------------------------------------------------- D&W openings
 def test_calc_opening_inches_to_sqft():
     o = lc.calc_opening({"w": 48, "h": 60, "qty": 2})
@@ -207,3 +222,52 @@ def test_build_journey_joins_by_phone_and_totals():
     kinds = [e["kind"] for e in j["events"]]
     assert kinds[0] == "Walk-in visit"
     assert kinds[-1] in ("Sale", "Payment")
+
+
+# --------------------------------------------------------------- stock ledger
+def test_signed_qty_by_type():
+    assert lc.signed_qty({"type": "Receipt", "qty": 5}) == 5
+    assert lc.signed_qty({"type": "Issue", "qty": 3}) == -3
+    assert lc.signed_qty({"type": "Return", "qty": 2}) == 2
+    assert lc.signed_qty({"type": "Adjustment", "qty": -4}) == -4   # keeps its own sign
+
+
+def test_stock_on_hand_nets_movements():
+    moves = [
+        {"product_id": "MF-1", "type": "Receipt", "qty": 10},
+        {"product_id": "MF-1", "type": "Issue", "qty": 3},
+        {"product_id": "MF-2", "type": "Receipt", "qty": 5},
+        {"product_id": "", "type": "Receipt", "qty": 99},   # no product — ignored
+    ]
+    on_hand = lc.stock_on_hand(moves)
+    assert on_hand["MF-1"] == 7
+    assert on_hand["MF-2"] == 5
+    assert "" not in on_hand
+
+
+def test_stock_summary_joins_names():
+    moves = [{"product_id": "MF-1", "type": "Receipt", "qty": 4}]
+    inv = [{"sku": "MF-1", "name": "Test Sofa"}]
+    s = lc.stock_summary(moves, inv)
+    assert s["products"][0] == {"product_id": "MF-1", "name": "Test Sofa", "on_hand": 4}
+    assert s["by_type"]["Receipt"] == 1
+
+
+# --------------------------------------------------------------- CSV I/O
+def test_csv_round_trip_is_lossless():
+    rows = [{"a": "1", "b": "hello"}, {"a": "2", "b": "world"}]
+    text = lc.to_csv(rows, ["a", "b"])
+    back = lc.from_csv(text)
+    assert back == rows
+
+
+def test_csv_guards_formula_injection():
+    text = lc.to_csv([{"name": "=SUM(A1:A9)"}], ["name"])
+    # exported cell is neutralised with a leading apostrophe...
+    assert "'=SUM" in text
+    # ...and the guard is stripped on the way back in.
+    assert lc.from_csv(text)[0]["name"] == "=SUM(A1:A9)"
+
+
+def test_from_csv_skips_blank_lines():
+    assert lc.from_csv("a,b\n1,2\n\n3,4\n") == [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
