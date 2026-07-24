@@ -2193,9 +2193,9 @@ input,select,textarea{font-size:16px!important;-webkit-appearance:none;}
 <div class="page" id="p-attendance">
   <div class="kgrid" style="grid-template-columns:repeat(4,1fr)">
     <div class="kc gold"><div class="kl">Today Present</div><div class="kv sm" id="att-today">—</div></div>
-    <div class="kc green"><div class="kl">This Month</div><div class="kv sm" id="att-month">—</div></div>
+    <div class="kc green"><div class="kl">Payable Days</div><div class="kv sm" id="att-pay-days">—</div><div class="ks">Selected month</div></div>
     <div class="kc blue"><div class="kl">Late Arrivals</div><div class="kv sm" id="att-late">—</div></div>
-    <div class="kc red"><div class="kl">Absences</div><div class="kv sm" id="att-absent">—</div></div>
+    <div class="kc red"><div class="kl">Geo Exceptions</div><div class="kv sm" id="att-geo-exceptions">—</div></div>
   </div>
 
   <!-- Clock-in panel -->
@@ -2227,6 +2227,7 @@ input,select,textarea{font-size:16px!important;-webkit-appearance:none;}
       <span id="att-loc-text" style="font-size:10.5px;color:var(--t3)">Location not captured</span>
       <button class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:9.5px;padding:2px 8px" onclick="attGetLocation()">Get Location</button>
     </div>
+    <div id="att-geo-status" style="font-size:10px;color:var(--t3);margin-top:4px;text-align:left">Geo status will be attached to the attendance record.</div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
       <div class="fg"><label>Type</label>
@@ -2250,19 +2251,44 @@ input,select,textarea{font-size:16px!important;-webkit-appearance:none;}
     <div class="ph">
       <span class="pt">Attendance Log</span>
       <div style="display:flex;gap:5px;margin-left:auto;flex-wrap:wrap">
-        <select id="att-filter-user" class="seli" onchange="renderAttendance()" style="font-size:10px">
+        <select id="att-filter-user" class="seli" onchange="renderAttendance();renderAttKPIs()" style="font-size:10px">
           <option value="">All Staff</option>
         </select>
-        <input type="month" id="att-filter-month" class="seli" onchange="renderAttendance()" style="font-size:10px">
+        <input type="month" id="att-filter-month" class="seli" onchange="renderAttendance();renderAttKPIs()" style="font-size:10px">
         <button class="btn btn-ghost btn-sm" onclick="exportAttendance()">⬇ Export CSV</button>
       </div>
     </div>
     <div class="tw"><table>
       <thead><tr>
         <th>Date</th><th>Staff</th><th>Type</th><th>Time</th>
-        <th>Location</th><th>Selfie</th><th>Notes</th>
+        <th>Location</th><th>Geo</th><th>Selfie</th><th>Notes</th>
       </tr></thead>
       <tbody id="att-tbody"></tbody>
+    </table></div>
+  </div>
+
+  <!-- Payroll correlation -->
+  <div class="panel" style="margin-top:14px">
+    <div class="ph">
+      <span class="pt">Attendance → Pay Correlation</span>
+      <span class="ps">Geo verified attendance, payable days and estimated salary</span>
+      <div style="display:flex;gap:5px;margin-left:auto;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="attSavePaySettings()">💾 Save Rates</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportAttendancePay()">⬇ Export Payroll CSV</button>
+      </div>
+    </div>
+    <div style="padding:12px 14px;border-bottom:1px solid var(--b1)">
+      <div class="fgrid fg3">
+        <div class="fg"><label>Office Latitude</label><input id="att-office-lat" placeholder="17.4474" oninput="attRenderPay()"></div>
+        <div class="fg"><label>Office Longitude</label><input id="att-office-lng" placeholder="78.3762" oninput="attRenderPay()"></div>
+        <div class="fg"><label>Allowed Radius (m)</label><input id="att-office-radius" type="number" min="25" value="200" oninput="attRenderPay()"></div>
+      </div>
+      <div class="fgrid fg3" id="att-rate-grid"></div>
+      <div style="font-size:10px;color:var(--t3);margin-top:4px">Payable days = verified check-in days + half-day credit for incomplete days. Late and out-of-radius counts are highlighted for payroll review.</div>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Staff</th><th>Present</th><th>Late</th><th>Geo OK</th><th>Geo Exceptions</th><th>Hours</th><th>Rate / Day</th><th>Payable Days</th><th>Estimated Pay</th></tr></thead>
+      <tbody id="att-pay-tbody"></tbody>
     </table></div>
   </div>
 </div>
@@ -5720,6 +5746,7 @@ let attCamStream = null;
 let attSelfieData = null;
 let attLocation   = null;
 let attClockRunning = false;
+let ATT_PAY_SETTINGS = JSON.parse(localStorage.getItem('madio_att_pay_settings')||'{}');
 
 function initAttendancePage() {
   // Live clock
@@ -5750,20 +5777,27 @@ function initAttendancePage() {
     mEl.value = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;
   }
 
+  attLoadPaySettings();
   renderAttendance();
   renderAttKPIs();
+  attRenderPay();
 }
 
 function renderAttKPIs() {
   const now = new Date();
   const todayStr = now.toISOString().split('T')[0];
   const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const monthFilter = (document.getElementById('att-filter-month')||{}).value || ym;
   const todayRecs = ATT_RECORDS.filter(r => r.date===todayStr && r.type==='in');
-  const monthRecs = ATT_RECORDS.filter(r => (r.date||'').startsWith(ym) && r.type==='in');
-  const lateRecs  = ATT_RECORDS.filter(r => (r.date||'').startsWith(ym) && r.type==='in' && r.time && r.time>'09:30');
+  const monthRecs = ATT_RECORDS.filter(r => (r.date||'').startsWith(monthFilter) && r.type==='in');
+  const lateRecs  = ATT_RECORDS.filter(r => (r.date||'').startsWith(monthFilter) && r.type==='in' && r.time && r.time>'09:30');
+  const payRows = attBuildPayroll(monthFilter);
+  const geoExceptions = payRows.reduce((a,r)=>a+r.geoExceptions,0);
+  const payableDays = payRows.reduce((a,r)=>a+r.payableDays,0);
   setTx('att-today', todayRecs.length);
-  setTx('att-month', monthRecs.length);
+  setTx('att-pay-days', payableDays.toFixed(1).replace('.0',''));
   setTx('att-late',  lateRecs.length);
+  setTx('att-geo-exceptions', geoExceptions);
 }
 
 function renderAttendance() {
@@ -5785,11 +5819,37 @@ function renderAttendance() {
     <td class="primary">${r.staff}</td>
     <td><span class="att-type-badge ${typeClsMap[r.type]||''}">${typeLabelMap[r.type]||r.type}</span></td>
     <td class="mono" style="color:var(--gold2)">${r.time}</td>
-    <td style="font-size:10px;color:var(--t3);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.address||'—'}">${r.address ? '📍 '+r.address.substring(0,35) : '—'}</td>
+    <td style="font-size:10px;color:var(--t3);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.address||'—'}">${r.lat&&r.lng?`<a href="https://maps.google.com/?q=${r.lat},${r.lng}" target="_blank" onclick="event.stopPropagation()" style="color:var(--gold2);text-decoration:none">📍 ${r.address ? r.address.substring(0,35) : Number(r.lat).toFixed(5)+','+Number(r.lng).toFixed(5)}</a>`:'—'}</td>
+    <td>${attGeoBadge(r)}</td>
     <td style="text-align:center">${r.selfie?`<img src="${r.selfie}" class="att-selfie-thumb" onclick="event.stopPropagation();openLightbox('${r.selfie}','${r.staff} · ${r.date} ${r.time}')" alt="selfie">`:'—'}</td>
     <td style="font-size:10.5px;color:var(--t3)">${r.notes||'—'}</td>
-  </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--t3);padding:16px">No records yet</td></tr>';
+  </tr>`).join('') : '<tr><td colspan="8" style="text-align:center;color:var(--t3);padding:16px">No records yet</td></tr>';
+  attRenderPay();
 }
+
+function attDistanceM(aLat,aLng,bLat,bLng) {
+  if(!aLat||!aLng||!bLat||!bLng) return null;
+  const R=6371000, toRad=x=>x*Math.PI/180;
+  const dLat=toRad(bLat-aLat), dLng=toRad(bLng-aLng);
+  const h=Math.sin(dLat/2)**2+Math.cos(toRad(aLat))*Math.cos(toRad(bLat))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+
+function attGeoReview(rec) {
+  const lat=parseFloat(ATT_PAY_SETTINGS.officeLat), lng=parseFloat(ATT_PAY_SETTINGS.officeLng), radius=parseFloat(ATT_PAY_SETTINGS.radius||200);
+  if(!rec.lat||!rec.lng) return {status:'missing', label:'No GPS', distance:null};
+  const dist=attDistanceM(lat,lng,parseFloat(rec.lat),parseFloat(rec.lng));
+  if(dist===null) return {status:'captured', label:'GPS', distance:null};
+  const ok=dist<=radius;
+  return {status:ok?'ok':'outside', label:ok?'Geo OK':'Outside '+Math.round(dist)+'m', distance:dist};
+}
+
+function attGeoBadge(rec) {
+  const g=attGeoReview(rec);
+  const cls=g.status==='ok'?'att-in':g.status==='outside'?'att-out':g.status==='missing'?'att-break':'att-back';
+  return `<span class="att-type-badge ${cls}">${g.label}</span>`;
+}
+
 
 async function attStartCamera() {
   const video = document.getElementById('att-video');
@@ -5849,7 +5909,7 @@ function attGetLocation() {
   navigator.geolocation.getCurrentPosition(
     async pos => {
       const {latitude:lat, longitude:lng} = pos.coords;
-      attLocation = {lat,lng};
+      attLocation = {lat,lng, accuracy: pos.coords.accuracy || null};
       // Reverse geocode via free API
       try {
         const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
@@ -5857,9 +5917,11 @@ function attGetLocation() {
         const addr = d.display_name || `${lat.toFixed(4)},${lng.toFixed(4)}`;
         attLocation.address = addr.split(',').slice(0,3).join(', ');
         if(locText) locText.textContent = '📍 ' + attLocation.address;
+        const gs=document.getElementById('att-geo-status'); if(gs) gs.textContent = attGeoReview(attLocation).label;
       } catch(e) {
         attLocation.address = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
         if(locText) locText.textContent = '📍 ' + attLocation.address;
+        const gs=document.getElementById('att-geo-status'); if(gs) gs.textContent = attGeoReview(attLocation).label;
       }
       toast('Location captured ✓','success');
     },
@@ -5889,6 +5951,8 @@ function attSubmit() {
     lat:    attLocation?.lat||null,
     lng:    attLocation?.lng||null,
     address:attLocation?.address||null,
+    accuracy:attLocation?.accuracy||null,
+    geoStatus: attGeoReview(attLocation||{}).status,
   };
   ATT_RECORDS.push(rec);
   // Save (strip selfies to save space if too large)
@@ -5907,13 +5971,73 @@ function attSubmit() {
   attSelfieData = null; attLocation = null;
   const locText = document.getElementById('att-loc-text');
   if(locText) locText.textContent = 'Location not captured';
+  const gs=document.getElementById('att-geo-status'); if(gs) gs.textContent = 'Geo status will be attached to the attendance record.';
   renderAttendance();
   renderAttKPIs();
+  attRenderPay();
 }
 
+function attLoadPaySettings() {
+  const lat=document.getElementById('att-office-lat'), lng=document.getElementById('att-office-lng'), rad=document.getElementById('att-office-radius');
+  if(lat) lat.value = ATT_PAY_SETTINGS.officeLat || '';
+  if(lng) lng.value = ATT_PAY_SETTINGS.officeLng || '';
+  if(rad) rad.value = ATT_PAY_SETTINGS.radius || 200;
+  const grid=document.getElementById('att-rate-grid');
+  if(grid) grid.innerHTML = TEAM.map(t=>`<div class="fg"><label>${t} Rate / Day</label><input id="att-rate-${t}" type="number" min="0" value="${ATT_PAY_SETTINGS.rates?.[t]||0}" oninput="attRenderPay()"></div>`).join('');
+}
+
+function attSavePaySettings() {
+  const rates={}; TEAM.forEach(t=>rates[t]=parseFloat((document.getElementById('att-rate-'+t)||{}).value)||0);
+  ATT_PAY_SETTINGS = {officeLat:(document.getElementById('att-office-lat')||{}).value||'', officeLng:(document.getElementById('att-office-lng')||{}).value||'', radius:parseFloat((document.getElementById('att-office-radius')||{}).value)||200, rates};
+  localStorage.setItem('madio_att_pay_settings', JSON.stringify(ATT_PAY_SETTINGS));
+  toast('Attendance pay settings saved ✓','success');
+  renderAttKPIs(); attRenderPay();
+}
+
+function attBuildPayroll(monthFilter) {
+  const month = monthFilter || (document.getElementById('att-filter-month')||{}).value || new Date().toISOString().slice(0,7);
+  return TEAM.map(staff=>{
+    const recs=ATT_RECORDS.filter(r=>r.staff===staff && (r.date||'').startsWith(month));
+    const byDate={}; recs.forEach(r=>{(byDate[r.date]=byDate[r.date]||[]).push(r);});
+    let present=0, payableDays=0, late=0, geoOk=0, geoExceptions=0, hours=0;
+    Object.keys(byDate).forEach(date=>{
+      const day=byDate[date].sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+      const ins=day.filter(r=>r.type==='in'), outs=day.filter(r=>r.type==='out');
+      if(ins.length){ present++; if(ins[0].time>'09:30') late++; }
+      ins.forEach(r=>{ const g=attGeoReview(r); if(g.status==='ok'||g.status==='captured') geoOk++; else geoExceptions++; });
+      if(ins.length && outs.length){ hours += Math.max(0, ((outs[outs.length-1].ts||0) - (ins[0].ts||0))/3600000); payableDays += 1; }
+      else if(ins.length){ payableDays += 0.5; }
+    });
+    const rate=parseFloat(ATT_PAY_SETTINGS.rates?.[staff]||0), pay=payableDays*rate;
+    return {staff,present,late,geoOk,geoExceptions,hours,rate,payableDays,pay};
+  }).filter(r=>r.present||r.rate);
+}
+
+function attReadPaySettingsFromForm() {
+  const lat=document.getElementById('att-office-lat'), lng=document.getElementById('att-office-lng'), rad=document.getElementById('att-office-radius');
+  const rates={...(ATT_PAY_SETTINGS.rates||{})};
+  TEAM.forEach(t=>{ const el=document.getElementById('att-rate-'+t); if(el) rates[t]=parseFloat(el.value)||0; });
+  ATT_PAY_SETTINGS = {...ATT_PAY_SETTINGS, officeLat:lat?lat.value:ATT_PAY_SETTINGS.officeLat, officeLng:lng?lng.value:ATT_PAY_SETTINGS.officeLng, radius:rad?(parseFloat(rad.value)||200):ATT_PAY_SETTINGS.radius, rates};
+}
+
+function attRenderPay() {
+  const tbody=document.getElementById('att-pay-tbody'); if(!tbody) return;
+  attReadPaySettingsFromForm();
+  const rows=attBuildPayroll();
+  tbody.innerHTML = rows.length ? rows.map(r=>`<tr><td class="primary">${r.staff}</td><td>${r.present}</td><td>${r.late}</td><td>${r.geoOk}</td><td class="${r.geoExceptions?'warn':''}">${r.geoExceptions}</td><td>${r.hours.toFixed(1)}</td><td>${fmt(r.rate)}</td><td>${r.payableDays.toFixed(1).replace('.0','')}</td><td class="amt">${fmt(r.pay)}</td></tr>`).join('') : '<tr><td colspan="9" style="text-align:center;color:var(--t3);padding:16px">No attendance or pay rates for selected month</td></tr>';
+}
+
+function exportAttendancePay() {
+  const cols=['Staff','Present Days','Late Arrivals','Geo OK','Geo Exceptions','Hours','Rate Per Day','Payable Days','Estimated Pay'];
+  const rows=attBuildPayroll().map(r=>[r.staff,r.present,r.late,r.geoOk,r.geoExceptions,r.hours.toFixed(2),r.rate,r.payableDays,r.pay]);
+  const csv=[cols,...rows].map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a=document.createElement('a'); a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv); a.download='attendance-payroll-'+new Date().toISOString().slice(0,10)+'.csv'; a.click();
+}
+
+
 function exportAttendance() {
-  const cols=['ID','Staff','Role','Date','Time','Type','Notes','Lat','Lng','Address'];
-  const rows=ATT_RECORDS.map(r=>[r.id,r.staff,r.role,r.date,r.time,r.type,r.notes||'',r.lat||'',r.lng||'',r.address||'']);
+  const cols=['ID','Staff','Role','Date','Time','Type','Notes','Lat','Lng','Accuracy','Geo Status','Address'];
+  const rows=ATT_RECORDS.map(r=>[r.id,r.staff,r.role,r.date,r.time,r.type,r.notes||'',r.lat||'',r.lng||'',r.accuracy||'',r.geoStatus||attGeoReview(r).status,r.address||'']);
   const csv=[cols,...rows].map(r=>r.map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
   const a=document.createElement('a');
   a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
@@ -7035,6 +7159,7 @@ window.showPage = function(id) {
   if(id==='pl')            setTimeout(renderPL,50);
   if(id==='invoice-gen')   setTimeout(renderInvoiceGen,50);
   if(id==='tally-import')  setTimeout(renderTallyImport,50);
+  if(id==='attendance')    setTimeout(initAttendancePage,50);
 };
 
 // ── Apply saved theme on load ──
