@@ -1,0 +1,26 @@
+[build]
+  publish = "."
+  command = ""
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(self), geolocation=(self)"
+
+[[headers]]
+  for = "/MADIO_CRM_v16.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+[[redirects]]
+  from = "/crm"
+  to = "/MADIO_CRM_v16.html"
+  status = 200
+
+[[redirects]]
+  from = "/app"
+  to = "/MADIO_CRM_v16.html"
+  status = 200
