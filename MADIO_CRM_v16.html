@@ -969,6 +969,28 @@ canvas{max-width:100%;display:block}
       <span class="fc" onclick="fInv('Damaged',this)">⚠ Damaged</span>
     </div>
   </div>
+  <div class="panel" style="margin-bottom:10px">
+    <div class="ph"><span class="pt">Inventory Command Centre</span><span class="ps">Fast search, retrieval and stock actions</span></div>
+    <div style="padding:12px 14px">
+      <div class="fgrid fg3">
+        <div class="fg"><label>Category</label><select id="inv-cat-filter" class="seli" onchange="renderInv()"><option value="all">All Categories</option></select></div>
+        <div class="fg"><label>Vendor</label><select id="inv-vendor-filter" class="seli" onchange="renderInv()"><option value="all">All Vendors</option></select></div>
+        <div class="fg"><label>Location</label><select id="inv-loc-filter" class="seli" onchange="renderInv()"><option value="all">All Locations</option></select></div>
+        <div class="fg"><label>Status</label><select id="inv-status-filter" class="seli" onchange="renderInv()"><option value="all">All Status</option><option>Available</option><option>Sold</option><option>Damaged</option><option>Blocked</option></select></div>
+        <div class="fg"><label>Smart View</label><select id="inv-smart-filter" class="seli" onchange="renderInv()"><option value="all">All Items</option><option value="available-high-value">Available High Value</option><option value="missing-images">Missing Images</option><option value="low-margin">Low Margin</option><option value="no-location">No Location</option><option value="duplicates">Duplicate SKU/Model</option></select></div>
+        <div class="fg"><label>Sort</label><select id="inv-sort" class="seli" onchange="renderInv()"><option value="relevance">Best Match</option><option value="sku">SKU A-Z</option><option value="mrp-desc">MRP High-Low</option><option value="cost-desc">Cost High-Low</option><option value="margin-asc">Margin Low-High</option><option value="name">Name A-Z</option></select></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <span class="bdg b-new" id="inv-result-count">0 items</span>
+        <span class="bdg b-avl" id="inv-available-count">0 available</span>
+        <span class="bdg b-dmg" id="inv-attention-count">0 need attention</span>
+        <button class="btn btn-ghost btn-sm" onclick="invResetFilters()">Reset</button>
+        <button class="btn btn-ghost btn-sm" onclick="copyInvResults()">Copy SKU List</button>
+        <button class="btn btn-ghost btn-sm" onclick="exportInvResults()">⬇ Export Results</button>
+      </div>
+      <div id="inv-quick-hints" style="font-size:10px;color:var(--t3);margin-top:8px">Tip: search by SKU, model, category, vendor, material, size or location. Use Smart View for missing images, low margin and duplicate checks.</div>
+    </div>
+  </div>
   <div id="inv-container"></div>
 </div>
 
@@ -3858,15 +3880,69 @@ function renderMeets(){
 }
 
 // ══════ INVENTORY ══════
-let invCat2='all', invStatus2='all';
+let invCat2='all', invStatus2='all', INV_LAST_RESULTS=[];
 function filterInv(){invQ=$('inv-search').value;renderInv();}
-function fInv(f,el){document.querySelectorAll('#inv-fbar .fc').forEach(c=>c.classList.remove('on'));el.classList.add('on');if(['Available','Sold','Damaged','Blocked'].includes(f)){invStatus2=f;invCat2='all';}else{invCat2=f;invStatus2='all';}renderInv();}
+function fInv(f,el){
+  document.querySelectorAll('#inv-fbar .fc').forEach(c=>c.classList.remove('on'));
+  if(el) el.classList.add('on');
+  if(['Available','Sold','Damaged','Blocked'].includes(f)){invStatus2=f;invCat2='all';}
+  else{invCat2=f;invStatus2='all';}
+  const cf=$('inv-cat-filter'), sf=$('inv-status-filter');
+  if(cf) cf.value=invCat2;
+  if(sf) sf.value=invStatus2;
+  renderInv();
+}
 function toggleInvView(){invView=invView==='cards'?'table':'cards';$('inv-btn').textContent=invView==='cards'?'⊞ Cards':'☰ Table';renderInv();}
+function invText(item){return [item.sku,item.model,item.name,item.cat,item.vendor,item.size,item.material,item.status,(item.locs||[]).join(' ')].join(' ').toLowerCase();}
+function invPopulateFilters(){
+  const fill=(id,values,label)=>{const el=$(id);if(!el||el.dataset.ready==='1')return;el.innerHTML=`<option value="all">${label}</option>`+[...values].sort().map(v=>`<option value="${String(v).replace(/"/g,'&quot;')}">${v}</option>`).join('');el.dataset.ready='1';};
+  fill('inv-cat-filter',new Set(INV_DATA.map(i=>i.cat).filter(Boolean)),'All Categories');
+  fill('inv-vendor-filter',new Set(INV_DATA.map(i=>i.vendor).filter(Boolean)),'All Vendors');
+  fill('inv-loc-filter',new Set(INV_DATA.flatMap(i=>i.locs||[]).filter(Boolean)),'All Locations');
+}
+function invApplyFilters(){
+  invPopulateFilters();
+  const cat=($('inv-cat-filter')||{}).value||invCat2||'all';
+  const status=($('inv-status-filter')||{}).value||invStatus2||'all';
+  const vendor=($('inv-vendor-filter')||{}).value||'all';
+  const loc=($('inv-loc-filter')||{}).value||'all';
+  const smart=($('inv-smart-filter')||{}).value||'all';
+  const sort=($('inv-sort')||{}).value||'relevance';
+  const term=(invQ||(($('inv-search')||{}).value||'')).trim().toLowerCase();
+  const duplicateKeys={};
+  INV_DATA.forEach(i=>{[i.sku,i.model].filter(Boolean).forEach(k=>duplicateKeys[k]=(duplicateKeys[k]||0)+1);});
+  let d=INV_DATA.filter(i=>{
+    if(cat!=='all'&&i.cat!==cat)return false;
+    if(status!=='all'&&i.status!==status)return false;
+    if(vendor!=='all'&&i.vendor!==vendor)return false;
+    if(loc!=='all'&&!(i.locs||[]).includes(loc))return false;
+    if(term&&!invText(i).includes(term))return false;
+    if(smart==='available-high-value'&&!(i.status==='Available'&&(i.mrp||0)>=50000))return false;
+    if(smart==='missing-images'&&i.has_img)return false;
+    if(smart==='low-margin'&&!((parseFloat(i.margin)||0)<35))return false;
+    if(smart==='no-location'&&(i.locs||[]).length)return false;
+    if(smart==='duplicates'&&!((i.sku&&duplicateKeys[i.sku]>1)||(i.model&&duplicateKeys[i.model]>1)))return false;
+    return true;
+  });
+  const byText=x=>String(x||'').toLowerCase();
+  d.sort((a,b)=> sort==='sku'?byText(a.sku).localeCompare(byText(b.sku)):
+    sort==='mrp-desc'?(b.mrp||0)-(a.mrp||0):sort==='cost-desc'?(b.cost||0)-(a.cost||0):
+    sort==='margin-asc'?(parseFloat(a.margin)||0)-(parseFloat(b.margin)||0):
+    sort==='name'?byText(a.name).localeCompare(byText(b.name)):0);
+  return d;
+}
+function invUpdateCommandStats(d){
+  INV_LAST_RESULTS=d;
+  setTx('inv-result-count',d.length+' items');
+  setTx('inv-available-count',d.filter(i=>i.status==='Available').length+' available');
+  setTx('inv-attention-count',d.filter(i=>i.status==='Damaged'||!i.has_img||!(i.locs||[]).length).length+' need attention');
+}
+function invResetFilters(){invQ='';['inv-search','inv-cat-filter','inv-vendor-filter','inv-loc-filter','inv-status-filter','inv-smart-filter'].forEach(id=>{const el=$(id);if(el)el.value=id==='inv-search'?'':'all';});const sort=$('inv-sort');if(sort)sort.value='relevance';invCat2='all';invStatus2='all';document.querySelectorAll('#inv-fbar .fc').forEach((c,i)=>c.classList.toggle('on',i===0));renderInv();}
+function copyInvResults(){const text=(INV_LAST_RESULTS.length?INV_LAST_RESULTS:invApplyFilters()).map(i=>i.sku).filter(Boolean).join('\n');navigator.clipboard?.writeText(text);toast('Copied '+(text?text.split('\n').length:0)+' SKUs','success');}
+function exportInvResults(){const cols=['SKU','Model','Name','Category','Vendor','Size','Material','Locations','Cost','MRP','Margin','Status','Has Image'];const rows=(INV_LAST_RESULTS.length?INV_LAST_RESULTS:invApplyFilters()).map(i=>[i.sku,i.model,i.name,i.cat,i.vendor,i.size||'',i.material||'',(i.locs||[]).join('|'),i.cost||0,i.mrp||0,i.margin||0,i.status||'',i.has_img?'Y':'N']);const csv=[cols,...rows].map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='inventory-results-'+new Date().toISOString().slice(0,10)+'.csv';a.click();}
 function renderInv(){
-  let d=INV_DATA;
-  if(invCat2!=='all')d=d.filter(i=>i.cat===invCat2);
-  if(invStatus2!=='all')d=d.filter(i=>i.status===invStatus2);
-  if(invQ){const t=invQ.toLowerCase();d=d.filter(i=>(i.sku||'').toLowerCase().includes(t)||(i.name||'').toLowerCase().includes(t)||(i.vendor||'').toLowerCase().includes(t));}
+  let d=invApplyFilters();
+  invUpdateCommandStats(d);
   const catClr={'Sofa':'var(--gold)','Dining Chair':'var(--blue)','Dining Table':'var(--teal)','Bed':'var(--green)','Center Table':'#b08adc','Side Box':'var(--amber)','Single Chair':'#e08080'};
   if(invView==='cards'){
     $('inv-container').innerHTML=`<div class="inv-cards">${d.map(item=>{
