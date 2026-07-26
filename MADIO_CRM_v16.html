@@ -815,16 +815,9 @@ canvas{max-width:100%;display:block}
     <div class="ph"><span class="pt">Walk-In Visitors</span><span class="ps" id="v-ct">388 records</span>
       <button class="btn btn-gold" style="margin-left:auto;padding:3px 10px;font-size:10px" onclick="openModal('visitor',null)">+ Add</button>
     </div>
-    <div class="fbar" id="v-fbar">
-      <span class="fc on" onclick="fV('all',this)">All</span>
-      <span class="fc" onclick="fV('New Lead',this)">🆕 New</span>
-      <span class="fc" onclick="fV('Follow-Up',this)">📞 Follow</span>
-      <span class="fc" onclick="fV('Quoted',this)">📋 Quoted</span>
-      <span class="fc" onclick="fV('Delivered',this)">✅ Done</span>
-      <span class="fc-sep"></span>
-      <span class="fi"><select onchange="fVBy(this.value)" id="v-by-filter"><option value="">All team</option></select></span>
-    </div>
+    <div class="fbar" id="v-fbar"></div>
     <div class="tw"><table><thead><tr>
+      <th style="width:26px;text-align:center"><input type="checkbox" id="v-selall" onclick="_fbSelAll('visitors',this.checked)"></th>
       <th>#</th><th>Date</th><th>Customer</th><th>Reference</th><th>Phone</th>
       <th>Requirement</th><th>By</th><th>Remarks</th><th>Stage</th><th>WhatsApp</th><th>Actions</th>
     </tr></thead><tbody id="v-tbody"></tbody></table></div>
@@ -11484,6 +11477,132 @@ function _toggleDir(page) {
 }
 
 // ================================================================
+// Reusable FilterBar component (F1)
+// Declarative filter / search / sort / saved-views / bulk for any list
+// panel. Reuses the shared sort helpers (_SS, _sortData, _parseD) and the
+// existing .sb2 / .fc styling. A module supplies a config + a row renderer.
+// ================================================================
+var _FB={};                 // page -> controller
+var _fbSelSets={};          // page -> Set of selected id strings
+var _FB_VIEWS_KEY='madio_views_v1';
+function _fbUniq(arr,f){var seen={},out=[];arr.forEach(function(x){var v=x[f];if(v&&!seen[v]){seen[v]=1;out.push(v);}});return out.sort();}
+function _fbSel(page){ if(!_fbSelSets[page])_fbSelSets[page]=new Set(); return _fbSelSets[page]; }
+function _fbToggle(page,id,on){ var s=_fbSel(page); if(on)s.add(String(id)); else s.delete(String(id)); var fb=_FB[page]; if(fb)fb.updateBulk(); }
+function _fbSelAll(page,on){ var fb=_FB[page]; if(!fb)return; var s=_fbSel(page); fb.project().forEach(function(r){var id=String(r[fb.idField]); if(on)s.add(id); else s.delete(id);}); fb.refresh(); }
+function _fbLoadViews(page){ try{var all=JSON.parse(localStorage.getItem(_FB_VIEWS_KEY)||'{}');return all[page]||[];}catch(e){return [];} }
+function _fbSaveViews(page,list){ try{var all=JSON.parse(localStorage.getItem(_FB_VIEWS_KEY)||'{}');all[page]=list;localStorage.setItem(_FB_VIEWS_KEY,JSON.stringify(all));}catch(e){} }
+
+function mountFilterBar(cfg){
+  var PAGE=cfg.page, BAR='fb-'+PAGE, BULK='fbbulk-'+PAGE;
+  var state={ chip:'all', extra:{}, q:'', sortCol:'', sortDir:'asc' };
+  function csvEsc(s){s=String(s==null?'':s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
+  function exportCSV(rows){
+    var cols=cfg.exportCols||[];
+    var head=cols.map(function(c){return csvEsc(c[1]);}).join(',');
+    var body=rows.map(function(r){return cols.map(function(c){return csvEsc(r[c[0]]);}).join(',');}).join('\n');
+    var blob=new Blob([head+'\n'+body],{type:'text/csv'});
+    var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=(cfg.exportName||PAGE)+'.csv';a.click();URL.revokeObjectURL(a.href);
+    if(typeof toast!=='undefined')toast('Exported '+rows.length+' rows','success');
+  }
+  function injectChips(){
+    var ch=document.querySelector(cfg.chipHost);
+    if(!ch||ch.getAttribute('data-fbchips'))return;
+    ch.setAttribute('data-fbchips','1');
+    ch.innerHTML=(cfg.chips||[]).map(function(c){return '<span class="fc'+(c.v===state.chip?' on':'')+'" data-v="'+c.v+'">'+c.label+'</span>';}).join('');
+    ch.querySelectorAll('.fc').forEach(function(sp){sp.onclick=function(){state.chip=sp.getAttribute('data-v');ch.querySelectorAll('.fc').forEach(function(x){x.classList.remove('on');});sp.classList.add('on');refresh();};});
+  }
+  function inject(){
+    injectChips();
+    var ph=document.querySelector('#p-'+PAGE+' .ph');
+    if(!ph||document.getElementById(BAR))return;
+    var selHtml=(cfg.selects||[]).map(function(s){
+      var opts=(typeof s.options==='function'?s.options():s.options)||[];
+      return '<select data-fbk="'+s.key+'"><option value="">'+(s.allLabel||('All '+s.label))+'</option>'+opts.map(function(o){return '<option>'+o+'</option>';}).join('')+'</select>';
+    }).join('');
+    var sortHtml='<select id="fbsort-'+PAGE+'">'+(cfg.sort||[]).map(function(o){return '<option value="'+o.v+'">'+o.label+'</option>';}).join('')+'</select>'
+      +'<span class="sdir" id="fbdir-'+PAGE+'">↑</span>';
+    var viewsHtml='<select id="fbview-'+PAGE+'" title="Saved views"></select><span class="btn-xs" id="fbsave-'+PAGE+'">+ Save view</span>';
+    var bar=document.createElement('div');bar.id=BAR;bar.className='sb2';
+    bar.innerHTML='<label>Filter</label>'+selHtml
+      +'<input id="fbq-'+PAGE+'" placeholder="🔍 '+(cfg.searchHint||'Search…')+'" style="min-width:150px">'
+      +'<label style="margin-left:6px">Sort</label>'+sortHtml+viewsHtml
+      +'<span class="btn-xs" id="fbexp-'+PAGE+'">↓ CSV</span>'
+      +'<span class="scnt2" id="fbct-'+PAGE+'"></span>';
+    ph.insertAdjacentElement('afterend',bar);
+    var bb=document.createElement('div');bb.id=BULK;bb.className='fbbulk';bb.style.display='none';
+    bar.insertAdjacentElement('afterend',bb);
+    bar.querySelectorAll('select[data-fbk]').forEach(function(sl){sl.onchange=function(){state.extra[sl.getAttribute('data-fbk')]=sl.value;refresh();};});
+    var qi=document.getElementById('fbq-'+PAGE);qi.oninput=function(){state.q=qi.value;refresh();};
+    var so=document.getElementById('fbsort-'+PAGE);so.onchange=function(){state.sortCol=so.value;refresh();};
+    document.getElementById('fbdir-'+PAGE).onclick=function(){state.sortDir=state.sortDir==='asc'?'desc':'asc';this.textContent=state.sortDir==='asc'?'↑':'↓';refresh();};
+    document.getElementById('fbexp-'+PAGE).onclick=function(){exportCSV(project());};
+    document.getElementById('fbsave-'+PAGE).onclick=saveView;
+    var vsel=document.getElementById('fbview-'+PAGE);vsel.onchange=function(){applyView(vsel.value);};
+    renderViews();
+  }
+  function renderViews(){
+    var vsel=document.getElementById('fbview-'+PAGE);if(!vsel)return;
+    var list=_fbLoadViews(PAGE);
+    vsel.innerHTML='<option value="">Views…</option>'+list.map(function(v,i){return '<option value="'+i+'">'+v.name+'</option>';}).join('')+'<option value="__clr">— Clear filters —</option>';
+  }
+  function saveView(){
+    var name=prompt('Save current filters as a view named:');if(!name)return;
+    var list=_fbLoadViews(PAGE);
+    list.push({name:name,state:{chip:state.chip,extra:Object.assign({},state.extra),q:state.q,sortCol:state.sortCol,sortDir:state.sortDir}});
+    _fbSaveViews(PAGE,list);renderViews();
+    if(typeof toast!=='undefined')toast('View "'+name+'" saved','success');
+  }
+  function applyView(val){
+    if(val==='__clr'){state.chip='all';state.extra={};state.q='';state.sortCol='';state.sortDir='asc';syncControls();refresh();return;}
+    if(val===''||val==null)return;
+    var v=_fbLoadViews(PAGE)[+val];if(!v)return;
+    state.chip=v.state.chip;state.extra=Object.assign({},v.state.extra);state.q=v.state.q;state.sortCol=v.state.sortCol;state.sortDir=v.state.sortDir;
+    syncControls();refresh();
+  }
+  function syncControls(){
+    var qi=document.getElementById('fbq-'+PAGE);if(qi)qi.value=state.q;
+    var so=document.getElementById('fbsort-'+PAGE);if(so)so.value=state.sortCol;
+    var dir=document.getElementById('fbdir-'+PAGE);if(dir)dir.textContent=state.sortDir==='asc'?'↑':'↓';
+    (cfg.selects||[]).forEach(function(s){var el=document.querySelector('#'+BAR+' select[data-fbk="'+s.key+'"]');if(el)el.value=state.extra[s.key]||'';});
+    var ch=document.querySelector(cfg.chipHost);if(ch)ch.querySelectorAll('.fc').forEach(function(sp){sp.classList.toggle('on',sp.getAttribute('data-v')===state.chip);});
+  }
+  function project(){
+    var d=cfg.data().map(function(x,i){return Object.assign({},x,{_i:i});});
+    if(state.chip&&state.chip!=='all'&&cfg.chipFilter)d=d.filter(function(x){return cfg.chipFilter(x,state.chip);});
+    Object.keys(state.extra).forEach(function(k){var val=state.extra[k];if(val)d=d.filter(function(x){return String(x[k]||'')===val;});});
+    if(state.q){var q=state.q.toLowerCase();d=d.filter(function(x){return (cfg.search||[]).some(function(f){return String(x[f]||'').toLowerCase().indexOf(q)>-1;});});}
+    if(state.sortCol){var cv=state.sortCol.split(':');d=_sortData(d,cv[0],state.sortDir,cv[1]||'str');}
+    else if(cfg.baseSort){var b=cfg.baseSort.split(':');d=_sortData(d,b[0],b[2]||'desc',b[1]||'str');}
+    return d;
+  }
+  function updateBulk(){
+    var bb=document.getElementById(BULK);if(!bb)return;
+    var n=_fbSel(PAGE).size;
+    if(!n){bb.style.display='none';bb.innerHTML='';return;}
+    bb.style.display='flex';
+    bb.innerHTML='<span class="fbbulk-n">'+n+' selected</span><span class="btn-xs" data-act="exp">↓ Export selected</span><span class="btn-xs" data-act="clr">Clear</span>';
+    bb.querySelector('[data-act="exp"]').onclick=function(){var s=_fbSel(PAGE);exportCSV(cfg.data().filter(function(x){return s.has(String(x[cfg.idField]));}));};
+    bb.querySelector('[data-act="clr"]').onclick=function(){_fbSel(PAGE).clear();refresh();};
+  }
+  function refresh(){
+    inject();
+    var d=project();
+    var ctl=document.getElementById('fbct-'+PAGE);if(ctl)ctl.textContent=d.length+(d.length===1?' record':' records');
+    if(cfg.countEl){var c2=document.querySelector(cfg.countEl);if(c2)c2.textContent=d.length+' records';}
+    var tb=document.querySelector(cfg.tbody);if(tb)tb.innerHTML=d.map(cfg.rowHtml).join('');
+    updateBulk();
+  }
+  var ctrl={refresh:refresh,project:project,updateBulk:updateBulk,syncControls:syncControls,state:state,idField:cfg.idField};
+  _FB[PAGE]=ctrl;
+  return ctrl;
+}
+(function(){var s=document.createElement('style');s.textContent=
+   '.fbbulk{display:flex;gap:8px;align-items:center;padding:7px 12px;background:var(--gd);border-bottom:1px solid var(--gd2)}'
+  +'.fbbulk-n{font-size:11px;color:var(--gold2);font-weight:600}'
+  +'.sb2 .btn-xs{cursor:pointer;line-height:18px}';
+  document.head.appendChild(s);})();
+
+// ================================================================
 // QUOTES sort
 // ================================================================
 (function(){
@@ -11609,60 +11728,56 @@ function _toggleDir(page) {
 })();
 
 // ================================================================
-// VISITORS sort
+// VISITORS \u2014 migrated to the reusable FilterBar (F1 reference module)
 // ================================================================
 (function(){
-  var BAR_ID='sb-visitors'; var PAGE='visitors';
-  function inject(){
-    var ph=document.querySelector('#p-visitors .ph');
-    if(!ph||document.getElementById(BAR_ID))return;
-    var bar=document.createElement('div'); bar.id=BAR_ID; bar.className='sb2';
-    bar.innerHTML='<label>Sort</label>'
-      +'<select id="sc-'+PAGE+'">'
-        +'<option value="">Date \u2193 (default)</option>'
-        +'<option value="date:date">Date</option>'
-        +'<option value="name:str">Customer</option>'
-        +'<option value="stage:str">Stage</option>'
-        +'<option value="by:str">Handled By</option>'
-        +'<option value="req:str">Requirement</option>'
-      +'</select>'
-      +'<span class="sdir" id="sdir-'+PAGE+'" onclick="_toggleDir(\''+PAGE+'\')">\u2191</span>'
-      +'<input id="srch-'+PAGE+'" placeholder="\uD83D\uDD0D Name, phone, req\u2026" style="min-width:150px">'
-      +'<span class="scnt2" id="sct-'+PAGE+'"></span>';
-    ph.insertAdjacentElement('afterend',bar);
-    bar.querySelector('select').onchange=function(){_applySort(PAGE);};
-    bar.querySelector('input').oninput=function(){_applySort(PAGE);};
+  var PAGE='visitors';
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function rowHtml(v){
+    var checked=_fbSel(PAGE).has(String(v.sno))?' checked':'';
+    return '<tr onclick="openModal(\'visitor\','+v._i+')">'
+      +'<td onclick="event.stopPropagation()" style="text-align:center"><input type="checkbox"'+checked+' onclick="_fbToggle(\''+PAGE+'\',\''+esc(v.sno)+'\',this.checked)"></td>'
+      +'<td>'+esc(v.sno)+'</td><td>'+esc(v.date)+'</td>'
+      +'<td class="primary">'+esc(v.name)+'</td>'
+      +'<td style="color:var(--t3)">'+(esc(v.ref)||'\u2014')+'</td>'
+      +'<td>'+(esc(v.phone)||'\u2014')+'</td>'
+      +'<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(esc(v.req)||'\u2014')+'</td>'
+      +'<td>'+(esc(v.by)||'\u2014')+'</td>'
+      +'<td style="color:var(--t3);max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(v.remarks)+'</td>'
+      +'<td>'+(typeof stageBdg!=='undefined'?stageBdg(v.stage):esc(v.stage))+'</td>'
+      +'<td onclick="event.stopPropagation()"><a href="https://wa.me/91'+((v.phone||'').replace(/\D/g,''))+'" target="_blank" style="color:#25d366;font-size:14px">&#128172;</a></td>'
+      +'<td onclick="event.stopPropagation()"><button class="btn-xs" onclick="openModal(\'visitor\','+v._i+')">&#9998;</button></td>'
+      +'</tr>';
   }
-  _sortFns[PAGE]=function(f){
-    inject();
-    var col=(document.getElementById('sc-'+PAGE)||{}).value||'';
-    var dir=(_SS[PAGE]||{}).dir||'asc';
-    var q=((document.getElementById('srch-'+PAGE)||{}).value||'').toLowerCase();
-    var byF=typeof vByFilter!=='undefined'?vByFilter:'';
-    var d=VISITORS.map(function(x,i){return Object.assign({},x,{_i:i});});
-    if(f&&['New Lead','Follow-Up','Quoted','Delivered'].includes(f)) d=d.filter(function(x){return x.stage===f;});
-    if(byF) d=d.filter(function(x){return x.by===byF;});
-    if(q) d=d.filter(function(x){return (x.name||'').toLowerCase().includes(q)||(x.phone||'').includes(q)||(x.req||'').toLowerCase().includes(q);});
-    var cv=col.split(':'); d=col?_sortData(d,cv[0],dir,cv[1]||'str'):_sortData(d,'date','desc','date');
-    var ct=document.getElementById('sct-'+PAGE); if(ct) ct.textContent=d.length+' records';
-    var tbody=document.getElementById('v-tbody'); if(!tbody)return;
-    tbody.innerHTML=d.slice(0,200).map(function(v){
-      return '<tr onclick="openModal(\'visitor\','+v._i+')">'
-        +'<td>'+(v.sno||'')+'</td><td>'+(v.date||'')+'</td>'
-        +'<td class="primary">'+v.name+'</td>'
-        +'<td style="color:var(--t3)">'+(v.ref||'\u2014')+'</td>'
-        +'<td>'+(v.phone||'\u2014')+'</td>'
-        +'<td style="max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(v.req||'\u2014')+'</td>'
-        +'<td>'+(v.by||'\u2014')+'</td>'
-        +'<td style="color:var(--t3);max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(v.remarks||'')+'</td>'
-        +'<td>'+(typeof stageBdg!=='undefined'?stageBdg(v.stage):v.stage||'')+'</td>'
-        +'<td onclick="event.stopPropagation()"><a href="https://wa.me/91'+((v.phone||'').replace(/\D/g,''))+'" target="_blank" style="color:#25d366;font-size:14px">&#128172;</a></td>'
-        +'<td onclick="event.stopPropagation()"><button class="btn-xs" onclick="openModal(\'visitor\','+v._i+')">&#9998;</button></td>'
-        +'</tr>';
-    }).join('');
-    var ct2=document.getElementById('v-ct'); if(ct2) ct2.textContent=d.length+' records';
-  };
-  var _origV=window.renderV; window.renderV=function(f){_sortFns[PAGE](f);};
+  window._visitorsFB=mountFilterBar({
+    page:PAGE,
+    data:function(){return VISITORS;},
+    idField:'sno',
+    chipHost:'#v-fbar',
+    chips:[{v:'all',label:'All'},{v:'New Lead',label:'\uD83C\uDD95 New'},{v:'Follow-Up',label:'\uD83D\uDCDE Follow'},{v:'Quoted',label:'\uD83D\uDCCB Quoted'},{v:'Delivered',label:'\u2705 Done'}],
+    chipFilter:function(x,chip){return x.stage===chip;},
+    selects:[
+      {key:'by', label:'Team',        allLabel:'All team',        options:function(){return _fbUniq(VISITORS,'by');}},
+      {key:'req',label:'Requirement', allLabel:'All requirements', options:function(){return _fbUniq(VISITORS,'req');}}
+    ],
+    search:['name','phone','ref','req'],
+    searchHint:'Name, phone, ref\u2026',
+    sort:[
+      {v:'',label:'Date \u2193 (default)'},
+      {v:'date:date',label:'Date'},
+      {v:'name:str',label:'Customer'},
+      {v:'stage:str',label:'Stage'},
+      {v:'by:str',label:'Handled By'},
+      {v:'req:str',label:'Requirement'}
+    ],
+    baseSort:'date:date:desc',
+    countEl:'#v-ct',
+    tbody:'#v-tbody',
+    rowHtml:rowHtml,
+    exportName:'visitors',
+    exportCols:[['sno','#'],['date','Date'],['name','Customer'],['ref','Reference'],['phone','Phone'],['req','Requirement'],['by','By'],['stage','Stage'],['remarks','Remarks']]
+  });
+  window.renderV=function(f){var c=window._visitorsFB;if(f!==undefined&&f!==null&&f!=='')c.state.chip=f;c.syncControls();c.refresh();};
 })();
 
 // ================================================================
