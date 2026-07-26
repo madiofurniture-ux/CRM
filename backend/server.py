@@ -407,7 +407,7 @@ async def dashboard_stats(_: dict = Depends(get_current_user)):
 @api.get("/analytics/inventory")
 async def inventory_analytics(_: dict = Depends(get_current_user)):
     # Projection: keep only aggregation + top-items display fields
-    proj = {"_id": 0, "id": 1, "sku": 1, "name": 1, "category": 1, "vendor": 1, "location": 1, "status": 1, "mrp": 1, "qty": 1}
+    proj = {"_id": 0, "id": 1, "sku": 1, "name": 1, "category": 1, "vendor": 1, "location": 1, "status": 1, "mrp": 1, "cost": 1, "qty": 1}
     items = await db.inventory.find({}, proj).to_list(5000)
     by_category = {}
     by_vendor = {}

@@ -1,0 +1,22 @@
+{
+  "summary": "Iteration 6 retest of the 'cost' projection fix. Backend: pytest suite (3/3) passes — /api/analytics/inventory total_cost=1533411.9132 (>0), total_items=120, total_qty=263, total_mrp=2283607, all required aggregation keys present (by_category, by_vendor, by_location, by_status, top_items). /api/outstanding and /api/dashboard/stats regression tests still pass (shape + non-zero checks). Frontend: /inventory/analytics KPI row now shows COST VALUE ₹15.33L (previously ₹0). Login hero image at /login-hero.jpg loads (naturalWidth=1400).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter5_regression.py",
+    "/app/test_reports/pytest/iter6.xml",
+    "/app/test_reports/iter6_inv_analytics.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Projection now correctly includes 'cost': 1 in inventory_analytics. Consider retaining the total_cost > 0 assertion in the pytest regression suite to catch any future projection drift."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (3/3)", "frontend": "100% — COST VALUE KPI renders ₹15.33L, hero image loads"},
+  "test_credentials": "admin / 1234",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter 5 cost-projection regression is fully resolved. All 3 pytests in /app/backend/tests/test_iter5_regression.py pass in ~0.9s. Screenshot of the Inventory Analytics KPI row saved at /app/test_reports/iter6_inv_analytics.png shows COST VALUE ₹15.33L, MRP VALUE ₹22.84L, TOTAL ITEMS 120, TOTAL QTY 263.",
+  "rca_of_the_issue": "Prior regression (iter 5): server.py inventory_analytics projection dropped 'cost'. Fix: added 'cost': 1 back to the projection dict (line ~410). Verified via API (total_cost=1,533,411.91) and UI (COST VALUE ₹15.33L)."
+}
