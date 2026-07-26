@@ -750,6 +750,7 @@ canvas{max-width:100%;display:block}
     <div class="kc blue"><div class="kl">Due This Week</div><div class="kv" id="al-week">0</div></div>
     <div class="kc green"><div class="kl">No Date Set</div><div class="kv" id="al-nodate">0</div></div>
   </div>
+  <div id="al-bulkbar" class="panel" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:9px 12px;margin-bottom:12px"></div>
   <div id="alerts-body"></div>
 </div>
 
@@ -3445,6 +3446,75 @@ function exportOwnerAudit(){
 
 applyOwnerNormalization();
 
+// ══════ FOLLOW-UP ENGINE (W2) ══════
+// Follow-up state lives in its own keyed store rather than as columns on the
+// record arrays, so it persists without touching the Sheets column order and
+// survives the arrays being replaced by a backend pull.
+//   FU_STORE['quote:AF-2601-001'] = {due:'2026-08-02', count:2, history:[…]}
+// Nothing is auto-backfilled: a record with no date set is reported as
+// "no date set" rather than given an invented overdue date, because
+// back-dating 600 records would bury the genuinely overdue ones.
+var FU_SLA={'New Lead':2,'Follow-Up':3,'Quoted':5,'Design & Lock':3,'Rescheduled':7,'Site Not Ready':14};
+var FU_OPEN={'New Lead':1,'Follow-Up':1,'Quoted':1,'Design & Lock':1,'Rescheduled':1,'Site Not Ready':1};
+var FU_OUTCOME={'Reached':7,'No answer':2,'Rescheduled':7,'Not interested':0};
+var FU_STORE={};
+function fuLoad(){ try{FU_STORE=JSON.parse(localStorage.getItem('madio_followups_v1')||'{}');}catch(e){FU_STORE={};} }
+function fuSave(){ try{localStorage.setItem('madio_followups_v1',JSON.stringify(FU_STORE));}catch(e){} }
+function _fuToday(){ var n=new Date(); return new Date(n.getFullYear(),n.getMonth(),n.getDate()); }
+function _fuISO(d){ var m=d.getMonth()+1,day=d.getDate(); return d.getFullYear()+'-'+(m<10?'0':'')+m+'-'+(day<10?'0':'')+day; }
+function _fuAdd(base,n){ var d=new Date(base.getTime()); d.setDate(d.getDate()+n); return d; }
+// Identity fields per module. Visitors reuse `sno` across financial years —
+// 388 records hold only 349 distinct values — so keying on it alone would make
+// two different customers share one follow-up. Compose enough fields that a
+// collision means a genuinely duplicated record.
+var FU_IDF={ quote:['id'], lead:['sno','name'], visitor:['sno','date','name','phone'] };
+function fuKey(mod,rec){
+  var f=FU_IDF[mod]||['id'];
+  return mod+':'+f.map(function(k){return String(rec[k]==null?'':rec[k]).trim();}).join('|');
+}
+function fuIsOpen(mod,rec){ return !!FU_OPEN[rec.stage||'']; }
+// Suggested date for a record that has none — SLA counted from today, so the
+// team schedules the backlog forward instead of inheriting fake overdue.
+function fuSuggest(rec){ var d=FU_SLA[rec.stage||'']; return _fuISO(_fuAdd(_fuToday(), d==null?5:d)); }
+function fuGet(mod,rec){
+  var e=FU_STORE[fuKey(mod,rec)];
+  if(e&&e.due) return {due:e.due,count:e.count||0,history:e.history||[],set:true};
+  // legacy field: Navaki already had its own follow-up column
+  if(mod==='lead'&&rec.fu_date) return {due:rec.fu_date,count:0,history:[],set:true};
+  return {due:null,count:e?(e.count||0):0,history:e?(e.history||[]):[],set:false};
+}
+function fuSetDue(mod,rec,due){
+  var k=fuKey(mod,rec), e=FU_STORE[k]||{count:0,history:[]};
+  e.due=due; FU_STORE[k]=e; fuSave();
+}
+function fuLog(mod,rec,outcome,note){
+  var k=fuKey(mod,rec), e=FU_STORE[k]||{count:0,history:[]};
+  var by=(typeof CRM_USER!=='undefined'&&CRM_USER)?CRM_USER.name:'System';
+  e.count=(e.count||0)+1;
+  e.history=(e.history||[]).concat([{ts:Date.now(),outcome:outcome,by:by,note:note||''}]);
+  var add=FU_OUTCOME[outcome];
+  e.due = add ? _fuISO(_fuAdd(_fuToday(),add)) : null;   // "Not interested" clears the date
+  FU_STORE[k]=e; fuSave();
+  if(typeof addActivity==='function') addActivity({type:'followup',ic:'&#128222;',subj:'Follow-up: '+outcome,detail:(rec.name||'')+(note?' — '+note:''),ref:rec.id||rec.sno||''});
+  if(typeof toast!=='undefined') toast('Logged: '+outcome+(e.due?' · next '+e.due:''),'success');
+  if(typeof renderAlerts==='function'&&currentPage==='alerts') renderAlerts();
+}
+// Bulk-schedule every open record that has no follow-up date.
+function fuScheduleUndated(){
+  var n=0;
+  [['lead',typeof NAVAKI!=='undefined'?NAVAKI:[]],
+   ['visitor',typeof VISITORS!=='undefined'?VISITORS:[]],
+   ['quote',typeof Q26!=='undefined'?Q26:[]]].forEach(function(s){
+    (s[1]||[]).forEach(function(r){
+      if(fuIsOpen(s[0],r)&&!fuGet(s[0],r).set){ fuSetDue(s[0],r,fuSuggest(r)); n++; }
+    });
+  });
+  if(typeof toast!=='undefined') toast('Scheduled '+n+' follow-ups','success');
+  if(typeof renderAlerts==='function') renderAlerts();
+  return n;
+}
+fuLoad();
+
 // ══════ CFG ══════
 let CFG=JSON.parse(localStorage.getItem('madio_cfg3')||'{}');
 let currentPage='dash', currentModal={type:null,idx:null};
@@ -3559,32 +3629,84 @@ function dashQF(f,el){
 }
 
 // ══════ ALERTS ══════
-let _alerts=[];
+let _alerts=[], _alertsUndatedTotal=0, _alertsHidden=0;
+// Resolvers so alert cards can act on the underlying record by index.
+function _fuArr(mod){ return mod==='lead'?NAVAKI:mod==='visitor'?VISITORS:mod==='quote'?Q26:[]; }
+function fuActLog(mod,i,outcome){ var r=_fuArr(mod)[i]; if(r) fuLog(mod,r,outcome); }
+function fuActSet(mod,i,val){
+  var r=_fuArr(mod)[i]; if(!r||!val) return;
+  fuSetDue(mod,r,val); toast('Follow-up set for '+val,'success');
+  if(typeof renderAlerts==='function') renderAlerts();
+}
+function _fuActions(mod,i,due){
+  return '<input type="date" value="'+(due||'')+'" onchange="fuActSet(\''+mod+'\','+i+',this.value)" '
+        +'style="background:var(--p2);border:1px solid var(--b1);color:var(--t1);font-size:10px;padding:2px 6px;border-radius:4px;outline:none">'
+        +'<button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="fuActLog(\''+mod+'\','+i+',\'Reached\')">✓ Reached</button>'
+        +'<button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="fuActLog(\''+mod+'\','+i+',\'No answer\')">✗ No answer</button>';
+}
+
 function buildAlerts(){
-  const today=new Date();today.setHours(0,0,0,0);
+  const today=_fuToday();
   const acts=[];
-  // Navaki follow-ups overdue
-  NAVAKI.forEach((n,i)=>{
-    if(n.fu_date){
-      const d=new Date(n.fu_date);d.setHours(0,0,0,0);
-      const diff=Math.round((d-today)/(86400000));
-      if(diff<0)acts.push({cls:'danger',ic:'🔴',title:`Overdue: ${n.name}`,sub:`Navaki follow-up was due ${Math.abs(diff)}d ago`,wa:waBtn(n.phone,'Hi '+n.name.split(' ')[0]+', hope you are doing well. Following up on your enquiry — can we schedule a visit?'),page:'navaki',pri:1});
-      else if(diff===0)acts.push({cls:'warn',ic:'⚡',title:`Today: ${n.name}`,sub:`Follow-up scheduled for today`,wa:waBtn(n.phone,'Hi '+n.name.split(' ')[0]+', today is our scheduled follow-up. How can we assist you?'),page:'navaki',pri:2});
-      else if(diff<=7)acts.push({cls:'info',ic:'📅',title:`Due ${diff}d: ${n.name}`,sub:`Navaki lead follow-up`,wa:waBtn(n.phone,'Hi '+n.name.split(' ')[0]+', just a reminder — we have a follow-up scheduled.'),page:'navaki',pri:3});
-    } else if(n.stage==='New Lead'){
-      acts.push({cls:'info',ic:'🆕',title:`No date set: ${n.name}`,sub:`Navaki lead with no follow-up date — assign one`,page:'navaki',pri:4});
-    }
+  const MODS=[
+    {mod:'lead',    arr:NAVAKI,   page:'navaki',   label:'Lead'},
+    {mod:'visitor', arr:VISITORS, page:'visitors', label:'Walk-in'},
+    {mod:'quote',   arr:Q26,      page:'quotes',   label:'Quote'}
+  ];
+  const undated=[];
+  MODS.forEach(m=>{
+    (m.arr||[]).forEach((r,i)=>{
+      if(!fuIsOpen(m.mod,r)) return;
+      const fu=fuGet(m.mod,r);
+      const who=r.ownerId&&r.ownerId!=='Unassigned'?r.ownerId:'unassigned';
+      const val=r.value?' · '+fmt(r.value):'';
+      const first=(r.name||'there').split(' ')[0];
+      const wa=waBtn(r.phone,'Hi '+first+', this is MADIO. Following up on your '
+        +(m.mod==='quote'?('quote '+(r.id||'')):'enquiry')+' — can we help with the next step?');
+      if(!fu.due){
+        undated.push({cls:'info',ic:'🆕',bucket:'nodate',
+          title:'No follow-up date: '+(r.name||'—'),
+          sub:m.label+' · '+(r.stage||'')+val+' · '+who,
+          wa:wa,acts:_fuActions(m.mod,i,fuSuggest(r)),page:m.page,pri:4});
+        return;
+      }
+      const t=_parseD(fu.due); if(!t) return;
+      const diff=Math.round((new Date(t)-today)/86400000);
+      const seen=fu.count?' · '+fu.count+' contacted':'';
+      if(diff<0){
+        // Escalate long-overdue, high-value work above everything else.
+        const hot=(r.value||0)>200000&&diff<-7;
+        acts.push({cls:'danger',ic:hot?'🔥':'🔴',bucket:'overdue',
+          title:(hot?'ESCALATE — ':'')+'Overdue '+Math.abs(diff)+'d: '+(r.name||'—'),
+          sub:m.label+' · '+(r.stage||'')+val+' · '+who+seen,
+          wa:wa,acts:_fuActions(m.mod,i,fu.due),page:m.page,pri:hot?0:1});
+      } else if(diff===0){
+        acts.push({cls:'warn',ic:'⚡',bucket:'today',
+          title:'Due today: '+(r.name||'—'),
+          sub:m.label+' · '+(r.stage||'')+val+' · '+who+seen,
+          wa:wa,acts:_fuActions(m.mod,i,fu.due),page:m.page,pri:2});
+      } else if(diff<=7){
+        acts.push({cls:'info',ic:'📅',bucket:'week',
+          title:'Due in '+diff+'d: '+(r.name||'—'),
+          sub:m.label+' · '+(r.stage||'')+val+' · '+who+seen,
+          wa:wa,acts:_fuActions(m.mod,i,fu.due),page:m.page,pri:3});
+      }
+    });
   });
-  // High-value unconverted quotes
-  Q26.filter(q=>q.value>200000&&['Quoted','Site Not Ready','Rescheduled'].includes(q.stage)).forEach((q,_)=>{
-    acts.push({cls:'warn',ic:'💰',title:`₹${fmtL(q.value)} quote unclosed: ${q.name}`,sub:`AF ${q.id} · Stage: ${q.stage} · ${q.by}`,wa:waBtn(q.phone,'Hi '+q.name.split(' ')[0]+', this is '+q.by+' from MADIO. Following up on your quote '+q.id+'. Can we discuss next steps?'),page:'quotes',pri:2});
-  });
-  // Outstanding balances
+  // Outstanding balances (unchanged signal, kept as a collections alert)
   SALES.filter(s=>(s.bal||0)>50000).forEach(s=>{
-    acts.push({cls:'danger',ic:'⚠',title:`Balance due: ${s.name} — ${fmt(s.bal)}`,sub:`MF ${s.id} · Sale value ${fmt(s.value)}`,wa:waBtn(s.phone,'Hi '+s.name.split(' ')[0]+', this is a friendly reminder about the pending balance of '+fmt(s.bal)+' for your order '+s.id+'. Please let us know a convenient time for payment.'),page:'sales',pri:1});
+    acts.push({cls:'danger',ic:'⚠',bucket:'balance',
+      title:`Balance due: ${s.name} — ${fmt(s.bal)}`,
+      sub:`MF ${s.id} · Sale value ${fmt(s.value)}`,
+      wa:waBtn(s.phone,'Hi '+s.name.split(' ')[0]+', this is a friendly reminder about the pending balance of '+fmt(s.bal)+' for your order '+s.id+'. Please let us know a convenient time for payment.'),
+      page:'sales',pri:1});
   });
   acts.sort((a,b)=>a.pri-b.pri);
-  _alerts=acts;
+  // Undated records are reported in full in the KPI tile, but only a slice is
+  // rendered as cards — 600 identical "set a date" cards would bury the rest.
+  _alertsUndatedTotal=undated.length;
+  _alerts=acts.concat(undated.slice(0,15));
+  _alertsHidden=Math.max(0,undated.length-15);
 }
 
 function getAlerts(){return _alerts;}
@@ -3592,18 +3714,33 @@ function getAlerts(){return _alerts;}
 function renderAlerts(){
   buildAlerts();
   const a=_alerts;
-  $('al-overdue').textContent=a.filter(x=>x.cls==='danger').length;
-  $('al-today').textContent=a.filter(x=>x.ic==='⚡').length;
-  $('al-week').textContent=a.filter(x=>x.ic==='📅').length;
-  $('al-nodate').textContent=a.filter(x=>x.ic==='🆕').length;
+  const nb=b=>a.filter(x=>x.bucket===b).length;
+  $('al-overdue').textContent=nb('overdue');
+  $('al-today').textContent=nb('today');
+  $('al-week').textContent=nb('week');
+  // Full undated count, not just the slice rendered as cards.
+  $('al-nodate').textContent=(typeof _alertsUndatedTotal!=='undefined'?_alertsUndatedTotal:nb('nodate'));
+  const bar=$('al-bulkbar');
+  if(bar){
+    const und=(typeof _alertsUndatedTotal!=='undefined'?_alertsUndatedTotal:0);
+    bar.innerHTML=und
+      ? '<span style="font-size:11px;color:var(--t2)">'+und+' open records have no follow-up date.</span>'
+        +'<button class="btn btn-gold" style="padding:3px 10px;font-size:10px" onclick="fuScheduleUndated()">Schedule all →</button>'
+        +'<span style="font-size:10px;color:var(--t3)">Sets each one per its stage SLA, counted from today.</span>'
+      : '<span style="font-size:11px;color:var(--green)">✓ Every open record has a follow-up date.</span>';
+  }
   $('alerts-body').innerHTML=a.length?a.map(al=>`<div class="alert-card ${al.cls}" style="margin-bottom:0;border-radius:6px">
     <div class="alert-ic">${al.ic}</div>
     <div class="alert-body">
       <div class="alert-title">${al.title}</div>
       <div class="alert-sub">${al.sub}</div>
-      <div class="alert-actions">${al.wa||''}<button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="showPage('${al.page||'quotes'}')">View →</button></div>
+      <div class="alert-actions">${al.wa||''}${al.acts||''}<button class="btn btn-ghost" style="padding:2px 8px;font-size:10px" onclick="showPage('${al.page||'quotes'}')">View →</button></div>
     </div>
   </div>`).join(''):'<div style="padding:20px;text-align:center;color:var(--t3)">✅ No alerts — everything is up to date!</div>';
+  if(typeof _alertsHidden!=='undefined'&&_alertsHidden>0){
+    $('alerts-body').innerHTML+='<div style="padding:10px;text-align:center;color:var(--t3);font-size:11px">'
+      +'…and '+_alertsHidden+' more without a follow-up date — use “Schedule all” above.</div>';
+  }
 }
 
 // ══════ KANBAN ══════
@@ -11941,7 +12078,9 @@ function mountFilterBar(cfg){
     page:PAGE,
     data:function(){return NAVAKI;},
     idField:'sno',
-    derive:function(n){return {_fu:_fbFuBucket(n.fu_date)};},
+    // Read the follow-up store so logged/scheduled dates drive the chips, not
+    // just the legacy fu_date column.
+    derive:function(n){var d=fuGet('lead',n).due;return {_fu:_fbFuBucket(d),fu_date:d||n.fu_date||''};},
     chipHost:'#n-fbar',
     chips:[{v:'all',label:'All'},{v:'Overdue',label:'⏰ Overdue'},{v:'Due 7d',label:'📅 Due 7d'},
            {v:'New Lead',label:'🆕 New'},{v:'Follow-Up',label:'📞 Follow'},{v:'Quoted',label:'📋 Quoted'},
@@ -12017,60 +12156,12 @@ function mountFilterBar(cfg){
 })();
 
 // ================================================================
-// ALERTS sort
+// ALERTS — the follow-up engine (buildAlerts/renderAlerts) owns this page.
+// The previous sort wrapper here rendered a quote-only card shape (al.qi,
+// al.name, al.value) that no longer matches the multi-module alert objects,
+// and recomputed the KPI tiles from colour/icon guesses, so it is removed
+// rather than kept in parallel. Search/sort can return via mountFilterBar.
 // ================================================================
-(function(){
-  var BAR_ID='sb-alerts'; var PAGE='alerts';
-  function inject(){
-    var ph=document.querySelector('#p-alerts .ph, #p-alerts .panel .ph');
-    if(!ph||document.getElementById(BAR_ID))return;
-    var bar=document.createElement('div'); bar.id=BAR_ID; bar.className='sb2';
-    bar.innerHTML='<label>Sort</label>'
-      +'<select id="sc-'+PAGE+'">'
-        +'<option value="urgency">Urgency (default)</option>'
-        +'<option value="fu_date:date">Follow-Up Date</option>'
-        +'<option value="name:str">Customer</option>'
-        +'<option value="value:num">Value</option>'
-        +'<option value="by:str">Assigned To</option>'
-      +'</select>'
-      +'<span class="sdir" id="sdir-'+PAGE+'" onclick="_toggleDir(\''+PAGE+'\')">\u2191</span>'
-      +'<input id="srch-'+PAGE+'" placeholder="\uD83D\uDD0D Name, AF#\u2026" style="min-width:130px">'
-      +'<span class="scnt2" id="sct-'+PAGE+'"></span>';
-    ph.insertAdjacentElement('afterend',bar);
-    bar.querySelector('select').onchange=function(){_applySort(PAGE);};
-    bar.querySelector('input').oninput=function(){_applySort(PAGE);};
-  }
-  _sortFns[PAGE]=function(){
-    inject();
-    if(typeof buildAlerts==='function') buildAlerts();
-    if(typeof _alerts==='undefined') return;
-    var col=(document.getElementById('sc-'+PAGE)||{}).value||'urgency';
-    var dir=(_SS[PAGE]||{}).dir||'asc';
-    var q=((document.getElementById('srch-'+PAGE)||{}).value||'').toLowerCase();
-    var a=_alerts.slice();
-    if(q) a=a.filter(function(x){return (x.name||'').toLowerCase().includes(q)||(x.id||'').toLowerCase().includes(q);});
-    if(col==='urgency'){var uo={'danger':0,'warning':1,'info':2,'':3};a.sort(function(x,y){return (uo[x.cls]||3)-(uo[y.cls]||3);});if(dir==='desc')a.reverse();}
-    else{var cv2=col.split(':');a=_sortData(a,cv2[0],dir,cv2[1]||'str');}
-    var ct=document.getElementById('sct-'+PAGE); if(ct) ct.textContent=a.length+' alerts';
-    ['al-overdue','al-today','al-week','al-nodate'].forEach(function(id,i){
-      var e=document.getElementById(id); if(!e)return;
-      var counts=[a.filter(function(x){return x.cls==='danger';}).length,a.filter(function(x){return x.ic==='\u26A1';}).length,a.filter(function(x){return x.ic==='\uD83D\uDCC5';}).length,a.filter(function(x){return x.ic==='\uD83C\uDD95';}).length];
-      e.textContent=counts[i];
-    });
-    var el=document.getElementById('alerts-body'); if(!el)return;
-    el.innerHTML=a.length?a.map(function(al){
-      return '<div class="alert-card '+(al.cls||'')+'" style="margin-bottom:8px;padding:10px 14px;border-radius:8px;background:var(--p2);border:1px solid var(--b1);cursor:pointer;border-left:3px solid '+(al.cls==='danger'?'var(--red)':al.cls==='warning'?'var(--amber)':'var(--blue)')+'" onclick="openModal(\'quote\','+al.qi+')">'
-        +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
-          +'<div><div style="font-size:12px;font-weight:600;color:var(--t1)">'+al.ic+' '+al.name+'</div>'
-            +'<div style="font-size:10px;color:var(--t3);margin-top:2px">'+(al.id||'')+' \u00B7 '+(al.stage||'')+' \u00B7 Rs '+((al.value||0)/1000).toFixed(0)+'K</div>'
-            +'<div style="font-size:10px;color:var(--t3)">By: '+(al.by||'\u2014')+' \u00B7 FU: '+(al.fu_date||'\u2014')+(al.msg?' \u00B7 '+al.msg:'')+'</div>'
-          +'</div>'
-          +'<a href="https://wa.me/91'+((al.phone||'').replace(/\D/g,''))+'" target="_blank" onclick="event.stopPropagation()" style="color:#25d366;font-size:18px;flex-shrink:0">&#128172;</a>'
-        +'</div></div>';
-    }).join(''):'<div style="padding:20px;text-align:center;color:var(--green);font-size:12px">\u2705 All follow-ups up to date!</div>';
-  };
-  var _origRA=window.renderAlerts; window.renderAlerts=function(){_sortFns[PAGE]();};
-})();
 
 // ================================================================
 // PURCHASE ORDERS — safe renderPOs (no recursion possible)
