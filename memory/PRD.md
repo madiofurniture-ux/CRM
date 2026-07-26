@@ -22,6 +22,17 @@ User uploaded MADIO_CRM_v17.html (their existing custom CRM) and seed data files
 - **Admin** — manages users, has full access
 - **Sales executive (Raghu / Nenmu / Gowtham)** — works visitors, leads, quotes, sales, inventory, tasks
 
+## Done (v2 — 2026-07-26) — P1 feature batch
+- **Tax Invoice** module with GST breakup (CGST/SGST/IGST auto-computed), line items, editable HSN, and print-to-PDF preview
+- **Quotation Builder** — Quotes now supports optional line items with subtotal + GST + grand total, plus print/PDF export
+- **Meet Planner** — weekly grid view (8am–8pm × 7 days) + list view, click-slot-to-schedule, Lead/Architect/Customer/Internal ref types
+- **Petty Cash Ledger** — Cash In / Out entries with running balance, category & mode
+- **Outstanding Report** — 3 KPIs (unpaid sales / invoices / hot pipeline ≥₹1L) + aging buckets (0-30/31-60/61-90/90+) + 3 detail tables
+- **Attendance with geofencing** — browser geolocation + backend haversine distance vs office radius, check-in/check-out, duration_min, admin sees "team today" view, 30-day history
+- **Office & Geofence settings** — admin editable Company/Address/GSTIN/InvoicePrefix + Office lat/lng/radius + "Use my location" button (in Role Manager page)
+- **Mobile UI** — sidebar becomes hamburger drawer <lg breakpoint, Topbar shrinks, table `overflow-x-auto` on all data-dense pages, buttons compact on <sm
+- **Print CSS** — @media print rules hide sidebar/topbar and dedicate full page to invoice/quote
+
 ## Done (v1 — 2026-06-22)
 - PIN-based auth (login, JWT issuance, /me, admin-only user CRUD)
 - Sidebar + Topbar layout with role-aware nav
@@ -44,11 +55,13 @@ See `/app/memory/test_credentials.md` — admin / 1234, raghu / 2222, nenmu / 33
 
 ## Backlog (next iterations)
 ### P1 — high impact
-- Tax Invoice generator with GST + line items
-- Meet Planner (4-week grid)
-- Quotation Builder with line items + print/PDF
-- Petty Cash ledger
-- Outstanding report (combined view of unpaid sales + high-value unconverted quotes)
+- ~~Tax Invoice generator with GST + line items~~ ✅ done v2
+- ~~Meet Planner~~ ✅ done v2
+- ~~Quotation Builder with line items + print/PDF~~ ✅ done v2
+- ~~Petty Cash ledger~~ ✅ done v2
+- ~~Outstanding report~~ ✅ done v2
+- ~~Attendance with geofencing~~ ✅ done v2
+- ~~UI mobile responsiveness~~ ✅ done v2
 
 ### P2 — nice-to-have
 - P&L by project
