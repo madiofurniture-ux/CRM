@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 4 targeted verification of 4 code-review fixes. All 4 confirmed working, zero regressions. (1) Backend GET /api/analytics/inventory with admin token returns total_items=120 and total_qty/total_mrp/total_cost as positive numbers, and all five arrays (by_category/by_vendor/by_location/by_status/top_items) non-empty — defensive rename of loop variable `i`→`item`/`it` did not break behaviour. (2) Login PIN pad auto-submits on the 4th digit: after admin+1234, URL navigates to `/` without extra click. useCallback restructure works. (3) Wrong PIN (admin+9999) surfaces `login-error` with text 'Invalid username or PIN' and clears all 4 pin dots for retry. (4) `back-to-roles` returns to role selection cards with cleared PIN state. (5) After successful login, hard reload keeps user signed in (URL stays `/`, logout-btn visible) — useMemo-wrapped AuthContext value did not break /auth/me rehydration. (6) Mobile 375x812 hamburger opens the drawer with backdrop, clicking nav-dashboard closes drawer and navigates — useMemo-wrapped DrawerCtx value is fine. (7) Navigated through nav-dashboard, nav-pipeline, nav-quotes, nav-invoices, nav-meets, nav-petty-cash, nav-outstanding, nav-attendance, nav-inventory, nav-roles — all render, zero pageerrors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard / Inventory analytics", "issues": ["Pre-existing recharts warning: 'The width(-1) and height(-1) of chart should be greater than 0' — chart ResponsiveContainer needs a minHeight on its wrapper. Not caused by iter-4 changes but worth fixing to silence console noise."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter4_fix.py",
+    "/app/test_reports/pytest/iter4.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Login.jsx submit() has `loc.state` in useCallback deps — React lint may still flag `loc.state?.from` because it derefs a property; consider depending on `loc.state?.from` explicitly (minor).",
+    "AuthContext.jsx re-creates login/logout/canAccess on every user change (which is fine and intended), but note that this means downstream memoized consumers depending on identity of `logout` will still re-run when user changes. Acceptable given user changes are rare.",
+    "Recharts ResponsiveContainer warnings ('width(-1) height(-1)') across dashboard/analytics — add explicit minHeight to chart wrappers to remove noise."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter4_fix.py (new — 1 test, passes)"],
+  "success_rate": {"backend": "100% (1/1 iter-4 inventory analytics regression)", "frontend": "100% (7/7 flows: wrong-PIN, switch-profile, auto-submit, reload persistence, 10-page nav, mobile drawer open+close-on-nav; 0 pageerrors)"},
+  "test_credentials": "admin/1234, raghu/2222",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 4 iter-4 code-review fixes verified. Regression suites: `pytest /app/backend/tests/test_p1_features.py /app/backend/tests/test_iter3_fix.py /app/backend/tests/test_iter4_fix.py -v`. Only outstanding console noise is pre-existing recharts width(-1) warnings on dashboard/analytics — not blocking.",
+  "rca_of_the_issue": "N/A — no regression introduced. useCallback restructuring of Login.jsx submit() correctly hooks into press() when pin.length===4 (line 51 of Login.jsx), no extra click required. useMemo of AuthContext value and DrawerCtx value produces stable refs across renders without breaking state updates because the deps arrays include the reactive values (user/loading) and empty deps respectively — setOpen from useState is stable so the empty deps for DrawerCtx is safe."
+}

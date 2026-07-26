@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import api from "@/lib/api";
 
 const AuthContext = createContext(null);
@@ -21,32 +21,32 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = async (username, pin) => {
-    const { data } = await api.post("/auth/login", { username, pin });
-    localStorage.setItem("madio_token", data.token);
-    localStorage.setItem("madio_user", JSON.stringify(data.user));
-    setUser(data.user);
-    return data.user;
-  };
+  const value = useMemo(() => {
+    const login = async (username, pin) => {
+      const { data } = await api.post("/auth/login", { username, pin });
+      localStorage.setItem("madio_token", data.token);
+      localStorage.setItem("madio_user", JSON.stringify(data.user));
+      setUser(data.user);
+      return data.user;
+    };
 
-  const logout = () => {
-    localStorage.removeItem("madio_token");
-    localStorage.removeItem("madio_user");
-    setUser(false);
-    window.location.href = "/login";
-  };
+    const logout = () => {
+      localStorage.removeItem("madio_token");
+      localStorage.removeItem("madio_user");
+      setUser(false);
+      window.location.href = "/login";
+    };
 
-  const canAccess = (pageId) => {
-    if (!user) return false;
-    if (user.role === "admin" || user.pages == null) return true;
-    return Array.isArray(user.pages) && user.pages.includes(pageId);
-  };
+    const canAccess = (pageId) => {
+      if (!user) return false;
+      if (user.role === "admin" || user.pages == null) return true;
+      return Array.isArray(user.pages) && user.pages.includes(pageId);
+    };
 
-  return (
-    <AuthContext.Provider value={{ user, loading, login, logout, canAccess }}>
-      {children}
-    </AuthContext.Provider>
-  );
+    return { user, loading, login, logout, canAccess };
+  }, [user, loading]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);

@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Delete } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import api, { formatApiError } from "@/lib/api";
+import { formatApiError } from "@/lib/api";
 import { toast, Toaster } from "sonner";
 
 const ROLE_CARDS = [
@@ -25,20 +25,12 @@ export default function Login() {
     if (user) nav("/", { replace: true });
   }, [user, nav]);
 
-  useEffect(() => {
-    if (selected && pin.length === 4) {
-      doLogin();
-    }
-    // eslint-disable-next-line
-  }, [pin]);
-
-  const doLogin = async () => {
-    if (!selected) return;
+  const submit = useCallback(async (role, pinValue) => {
     setSubmitting(true);
     setError("");
     try {
-      await login(selected.username, pin);
-      toast.success(`Welcome back, ${selected.name}`);
+      await login(role.username, pinValue);
+      toast.success(`Welcome back, ${role.name}`);
       nav(loc.state?.from || "/", { replace: true });
     } catch (e) {
       setError(formatApiError(e.response?.data?.detail) || "Login failed");
@@ -46,13 +38,18 @@ export default function Login() {
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [login, nav, loc.state]);
 
   const press = (k) => {
-    if (submitting) return;
+    if (submitting || !selected) return;
     setError("");
-    if (k === "del") setPin((p) => p.slice(0, -1));
-    else if (pin.length < 4) setPin((p) => p + k);
+    if (k === "del") {
+      setPin((p) => p.slice(0, -1));
+    } else if (pin.length < 4) {
+      const next = pin + k;
+      setPin(next);
+      if (next.length === 4) submit(selected, next);
+    }
   };
 
   return (

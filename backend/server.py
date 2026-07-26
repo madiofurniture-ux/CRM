@@ -407,12 +407,12 @@ async def inventory_analytics(_: dict = Depends(get_current_user)):
     by_vendor = {}
     by_location = {}
     by_status = {}
-    for i in items:
-        cat = i.get("category") or "Other"
-        vendor = i.get("vendor") or "Unknown"
-        loc = i.get("location") or "Unknown"
-        status = i.get("status") or "Unknown"
-        value = (i.get("mrp") or 0) * (i.get("qty") or 0)
+    for item in items:
+        cat = item.get("category") or "Other"
+        vendor = item.get("vendor") or "Unknown"
+        loc = item.get("location") or "Unknown"
+        status = item.get("status") or "Unknown"
+        value = (item.get("mrp") or 0) * (item.get("qty") or 0)
         by_category[cat] = by_category.get(cat, 0) + value
         by_vendor[vendor] = by_vendor.get(vendor, 0) + value
         by_location[loc] = by_location.get(loc, 0) + value
@@ -421,12 +421,12 @@ async def inventory_analytics(_: dict = Depends(get_current_user)):
     def top(d, n=10):
         return sorted([{"name": k, "value": v} for k, v in d.items()], key=lambda x: -x["value"])[:n]
 
-    top_items = sorted(items, key=lambda i: -((i.get("mrp") or 0) * (i.get("qty") or 0)))[:10]
+    top_items = sorted(items, key=lambda it: -((it.get("mrp") or 0) * (it.get("qty") or 0)))[:10]
     return {
         "total_items": len(items),
-        "total_qty": sum((i.get("qty") or 0) for i in items),
-        "total_mrp": sum((i.get("mrp") or 0) * (i.get("qty") or 0) for i in items),
-        "total_cost": sum((i.get("cost") or 0) * (i.get("qty") or 0) for i in items),
+        "total_qty": sum((it.get("qty") or 0) for it in items),
+        "total_mrp": sum((it.get("mrp") or 0) * (it.get("qty") or 0) for it in items),
+        "total_cost": sum((it.get("cost") or 0) * (it.get("qty") or 0) for it in items),
         "by_category": top(by_category),
         "by_vendor": top(by_vendor),
         "by_location": top(by_location),
