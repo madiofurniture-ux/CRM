@@ -1,0 +1,5 @@
+-- Milestone 3 inventory command-centre seed notes
+-- Existing item seed data is embedded in MADIO_CRM_v16.html as INV_DATA.
+-- Future backend seed/import should normalize category, vendor and location
+-- masters from current INV_DATA values, then backfill inventory_items and
+-- stock_locations without changing existing SKU values.
