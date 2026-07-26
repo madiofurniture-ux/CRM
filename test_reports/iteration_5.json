@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 5 targeted regression on projection + local hero image changes. Backend: /api/outstanding and /api/dashboard/stats pass all shape/non-zero checks. /api/analytics/inventory has a REGRESSION — projection dropped the 'cost' field so total_cost is always 0 (verified via API and visible on UI as 'COST VALUE ₹0'). Frontend: hero image at /login-hero.jpg loads successfully (naturalWidth=1400, same-origin). Login flow, Outstanding page (3 tables + 4 aging buckets), and Inventory Analytics page all render. Dashboard renders charts (36 SVGs, 106 recharts elements).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/analytics/inventory",
+        "issue": "Regression from projection optimization: proj dict at server.py line ~410 omits 'cost' field, so 'cost' is never loaded from Mongo, causing total_cost to always be 0. This also breaks the 'COST VALUE' KPI card on the Inventory Analytics screen (visibly displays ₹0). Fix: add \"cost\": 1 to the projection dict.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Inventory Analytics / KPI 'Cost Value'",
+        "issue": "Displays ₹0 because backend total_cost is 0 (root cause: server-side projection drops 'cost'). Fix on backend.",
+        "selector": "Inventory Analytics — Cost Value card",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter5_regression.py",
+    "/app/test_reports/pytest/iter5.xml"
+  ],
+  "action_items": [
+    "In /app/backend/server.py inventory_analytics (~line 410), add 'cost': 1 to the projection dict so total_cost is computed correctly."
+  ],
+  "critical_code_review_comments": [
+    "server.py inventory_analytics projection missed 'cost' — silent regression because response key still present but always 0. Consider adding a smoke test that asserts total_cost > 0 to catch such projection drift.",
+    "outstanding_report and dashboard_stats projections look correct — all fields used downstream are included.",
+    "Login.jsx: using an empty alt='' on a decorative hero image is fine, but the div is aria-hidden by nature; OK."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter5_regression.py (new)"
+  ],
+  "success_rate": {"backend": "67% (2/3)", "frontend": "95% (visual/UX all good; only the cost-related KPI shows 0 due to backend regression)"},
+  "test_credentials": "admin / 1234 (from review request)",
+  "seed_data_creation": "none",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter 5 regression test lives at /app/backend/tests/test_iter5_regression.py. Only /api/analytics/inventory total_cost is failing. Once main agent adds 'cost': 1 to the projection in server.py inventory_analytics, re-run: pytest /app/backend/tests/test_iter5_regression.py -v. Hero image regression fully passes (src=/login-hero.jpg, naturalWidth=1400).",
+  "rca_of_the_issue": "In /app/backend/server.py::inventory_analytics, the MongoDB projection dict `proj` (line ~410) enumerates fields to fetch. It includes 'mrp' and 'qty' but omits 'cost'. Later the code sums `(it.get('cost') or 0) * (it.get('qty') or 0)` for total_cost, which always evaluates to 0 because 'cost' is never present on the returned documents. Mitigation: add `\"cost\": 1` to `proj`. Reproduction: GET /api/analytics/inventory with admin token → total_cost==0 while total_mrp is large. Also visible on UI: Inventory Analytics 'Cost Value' KPI shows ₹0."
+}

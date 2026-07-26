@@ -166,13 +166,16 @@ make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash)
 # ---------- Outstanding report ----------
 @api.get("/outstanding")
 async def outstanding_report(_: dict = Depends(get_current_user)):
-    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(5000)
-    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
+    # Server-side filtering + projections — only fetch documents & fields we need
+    sales_proj = {"_id": 0, "id": 1, "sale_no": 1, "customer": 1, "date": 1, "balance": 1}
+    inv_proj = {"_id": 0, "id": 1, "invoice_no": 1, "customer": 1, "date": 1, "total": 1, "paid": 1, "balance": 1}
+    quote_proj = {"_id": 0, "id": 1, "quote_no": 1, "customer": 1, "stage": 1, "value": 1}
 
-    outstanding_sales = [s for s in sales if (s.get("balance") or 0) > 0]
-    outstanding_invoices = [i for i in invoices if (i.get("balance") or 0) > 0]
-    hot_quotes = [q for q in quotes if q.get("stage") in ("Negotiation", "Quoted") and (q.get("value") or 0) >= 100000]
+    outstanding_sales = await db.sales.find({"balance": {"$gt": 0}}, sales_proj).to_list(5000)
+    outstanding_invoices = await db.invoices.find({"balance": {"$gt": 0}}, inv_proj).to_list(5000)
+    hot_quotes = await db.quotes.find(
+        {"stage": {"$in": ["Negotiation", "Quoted"]}, "value": {"$gte": 100000}}, quote_proj
+    ).to_list(5000)
 
     total_sales_out = sum((s.get("balance") or 0) for s in outstanding_sales)
     total_inv_out = sum((i.get("balance") or 0) for i in outstanding_invoices)
@@ -340,11 +343,12 @@ async def check_out(payload: AttendanceCheckIn, user: dict = Depends(get_current
 # ---------- Dashboard / Analytics ----------
 @api.get("/dashboard/stats")
 async def dashboard_stats(_: dict = Depends(get_current_user)):
-    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
-    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
-    leads = await db.leads.find({}, {"_id": 0}).to_list(5000)
-    visitors = await db.visitors.find({}, {"_id": 0}).to_list(5000)
+    # Projections keep dashboard snappy at scale — fetch only fields used below
+    quotes = await db.quotes.find({}, {"_id": 0, "stage": 1, "value": 1}).to_list(5000)
+    sales = await db.sales.find({}, {"_id": 0, "value": 1, "paid": 1, "balance": 1, "division": 1, "date": 1}).to_list(5000)
+    inventory = await db.inventory.find({}, {"_id": 0, "mrp": 1, "cost": 1, "qty": 1}).to_list(5000)
+    leads = await db.leads.find({}, {"_id": 0, "stage": 1, "follow_up_date": 1}).to_list(5000)
+    visitors = await db.visitors.find({}, {"_id": 0, "date": 1}).to_list(5000)
 
     pipeline_value = sum((q.get("value") or 0) for q in quotes if q.get("stage") in ("New", "Qualified", "Quoted", "Negotiation"))
     total_sales = sum((s.get("value") or 0) for s in sales)
@@ -402,7 +406,9 @@ async def dashboard_stats(_: dict = Depends(get_current_user)):
 
 @api.get("/analytics/inventory")
 async def inventory_analytics(_: dict = Depends(get_current_user)):
-    items = await db.inventory.find({}, {"_id": 0}).to_list(5000)
+    # Projection: keep only aggregation + top-items display fields
+    proj = {"_id": 0, "id": 1, "sku": 1, "name": 1, "category": 1, "vendor": 1, "location": 1, "status": 1, "mrp": 1, "qty": 1}
+    items = await db.inventory.find({}, proj).to_list(5000)
     by_category = {}
     by_vendor = {}
     by_location = {}

@@ -59,7 +59,7 @@ export default function Login() {
       {/* Left: hero */}
       <div className="hidden lg:flex w-1/2 relative items-end p-12">
         <img
-          src="https://images.unsplash.com/photo-1682184805271-11671b7ecf4c?crop=entropy&cs=srgb&fm=jpg&q=85&w=1400"
+          src="/login-hero.jpg"
           alt=""
           className="absolute inset-0 w-full h-full object-cover"
         />
