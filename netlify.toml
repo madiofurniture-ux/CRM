@@ -1,3 +1,12 @@
+# Netlify configuration for MADIO CRM
+#
+# The app is a single self-contained file (MADIO_CRM_v16.html). This rewrite
+# serves it at every path with a 200, so the site root (e.g. crm.yourdomain.com)
+# loads the app directly — no index.html duplicate and no redirect flash.
+#
+# In the Netlify UI: leave the build command blank and set the
+# publish directory to "." (the repo root).
+
 [build]
   publish = "."
   command = ""
@@ -24,3 +33,15 @@
   from = "/app"
   to = "/MADIO_CRM_v16.html"
   status = 200
+[[redirects]]
+  from = "/*"
+  to = "/MADIO_CRM_v16.html"
+  status = 200
+
+# Security headers — sensible defaults for a static app.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "strict-origin-when-cross-origin"
