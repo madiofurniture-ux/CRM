@@ -1047,6 +1047,9 @@ canvas{max-width:100%;display:block}
 <!-- ══════════════════ DATA CENTRE ══════════════════ -->
 <div class="page" id="p-data-centre">
 
+  <!-- Owner data-quality review (W0) — hidden when there is nothing to review -->
+  <div id="owner-audit-panel" style="display:none"></div>
+
   <!-- Top tab bar -->
   <div style="display:flex;gap:5px;margin-bottom:14px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--b1);padding-bottom:10px">
     <button class="dc-tab active" id="dct-import" onclick="dcTab('import',this)">📥 Import Data</button>
@@ -3305,7 +3308,10 @@ function persistQuotes(){ try{ localStorage.setItem('madio_quotes_v1', JSON.stri
 })();
 const MONTHLY=_D.monthly,TEAM_REV=_D.team,TEAM_CNT=_D.team_cnt,REFS=_D.refs;
 let PETTY=_D.petty,ARCHS=_D.archs;
-const TEAM=['GK','Raghu','Rooth','DW','NM','Jags','Admin','Accounting'];
+// Includes staff who carry real volume in the data but were missing from this
+// list (Nenmu: 70 visitors + 18 sales, Asad: 5 sales, RAM, and the rest), so
+// they are selectable in the record forms rather than only appearing as free text.
+const TEAM=['GK','Raghu','Rooth','Nenmu','RAM','Jags','Asad','Venkat','Sundari','Srikanth','KK','Kiran','Rama Kirshan','DW','NM','Admin','Accounting'];
 const MEETS=[
   {week:1,arch:'Ar Hanumanth Rao',firm:'HR Lines',area:'J-Hills',person:'GK',type:'Studio Visit',obj:'MAP referral activation',status:'📅 Planned'},
   {week:1,arch:'Ar Karthikeya',firm:'9 Arc Interiors',area:'Hyd',person:'GK',type:'Coffee Meet',obj:'Follow-up rescheduled meet',status:'📅 Planned'},
@@ -3316,6 +3322,128 @@ const MEETS=[
   {week:4,arch:'Ar Priya',firm:'Ex HR Lines',area:'Hyd',person:'GK',type:'Studio Visit',obj:'MAP + Furniture cross-sell',status:'📅 Planned'},
   {week:4,arch:'Ar Manohar',firm:'MS Designs',area:'LB Nagar',person:'Raghu',type:'Site Visit',obj:'Bulk order discussion',status:'📅 Planned'},
 ];
+
+// ══════ OWNER NORMALIZATION (W0) ══════
+// The `by` / `assigned` columns were free text, so the same person appears under
+// many spellings ("Rooth"/"Roooth"/"ROOTH/NENMU", "GK"/"Gk", "Ram"/"RAM",
+// "Jagadeesh sir"/"Jagdish sir"). That makes ownership-based filtering, routing
+// and leaderboards wrong. This derives a canonical `ownerId` (+ `coOwners`) on
+// every load. It is a pure function of the raw value, so it never needs
+// persisting and stays correct if the alias table is later corrected. The raw
+// value is always preserved in `by`/`assigned` — nothing is overwritten.
+var STAFF=['GK','Raghu','Rooth','Nenmu','RAM','Jags','Asad','Venkat','Sundari','Srikanth','KK','Kiran','Rama Kirshan','DW','NM','Admin','Accounting'];
+// Explicit, hand-reviewed aliases (keys are lowercased). Never fuzzy-matched:
+// a typo table is safe, similarity matching would merge two real people.
+var OWNER_ALIASES={
+  'gk':'GK', 'raghu':'Raghu', 'rooth':'Rooth', 'nenmu':'Nenmu',
+  'roooth':'Rooth',            // typo
+  'ram':'RAM',                 // case
+  'raghu sir':'Raghu',         // honorific
+  'kiran sir':'Kiran',
+  'jagadeesh':'Jags', 'jagadeesh sir':'Jags', 'jagdish sir':'Jags', 'jagdeesh':'Jags'
+};
+// Mapped, but the mapping is an assumption a human should confirm.
+var OWNER_ASSUMED={ 'raghu mf':'Raghu' };   // "MF" is the sales-order prefix, not a surname
+// Known NOT to be staff — these are referral sources / partner firms that were
+// typed into an owner column. Left unassigned rather than invented as people.
+var OWNER_NOT_STAFF={ 'gowtham hive':1, 'naveen smiley':1, 'c':1 };
+var _ownerIssues=[];
+
+function normalizeOwner(raw){
+  var s=String(raw==null?'':raw).trim();
+  if(!s) return {ownerId:'Unassigned',coOwners:[],res:'empty',raw:s};
+  var key=s.toLowerCase();
+  if(OWNER_NOT_STAFF[key]) return {ownerId:'Unassigned',coOwners:[],res:'not-staff',raw:s};
+  if(OWNER_ALIASES[key])   return {ownerId:OWNER_ALIASES[key],coOwners:[],res:'alias',raw:s};
+  if(OWNER_ASSUMED[key])   return {ownerId:OWNER_ASSUMED[key],coOwners:[],res:'assumed',raw:s};
+  // Multi-owner strings: "GK/ Rooth", "Nenmu & Rooth", "Jagdeesh&Rooth"
+  if(/[\/&]/.test(s)){
+    var parts=s.split(/[\/&]/).map(function(p){return p.trim();}).filter(Boolean).map(function(p){
+      var k=p.toLowerCase();
+      return OWNER_ALIASES[k]||OWNER_ASSUMED[k]||(STAFF.indexOf(p)>-1?p:null);
+    });
+    if(parts.length&&parts.every(Boolean)){
+      return {ownerId:parts[0],coOwners:parts.slice(1),res:'split',raw:s};
+    }
+    return {ownerId:'Unassigned',coOwners:[],res:'unresolved',raw:s};
+  }
+  if(STAFF.indexOf(s)>-1) return {ownerId:s,coOwners:[],res:'exact',raw:s};
+  return {ownerId:'Unassigned',coOwners:[],res:'unresolved',raw:s};
+}
+
+// Adds ownerId/coOwners to every record in place. Idempotent — safe to re-run.
+function applyOwnerNormalization(){
+  _ownerIssues=[];
+  var sets=[['Quotations',typeof Q26!=='undefined'?Q26:[],'by'],
+            ['Visitors',  typeof VISITORS!=='undefined'?VISITORS:[],'by'],
+            ['Sales',     typeof SALES!=='undefined'?SALES:[],'by'],
+            ['Architects',typeof ARCHS!=='undefined'?ARCHS:[],'assigned'],
+            ['Petty Cash',typeof PETTY!=='undefined'?PETTY:[],'by']];
+  sets.forEach(function(s){
+    var label=s[0], arr=s[1], field=s[2];
+    (arr||[]).forEach(function(r){
+      var n=normalizeOwner(r[field]);
+      r.ownerId=n.ownerId; r.coOwners=n.coOwners;
+      if(n.res==='unresolved'||n.res==='not-staff'||n.res==='assumed'||n.res==='empty'){
+        _ownerIssues.push({module:label,raw:n.raw,resolution:n.res,mappedTo:n.ownerId,id:r.id||r.sno||r.name||''});
+      }
+    });
+  });
+  return _ownerIssues;
+}
+
+// Grouped review report: which raw values need a human decision, and how many
+// records each affects.
+function ownerAuditSummary(){
+  var g={};
+  _ownerIssues.forEach(function(x){
+    var k=x.module+'||'+x.raw+'||'+x.resolution;
+    if(!g[k])g[k]={module:x.module,raw:x.raw,resolution:x.resolution,mappedTo:x.mappedTo,count:0};
+    g[k].count++;
+  });
+  return Object.keys(g).map(function(k){return g[k];})
+    .sort(function(a,b){return b.count-a.count;});
+}
+function renderOwnerAudit(){
+  var el=document.getElementById('owner-audit-panel'); if(!el)return;
+  var rows=ownerAuditSummary();
+  if(!rows.length){ el.style.display='none'; el.innerHTML=''; return; }
+  var recs=rows.reduce(function(a,r){return a+r.count;},0);
+  var LBL={empty:'No owner recorded',unresolved:'Not recognised',
+           'not-staff':'Not a staff name',assumed:'Assumed — please confirm'};
+  var CLR={empty:'var(--amber)',unresolved:'var(--red)',
+           'not-staff':'var(--red)',assumed:'var(--blue)'};
+  el.style.display='';
+  el.innerHTML='<div class="panel" style="margin-bottom:14px">'
+   +'<div class="ph"><span class="pt">⚠ Owner review</span>'
+   +'<span class="ps">'+recs+' records across '+rows.length+' unrecognised values</span>'
+   +'<button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="exportOwnerAudit()">↓ CSV</button></div>'
+   +'<div style="padding:8px 12px;font-size:10.5px;color:var(--t2);border-bottom:1px solid var(--b1)">'
+   +'Owner names were free text, so the same person appeared under several spellings. '
+   +'Those are now merged automatically. The values below could not be resolved safely — '
+   +'fix them at the source record, or tell us who they map to.</div>'
+   +'<div class="tw"><table><thead><tr><th>Module</th><th>Value in data</th><th>Status</th><th>Treated as</th><th>Records</th></tr></thead><tbody>'
+   +rows.map(function(r){
+      return '<tr><td>'+r.module+'</td>'
+        +'<td class="primary">'+(r.raw?String(r.raw).replace(/</g,'&lt;'):'<em style="color:var(--t3)">(blank)</em>')+'</td>'
+        +'<td style="color:'+(CLR[r.resolution]||'var(--t2)')+'">'+(LBL[r.resolution]||r.resolution)+'</td>'
+        +'<td>'+r.mappedTo+'</td>'
+        +'<td style="font-weight:600">'+r.count+'</td></tr>';
+   }).join('')
+   +'</tbody></table></div></div>';
+}
+function exportOwnerAudit(){
+  var rows=ownerAuditSummary();
+  var esc=function(s){s=String(s==null?'':s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
+  var csv='Module,Raw value,Resolution,Mapped to,Records\n'+rows.map(function(r){
+    return [r.module,r.raw,r.resolution,r.mappedTo,r.count].map(esc).join(',');
+  }).join('\n');
+  var b=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');
+  a.href=URL.createObjectURL(b);a.download='owner-audit.csv';a.click();URL.revokeObjectURL(a.href);
+  if(typeof toast!=='undefined')toast('Exported '+rows.length+' owner issues','success');
+}
+
+applyOwnerNormalization();
 
 // ══════ CFG ══════
 let CFG=JSON.parse(localStorage.getItem('madio_cfg3')||'{}');
@@ -3382,7 +3510,7 @@ function showPage(id){
 }
 
 function renderPage(id){
-  const rmap={dash:renderDash,alerts:renderAlerts,pipeline:renderKanban,quotes:()=>renderQ('all'),sales:()=>renderS('all'),visitors:()=>renderV('all'),navaki:renderN,revenue:renderRevenue,leaderboard:renderLeaderboard,sources:renderSources,architects:renderA,meetplan:renderMeets,inventory:renderInv,'inv-analytics':renderInvAnalytics,petty:renderPetty,outstanding:renderOutstanding,'est':()=>{ if(typeof setDiv!=='undefined'){setDiv(window._qgLastDiv||'mf');} },'media':renderMedia,'attendance':()=>{},'admin-roles':()=>setTimeout(renderAdminRoles,80),'tasks':()=>{ renderTasks&&renderTasks();renderActivityFeed&&renderActivityFeed(); },'catalogue':()=>{ setTimeout(renderCatalogue,80); },'audit':()=>{ renderAudSessionHeader&&renderAudSessionHeader();renderAudKPIs&&renderAudKPIs(); },'pl':renderPL,'invoice-gen':renderInvoiceGen,'tally-import':renderTallyImport,'daily-book':renderDailyBook,'party-ledger':renderPartyLedger,'voucher-entry':renderVoucherEntry};
+  const rmap={dash:renderDash,alerts:renderAlerts,pipeline:renderKanban,quotes:()=>renderQ('all'),sales:()=>renderS('all'),visitors:()=>renderV('all'),navaki:renderN,revenue:renderRevenue,leaderboard:renderLeaderboard,sources:renderSources,architects:renderA,meetplan:renderMeets,inventory:renderInv,'inv-analytics':renderInvAnalytics,petty:renderPetty,outstanding:renderOutstanding,'est':()=>{ if(typeof setDiv!=='undefined'){setDiv(window._qgLastDiv||'mf');} },'media':renderMedia,'attendance':()=>{},'admin-roles':()=>setTimeout(renderAdminRoles,80),'tasks':()=>{ renderTasks&&renderTasks();renderActivityFeed&&renderActivityFeed(); },'catalogue':()=>{ setTimeout(renderCatalogue,80); },'audit':()=>{ renderAudSessionHeader&&renderAudSessionHeader();renderAudKPIs&&renderAudKPIs(); },'data-centre':renderOwnerAudit,'pl':renderPL,'invoice-gen':renderInvoiceGen,'tally-import':renderTallyImport,'daily-book':renderDailyBook,'party-ledger':renderPartyLedger,'voucher-entry':renderVoucherEntry};
   rmap[id]?.();
 }
 
@@ -4192,7 +4320,7 @@ async function pullAppsScript(){
   try{
     const sheets=['Quotes_2026','Sales_Register','Visitors','Navaki_Leads'];
     const [qR,sR,vR,nR]=await Promise.all(sheets.map(s=>fetch(url+'?sheet='+s).then(r=>r.json())));
-    if(qR.rows?.length){Q26=qR.rows;Q26.forEach(migrateQuote);persistQuotes();toast('Pulled '+Q26.length+' quotes','success');}
+    if(qR.rows?.length){Q26=qR.rows;Q26.forEach(migrateQuote);applyOwnerNormalization();persistQuotes();toast('Pulled '+Q26.length+' quotes','success');}
     if(sR.rows?.length)SALES=sR.rows;
     if(vR.rows?.length)VISITORS=vR.rows;
     if(nR.rows?.length)NAVAKI=nR.rows;
@@ -11710,7 +11838,7 @@ function mountFilterBar(cfg){
       if(['MAP','Furniture','D&W'].indexOf(chip)>-1) return x.div===chip;
       return x.stage===chip;
     },
-    selects:[{key:'by',label:'Team',allLabel:'All team',options:function(){return _fbUniq(SALES,'by');}}],
+    selects:[{key:'ownerId',label:'Team',allLabel:'All team',options:function(){return _fbUniq(SALES,'ownerId');}}],
     search:['name','id','phone','qref','af'],
     searchHint:'Name, MF no, phone…',
     sort:[
@@ -11762,7 +11890,7 @@ function mountFilterBar(cfg){
     chips:[{v:'all',label:'All'},{v:'New Lead',label:'\uD83C\uDD95 New'},{v:'Follow-Up',label:'\uD83D\uDCDE Follow'},{v:'Quoted',label:'\uD83D\uDCCB Quoted'},{v:'Delivered',label:'\u2705 Done'}],
     chipFilter:function(x,chip){return x.stage===chip;},
     selects:[
-      {key:'by', label:'Team',        allLabel:'All team',        options:function(){return _fbUniq(VISITORS,'by');}},
+      {key:'ownerId', label:'Team',   allLabel:'All team',        options:function(){return _fbUniq(VISITORS,'ownerId');}},
       {key:'req',label:'Requirement', allLabel:'All requirements', options:function(){return _fbUniq(VISITORS,'req');}}
     ],
     search:['name','phone','ref','req'],
