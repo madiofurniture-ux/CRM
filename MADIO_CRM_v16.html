@@ -793,16 +793,9 @@ canvas{max-width:100%;display:block}
     <div class="ph"><span class="pt">MF Sales Register</span><span class="ps" id="s-ct">110 records</span>
       <button class="btn btn-gold" style="margin-left:auto;padding:3px 10px;font-size:10px" onclick="openModal('sale',null)">+ New Sale</button>
     </div>
-    <div class="fbar" id="s-fbar">
-      <span class="fc on" onclick="fS('all',this)">All</span>
-      <span class="fc" onclick="fS('MAP',this)">MAP</span>
-      <span class="fc" onclick="fS('Furniture',this)">Furniture</span>
-      <span class="fc-sep"></span>
-      <span class="fc" onclick="fS('Delivered',this)">✅ Delivered</span>
-      <span class="fc" onclick="fS('Adv Received',this)">💰 Adv</span>
-      <span class="fi"><select onchange="fSBy(this.value)" id="s-by-filter"><option value="">All team</option></select></span>
-    </div>
+    <div class="fbar" id="s-fbar"></div>
     <div class="tw"><table><thead><tr>
+      <th style="width:26px;text-align:center"><input type="checkbox" id="s-selall" onclick="_fbSelAll('sales',this.checked)"></th>
       <th>MF No</th><th>Date</th><th>Customer</th><th>Div</th><th>AF Quote</th>
       <th>By</th><th>Value</th><th>Paid</th><th>Balance</th><th>Stage</th><th>WhatsApp</th><th>Actions</th>
     </tr></thead><tbody id="s-tbody"></tbody></table></div>
@@ -827,10 +820,12 @@ canvas{max-width:100%;display:block}
 <!-- ══════════════════ NAVAKI ══════════════════ -->
 <div class="page" id="p-navaki">
   <div class="panel">
-    <div class="ph"><span class="pt">Navaki Channel Leads</span><span class="ps">219 leads</span>
+    <div class="ph"><span class="pt">Navaki Channel Leads</span><span class="ps" id="n-ct">219 leads</span>
       <button class="btn btn-gold" style="margin-left:auto;padding:3px 10px;font-size:10px" onclick="openModal('navaki',null)">+ Add</button>
     </div>
+    <div class="fbar" id="n-fbar"></div>
     <div class="tw"><table><thead><tr>
+      <th style="width:26px;text-align:center"><input type="checkbox" id="n-selall" onclick="_fbSelAll('navaki',this.checked)"></th>
       <th>#</th><th>Date</th><th>Name</th><th>Phone</th>
       <th>Stage</th><th>Follow-Up</th><th>Remarks</th><th>WhatsApp</th><th>Actions</th>
     </tr></thead><tbody id="n-tbody"></tbody></table></div>
@@ -11487,6 +11482,14 @@ var _fbSelSets={};          // page -> Set of selected id strings
 var _FB_VIEWS_KEY='madio_views_v1';
 function _fbUniq(arr,f){var seen={},out=[];arr.forEach(function(x){var v=x[f];if(v&&!seen[v]){seen[v]=1;out.push(v);}});return out.sort();}
 function _fbSel(page){ if(!_fbSelSets[page])_fbSelSets[page]=new Set(); return _fbSelSets[page]; }
+// Follow-up urgency bucket from a date string (uses the shared _parseD parser).
+function _fbFuBucket(d){
+  var t=_parseD(d); if(!t) return 'None';
+  var now=new Date(); var today=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
+  if(t<today) return 'Overdue';
+  if(t<=today+7*864e5) return 'Due 7d';
+  return 'Later';
+}
 function _fbToggle(page,id,on){ var s=_fbSel(page); if(on)s.add(String(id)); else s.delete(String(id)); var fb=_FB[page]; if(fb)fb.updateBulk(); }
 function _fbSelAll(page,on){ var fb=_FB[page]; if(!fb)return; var s=_fbSel(page); fb.project().forEach(function(r){var id=String(r[fb.idField]); if(on)s.add(id); else s.delete(id);}); fb.refresh(); }
 function _fbLoadViews(page){ try{var all=JSON.parse(localStorage.getItem(_FB_VIEWS_KEY)||'{}');return all[page]||[];}catch(e){return [];} }
@@ -11567,7 +11570,7 @@ function mountFilterBar(cfg){
     var ch=document.querySelector(cfg.chipHost);if(ch)ch.querySelectorAll('.fc').forEach(function(sp){sp.classList.toggle('on',sp.getAttribute('data-v')===state.chip);});
   }
   function project(){
-    var d=cfg.data().map(function(x,i){return Object.assign({},x,{_i:i});});
+    var d=cfg.data().map(function(x,i){var r=Object.assign({},x,{_i:i});if(cfg.derive)Object.assign(r,cfg.derive(r));return r;});
     if(state.chip&&state.chip!=='all'&&cfg.chipFilter)d=d.filter(function(x){return cfg.chipFilter(x,state.chip);});
     Object.keys(state.extra).forEach(function(k){var val=state.extra[k];if(val)d=d.filter(function(x){return String(x[k]||'')===val;});});
     if(state.q){var q=state.q.toLowerCase();d=d.filter(function(x){return (cfg.search||[]).some(function(f){return String(x[f]||'').toLowerCase().indexOf(q)>-1;});});}
@@ -11587,8 +11590,9 @@ function mountFilterBar(cfg){
   function refresh(){
     inject();
     var d=project();
-    var ctl=document.getElementById('fbct-'+PAGE);if(ctl)ctl.textContent=d.length+(d.length===1?' record':' records');
-    if(cfg.countEl){var c2=document.querySelector(cfg.countEl);if(c2)c2.textContent=d.length+' records';}
+    var noun=cfg.countNoun||'records';
+    var ctl=document.getElementById('fbct-'+PAGE);if(ctl)ctl.textContent=d.length+' '+noun;
+    if(cfg.countEl){var c2=document.querySelector(cfg.countEl);if(c2)c2.textContent=d.length+' '+noun;}
     var tb=document.querySelector(cfg.tbody);if(tb)tb.innerHTML=d.map(cfg.rowHtml).join('');
     updateBulk();
   }
@@ -11668,63 +11672,64 @@ function mountFilterBar(cfg){
 })();
 
 // ================================================================
-// SALES sort
+// SALES — migrated to the reusable FilterBar
 // ================================================================
 (function(){
-  var BAR_ID = 'sb-sales'; var PAGE = 'sales';
-  function inject() {
-    var ph = document.querySelector('#p-sales .ph');
-    if(!ph||document.getElementById(BAR_ID)) return;
-    var bar=document.createElement('div'); bar.id=BAR_ID; bar.className='sb2';
-    bar.innerHTML='<label>Sort</label>'
-      +'<select id="sc-'+PAGE+'">'
-        +'<option value="">Date \u2193 (default)</option>'
-        +'<option value="date:date">Date</option>'
-        +'<option value="name:str">Customer</option>'
-        +'<option value="value:num">Value</option>'
-        +'<option value="balance:num">Balance</option>'
-        +'<option value="div:str">Division</option>'
-        +'<option value="by:str">By</option>'
-      +'</select>'
-      +'<span class="sdir" id="sdir-'+PAGE+'" onclick="_toggleDir(\''+PAGE+'\')">\u2191</span>'
-      +'<input id="srch-'+PAGE+'" placeholder="\uD83D\uDD0D Name, ID, phone\u2026" style="min-width:150px">'
-      +'<span class="scnt2" id="sct-'+PAGE+'"></span>';
-    ph.insertAdjacentElement('afterend',bar);
-    bar.querySelector('select').onchange=function(){_applySort(PAGE);};
-    bar.querySelector('input').oninput=function(){_applySort(PAGE);};
+  var PAGE='sales';
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function money(v){return typeof fmt!=='undefined'?fmt(v||0):'₹'+(v||0);}
+  function rowHtml(s){
+    var bal=s.balance, checked=_fbSel(PAGE).has(String(s.id))?' checked':'';
+    return '<tr onclick="openModal(\'sale\','+s._i+')">'
+      +'<td onclick="event.stopPropagation()" style="text-align:center"><input type="checkbox"'+checked+' onclick="_fbToggle(\''+PAGE+'\',\''+esc(s.id)+'\',this.checked)"></td>'
+      +'<td class="mono" style="color:var(--gold2)">'+esc(s.id)+'</td><td>'+esc(s.date)+'</td>'
+      +'<td class="primary">'+esc(s.name)+'</td><td>'+esc(s.div)+'</td>'
+      +'<td style="color:var(--t3)">'+(esc(s.qref||s.af)||'—')+'</td><td>'+(esc(s.by)||'—')+'</td>'
+      +'<td style="font-weight:600;color:var(--gold2)">'+money(s.value)+'</td>'
+      +'<td style="color:var(--green)">'+money(s.paidTotal)+'</td>'
+      +'<td style="color:'+(bal>0?'var(--amber)':'var(--green)')+'">'+money(bal)+'</td>'
+      +'<td>'+(typeof stageBdg!=='undefined'?stageBdg(s.stage):esc(s.stage))+'</td>'
+      +'<td onclick="event.stopPropagation()"><a href="https://wa.me/91'+((s.phone||'').replace(/\D/g,''))+'" target="_blank" style="color:#25d366;font-size:14px">&#128172;</a></td>'
+      +'<td onclick="event.stopPropagation()"><button class="btn-xs" onclick="openModal(\'sale\','+s._i+')">&#9998;</button></td>'
+      +'</tr>';
   }
-  _sortFns[PAGE]=function(f){
-    inject();
-    var col=(document.getElementById('sc-'+PAGE)||{}).value||'';
-    var dir=(_SS[PAGE]||{}).dir||'asc';
-    var q=((document.getElementById('srch-'+PAGE)||{}).value||'').toLowerCase();
-    var byF=typeof sByFilter!=='undefined'?sByFilter:'';
-    var d=SALES.map(function(x,i){return Object.assign({},x,{_i:i,balance:(x.value||0)-(x.cash||0)-(x.bank||0)});});
-    if(f&&['MAP','Furniture'].includes(f)) d=d.filter(function(x){return x.div===f;});
-    else if(f==='Delivered') d=d.filter(function(x){return x.stage==='Delivered';});
-    else if(f==='Adv Received') d=d.filter(function(x){return x.stage==='Adv Received';});
-    if(byF) d=d.filter(function(x){return x.by===byF;});
-    if(q) d=d.filter(function(x){return (x.name||'').toLowerCase().includes(q)||(x.id||'').includes(q)||(x.phone||'').includes(q);});
-    var cv=col.split(':'); d=col?_sortData(d,cv[0],dir,cv[1]||'str'):_sortData(d,'date','desc','date');
-    var ct=document.getElementById('sct-'+PAGE); if(ct) ct.textContent=d.length+' records';
-    var tbody=document.getElementById('s-tbody'); if(!tbody)return;
-    tbody.innerHTML=d.map(function(s){
-      var bal=(s.value||0)-(s.cash||0)-(s.bank||0);
-      return '<tr onclick="openModal(\'sale\','+s._i+')">'
-        +'<td class="mono" style="color:var(--gold2)">'+(s.id||'')+'</td><td>'+(s.date||'')+'</td>'
-        +'<td class="primary">'+s.name+'</td><td>'+(s.div||'')+'</td>'
-        +'<td style="color:var(--t3)">'+(s.qref||'\u2014')+'</td><td>'+(s.by||'\u2014')+'</td>'
-        +'<td style="font-weight:600;color:var(--gold2)">'+(typeof fmt!=='undefined'?fmt(s.value||0):s.value||0)+'</td>'
-        +'<td style="color:var(--green)">'+(typeof fmt!=='undefined'?fmt((s.cash||0)+(s.bank||0)):0)+'</td>'
-        +'<td style="color:'+(bal>0?'var(--amber)':'var(--green)')+'">'+(typeof fmt!=='undefined'?fmt(bal):bal)+'</td>'
-        +'<td>'+(typeof stageBdg!=='undefined'?stageBdg(s.stage):s.stage||'')+'</td>'
-        +'<td onclick="event.stopPropagation()"><a href="https://wa.me/91'+((s.phone||'').replace(/\D/g,''))+'" target="_blank" style="color:#25d366;font-size:14px">&#128172;</a></td>'
-        +'<td onclick="event.stopPropagation()"><button class="btn-xs" onclick="openModal(\'sale\','+s._i+')">&#9998;</button></td>'
-        +'</tr>';
-    }).join('');
-    var ct2=document.getElementById('s-ct'); if(ct2) ct2.textContent=d.length+' records';
-  };
-  var _origS=window.renderS; window.renderS=function(f){_sortFns[PAGE](f);};
+  window._salesFB=mountFilterBar({
+    page:PAGE,
+    data:function(){return SALES;},
+    idField:'id',
+    // Sales store payments as cash/bank (seed) or paid (modal); support both.
+    derive:function(s){
+      var paid=(s.paid!=null&&(s.cash==null&&s.bank==null))?(s.paid||0):((s.cash||0)+(s.bank||0));
+      return {paidTotal:paid, balance:(s.value||0)-paid};
+    },
+    chipHost:'#s-fbar',
+    chips:[{v:'all',label:'All'},{v:'MAP',label:'MAP'},{v:'Furniture',label:'Furniture'},{v:'D&W',label:'D&W'},
+           {v:'Delivered',label:'✅ Delivered'},{v:'Adv Received',label:'💰 Adv'},{v:'__bal',label:'⚠ Balance due'}],
+    chipFilter:function(x,chip){
+      if(chip==='__bal') return (x.balance||0)>0;
+      if(['MAP','Furniture','D&W'].indexOf(chip)>-1) return x.div===chip;
+      return x.stage===chip;
+    },
+    selects:[{key:'by',label:'Team',allLabel:'All team',options:function(){return _fbUniq(SALES,'by');}}],
+    search:['name','id','phone','qref','af'],
+    searchHint:'Name, MF no, phone…',
+    sort:[
+      {v:'',label:'Balance ↓ (default)'},
+      {v:'date:date',label:'Date'},
+      {v:'name:str',label:'Customer'},
+      {v:'value:num',label:'Value'},
+      {v:'balance:num',label:'Balance'},
+      {v:'div:str',label:'Division'},
+      {v:'by:str',label:'By'}
+    ],
+    baseSort:'balance:num:desc',
+    countEl:'#s-ct',
+    tbody:'#s-tbody',
+    rowHtml:rowHtml,
+    exportName:'sales',
+    exportCols:[['id','MF No'],['date','Date'],['name','Customer'],['div','Div'],['qref','AF Quote'],['by','By'],['value','Value'],['paidTotal','Paid'],['balance','Balance'],['stage','Stage']]
+  });
+  window.renderS=function(f){var c=window._salesFB;if(f!==undefined&&f!==null&&f!=='')c.state.chip=f;c.syncControls();c.refresh();};
 })();
 
 // ================================================================
@@ -11781,59 +11786,61 @@ function mountFilterBar(cfg){
 })();
 
 // ================================================================
-// NAVAKI sort
+// NAVAKI (Unified Leads) — migrated to the reusable FilterBar
 // ================================================================
 (function(){
-  var BAR_ID='sb-navaki'; var PAGE='navaki';
-  function inject(){
-    var ph=document.querySelector('#p-navaki .ph');
-    if(!ph||document.getElementById(BAR_ID))return;
-    var bar=document.createElement('div'); bar.id=BAR_ID; bar.className='sb2';
-    bar.innerHTML='<label>Sort</label>'
-      +'<select id="sc-'+PAGE+'">'
-        +'<option value="">Date \u2193 (default)</option>'
-        +'<option value="date:date">Date Added</option>'
-        +'<option value="name:str">Name</option>'
-        +'<option value="fu_date:date">Follow-Up Date</option>'
-        +'<option value="stage:str">Stage</option>'
-      +'</select>'
-      +'<span class="sdir" id="sdir-'+PAGE+'" onclick="_toggleDir(\''+PAGE+'\')">\u2191</span>'
-      +'<select id="sf-'+PAGE+'" style="font-size:10px"><option value="">All Stages</option><option>New Lead</option><option>Follow-Up</option><option>Quoted</option><option>Converted</option><option>Dead</option></select>'
-      +'<input id="srch-'+PAGE+'" placeholder="\uD83D\uDD0D Name, phone, ref\u2026" style="min-width:130px">'
-      +'<span class="scnt2" id="sct-'+PAGE+'"></span>';
-    ph.insertAdjacentElement('afterend',bar);
-    bar.querySelector('select').onchange=function(){_applySort(PAGE);};
-    bar.querySelectorAll('select')[1].onchange=function(){_applySort(PAGE);};
-    bar.querySelector('input').oninput=function(){_applySort(PAGE);};
+  var PAGE='navaki';
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  var FU_CLR={'Overdue':'var(--red)','Due 7d':'var(--amber)'};
+  function rowHtml(n){
+    var checked=_fbSel(PAGE).has(String(n.sno||n._i))?' checked':'';
+    var fuTxt=n.fu_date?esc(n.fu_date):'—';
+    var clr=FU_CLR[n._fu];
+    return '<tr onclick="openModal(\'navaki\','+n._i+')">'
+      +'<td onclick="event.stopPropagation()" style="text-align:center"><input type="checkbox"'+checked+' onclick="_fbToggle(\''+PAGE+'\',\''+esc(n.sno||n._i)+'\',this.checked)"></td>'
+      +'<td>'+esc(n.sno||(n._i+1))+'</td><td>'+esc(n.date)+'</td>'
+      +'<td class="primary">'+esc(n.name)+'</td><td>'+(esc(n.phone)||'—')+'</td>'
+      +'<td><select style="background:var(--p2);border:1px solid var(--b1);color:var(--t1);font-size:10px;padding:2px 6px;border-radius:6px;outline:none" onclick="event.stopPropagation()" onchange="NAVAKI['+n._i+'].stage=this.value;_FB[\''+PAGE+'\'].refresh()">'
+        +['New Lead','Follow-Up','Quoted','Converted','Dead'].map(function(st){return '<option'+(n.stage===st?' selected':'')+'>'+st+'</option>';}).join('')
+      +'</select></td>'
+      +'<td'+(clr?' style="color:'+clr+';font-weight:600"':'')+'>'+fuTxt+'</td>'
+      +'<td style="color:var(--t3);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(n.remarks)+'</td>'
+      +'<td onclick="event.stopPropagation()"><a href="https://wa.me/91'+((n.phone||'').replace(/\D/g,''))+'" target="_blank" style="color:#25d366;font-size:14px">&#128172;</a></td>'
+      +'<td onclick="event.stopPropagation()"><button class="btn-xs" onclick="openModal(\'navaki\','+n._i+')">&#9998;</button></td>'
+      +'</tr>';
   }
-  _sortFns[PAGE]=function(){
-    inject();
-    var col=(document.getElementById('sc-'+PAGE)||{}).value||'';
-    var dir=(_SS[PAGE]||{}).dir||'asc';
-    var sf=(document.getElementById('sf-'+PAGE)||{}).value||'';
-    var q=((document.getElementById('srch-'+PAGE)||{}).value||'').toLowerCase();
-    var d=NAVAKI.map(function(x,i){return Object.assign({},x,{_i:i});});
-    if(sf) d=d.filter(function(x){return x.stage===sf;});
-    if(q) d=d.filter(function(x){return (x.name||'').toLowerCase().includes(q)||(x.phone||'').includes(q)||(x.ref||'').toLowerCase().includes(q);});
-    var cv=col.split(':'); d=col?_sortData(d,cv[0],dir,cv[1]||'str'):_sortData(d,'date','desc','date');
-    var ct=document.getElementById('sct-'+PAGE); if(ct) ct.textContent=d.length+' leads';
-    var tbody=document.getElementById('n-tbody'); if(!tbody)return;
-    tbody.innerHTML=d.map(function(n){
-      return '<tr onclick="openModal(\'navaki\','+n._i+')">'
-        +'<td>'+(n.sno||n._i+1)+'</td><td>'+(n.date||'')+'</td>'
-        +'<td class="primary">'+n.name+'</td><td>'+(n.phone||'\u2014')+'</td>'
-        +'<td><select style="background:var(--p2);border:1px solid var(--b1);color:var(--t1);font-size:10px;padding:2px 6px;border-radius:6px;outline:none" onclick="event.stopPropagation()" onchange="NAVAKI['+n._i+'].stage=this.value;_applySort(\'navaki\')">'
-          +['New Lead','Follow-Up','Quoted','Converted','Dead'].map(function(st){return '<option'+(n.stage===st?' selected':'')+'>'+st+'</option>';}).join('')
-        +'</select></td>'
-        +'<td>'+(n.fu_date||'\u2014')+'</td>'
-        +'<td style="color:var(--t3);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(n.remarks||'')+'</td>'
-        +'<td onclick="event.stopPropagation()"><a href="https://wa.me/91'+((n.phone||'').replace(/\D/g,''))+'" target="_blank" style="color:#25d366;font-size:14px">&#128172;</a></td>'
-        +'<td onclick="event.stopPropagation()"><button class="btn-xs" onclick="openModal(\'navaki\','+n._i+')">&#9998;</button></td>'
-        +'</tr>';
-    }).join('');
-    var ct2=document.getElementById('n-ct'); if(ct2) ct2.textContent=d.length+' leads';
-  };
-  var _origN=window.renderN; window.renderN=function(){_sortFns[PAGE]();};
+  window._navakiFB=mountFilterBar({
+    page:PAGE,
+    data:function(){return NAVAKI;},
+    idField:'sno',
+    derive:function(n){return {_fu:_fbFuBucket(n.fu_date)};},
+    chipHost:'#n-fbar',
+    chips:[{v:'all',label:'All'},{v:'Overdue',label:'⏰ Overdue'},{v:'Due 7d',label:'📅 Due 7d'},
+           {v:'New Lead',label:'🆕 New'},{v:'Follow-Up',label:'📞 Follow'},{v:'Quoted',label:'📋 Quoted'},
+           {v:'Converted',label:'✅ Converted'},{v:'Dead',label:'❌ Dead'}],
+    chipFilter:function(x,chip){
+      if(chip==='Overdue'||chip==='Due 7d') return x._fu===chip;
+      return x.stage===chip;
+    },
+    selects:[],
+    countNoun:'leads',
+    search:['name','phone','ref','remarks'],
+    searchHint:'Name, phone, ref…',
+    sort:[
+      {v:'',label:'Follow-up ↑ (default)'},
+      {v:'fu_date:date',label:'Follow-Up Date'},
+      {v:'date:date',label:'Date Added'},
+      {v:'name:str',label:'Name'},
+      {v:'stage:str',label:'Stage'}
+    ],
+    baseSort:'fu_date:date:asc',
+    countEl:'#n-ct',
+    tbody:'#n-tbody',
+    rowHtml:rowHtml,
+    exportName:'leads',
+    exportCols:[['sno','#'],['date','Date'],['name','Name'],['phone','Phone'],['stage','Stage'],['fu_date','Follow-Up'],['remarks','Remarks']]
+  });
+  window.renderN=function(){var c=window._navakiFB;c.refresh();};
 })();
 
 // ================================================================
