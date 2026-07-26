@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, Fragment } from "react";
 import Topbar from "@/components/Topbar";
 import api from "@/lib/api";
 import { toast } from "sonner";
@@ -93,14 +93,14 @@ export default function Meets() {
                 <div className="grid grid-cols-[60px_repeat(7,minmax(140px,1fr))] min-w-[900px]">
                   <div className="bg-[var(--surface-2)] border-b border-[var(--border)]" />
                   {days.map((d) => (
-                    <div key={d.toISOString()} className={`bg-[var(--surface-2)] border-b border-l border-[var(--border)] px-3 py-2 text-center ${isToday(d) ? "bg-[var(--brand-soft)]" : ""}`}>
+                    <div key={`h-${d.toISOString()}`} className={`bg-[var(--surface-2)] border-b border-l border-[var(--border)] px-3 py-2 text-center ${isToday(d) ? "bg-[var(--brand-soft)]" : ""}`}>
                       <div className="text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">{d.toLocaleDateString("en-IN", { weekday: "short" })}</div>
                       <div className={`font-heading font-bold text-lg ${isToday(d) ? "text-[var(--brand)]" : "text-[var(--ink)]"}`}>{d.getDate()}</div>
                     </div>
                   ))}
                   {HOURS.map((h) => (
-                    <>
-                      <div key={`h-${h}`} className="text-[10px] font-mono text-[var(--ink-3)] text-right pr-2 py-6 border-t border-[var(--border-light)]">{String(h).padStart(2, "0")}:00</div>
+                    <Fragment key={`row-${h}`}>
+                      <div className="text-[10px] font-mono text-[var(--ink-3)] text-right pr-2 py-6 border-t border-[var(--border-light)]">{String(h).padStart(2, "0")}:00</div>
                       {days.map((d) => {
                         const dateStr = d.toISOString().slice(0, 10);
                         const meets = (byDay[dateStr] || []).filter((m) => {
@@ -128,7 +128,7 @@ export default function Meets() {
                           </div>
                         );
                       })}
-                    </>
+                    </Fragment>
                   ))}
                 </div>
               </div>

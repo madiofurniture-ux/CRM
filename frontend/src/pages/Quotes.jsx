@@ -152,7 +152,7 @@ export default function Quotes() {
                     <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(q.value)}</td>
                     <td className="px-2 py-3">
                       <div className="flex items-center gap-1">
-                        <button onClick={() => setPrintRow(q)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" title="Print"><Printer size={13} /></button>
+                        <button onClick={() => setPrintRow(q)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" title="Print" data-testid={`q-print-${q.id}`}><Printer size={13} /></button>
                         <button onClick={() => openEdit(q)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Edit2 size={13} /></button>
                         <button onClick={() => remove(q.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
                       </div>

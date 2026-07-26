@@ -318,10 +318,10 @@ async def check_out(payload: AttendanceCheckIn, user: dict = Depends(get_current
         raise HTTPException(status_code=400, detail="Not checked in yet")
     if rec.get("check_out_at"):
         raise HTTPException(status_code=400, detail="Already checked out today")
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timezone as _tz
     try:
         ci = _dt.fromisoformat(rec["check_in_at"].replace("Z", "+00:00"))
-        co = _dt.now(timezone.utc)
+        co = _dt.now(_tz.utc)
         duration = int((co - ci).total_seconds() / 60)
     except Exception:
         duration = 0
