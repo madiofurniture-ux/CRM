@@ -9,6 +9,7 @@ const ALL_PAGES = [
   { id: "dashboard", label: "Dashboard" },
   { id: "pipeline", label: "Pipeline" },
   { id: "quotes", label: "Quotations" },
+  { id: "invoices", label: "Tax Invoices" },
   { id: "sales", label: "Sales" },
   { id: "visitors", label: "Visitors" },
   { id: "leads", label: "Leads" },
@@ -16,6 +17,10 @@ const ALL_PAGES = [
   { id: "inventory", label: "Inventory" },
   { id: "inv-analytics", label: "Inventory Analytics" },
   { id: "tasks", label: "Tasks" },
+  { id: "meets", label: "Meet Planner" },
+  { id: "petty-cash", label: "Petty Cash" },
+  { id: "outstanding", label: "Outstanding" },
+  { id: "attendance", label: "Attendance" },
 ];
 
 const COLORS = ["#C85A32", "#4A5D4E", "#D48B30", "#B24040", "#1A1D1A", "#5C7AA1"];
@@ -27,9 +32,39 @@ export default function RoleManager() {
   const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: ALL_PAGES.map((p) => p.id) };
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
+  const [office, setOffice] = useState({ name: "", lat: 17.4065, lng: 78.4772, radius_m: 200, address: "", gstin: "", invoice_prefix: "MAD" });
+  const [officeDirty, setOfficeDirty] = useState(false);
 
-  const load = async () => { const { data } = await api.get("/auth/users"); setUsers(data); };
+  const load = async () => {
+    const [u, o] = await Promise.all([api.get("/auth/users"), api.get("/settings/office")]);
+    setUsers(u.data);
+    setOffice(o.data);
+    setOfficeDirty(false);
+  };
   useEffect(() => { load(); }, []);
+
+  const saveOffice = async () => {
+    try {
+      await api.put("/settings/office", office);
+      toast.success("Office settings saved");
+      setOfficeDirty(false);
+    } catch (e) {
+      toast.error("Save failed");
+    }
+  };
+
+  const useMyLocation = () => {
+    if (!navigator.geolocation) { toast.error("Geolocation not supported"); return; }
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        setOffice((o) => ({ ...o, lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6) }));
+        setOfficeDirty(true);
+        toast.success("Location captured");
+      },
+      (e) => toast.error(e.message || "Location error"),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
 
   const openNew = () => { setEditing(null); setForm(empty); setShow(true); };
   const openEdit = (u) => {
@@ -72,8 +107,34 @@ export default function RoleManager() {
   return (
     <>
       <Topbar title="Role Manager" subtitle="Manage who can access what" onAdd={openNew} addLabel="Add User" />
-      <div className="p-6" data-testid="roles-page">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="p-4 md:p-6 space-y-8" data-testid="roles-page">
+        {/* Office & Geofence */}
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <div className="font-heading font-semibold text-[var(--ink)]">Office & Geofence</div>
+              <div className="text-xs text-[var(--ink-3)]">Used for attendance geofencing and invoices</div>
+            </div>
+            {officeDirty && <button onClick={saveOffice} className="btn-primary" data-testid="office-save">Save Settings</button>}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <F l="Company name" v={office.name} oc={(v) => { setOffice({ ...office, name: v }); setOfficeDirty(true); }} t2="office-name" />
+            <F l="Address" v={office.address} oc={(v) => { setOffice({ ...office, address: v }); setOfficeDirty(true); }} />
+            <F l="GSTIN" v={office.gstin} oc={(v) => { setOffice({ ...office, gstin: v }); setOfficeDirty(true); }} />
+            <F l="Invoice prefix" v={office.invoice_prefix} oc={(v) => { setOffice({ ...office, invoice_prefix: v }); setOfficeDirty(true); }} />
+            <F l="Latitude" v={office.lat} oc={(v) => { setOffice({ ...office, lat: parseFloat(v) || 0 }); setOfficeDirty(true); }} t2="office-lat" />
+            <F l="Longitude" v={office.lng} oc={(v) => { setOffice({ ...office, lng: parseFloat(v) || 0 }); setOfficeDirty(true); }} t2="office-lng" />
+            <F l="Radius (metres)" t="number" v={office.radius_m} oc={(v) => { setOffice({ ...office, radius_m: parseInt(v) || 0 }); setOfficeDirty(true); }} t2="office-radius" />
+            <div className="flex items-end">
+              <button onClick={useMyLocation} className="btn-ghost w-full" data-testid="office-use-loc">Use my location</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Users */}
+        <div>
+          <div className="mb-3 text-[11px] uppercase tracking-widest text-[var(--ink-3)] font-semibold">Users</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {users.map((u) => (
             <div key={u.id} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5" data-testid={`user-${u.id}`}>
               <div className="flex items-start justify-between mb-4">
@@ -106,6 +167,7 @@ export default function RoleManager() {
               </div>
             </div>
           ))}
+          </div>
         </div>
       </div>
 

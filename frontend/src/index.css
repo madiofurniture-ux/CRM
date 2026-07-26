@@ -162,3 +162,23 @@ body {
     border-color: hsl(var(--border));
   }
 }
+
+/* ------- Mobile responsiveness helpers ------- */
+@media (max-width: 640px) {
+  body { font-size: 14px; }
+  .btn-primary, .btn-ghost {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+  }
+}
+
+/* ------- Print styles (invoice / quote) ------- */
+@media print {
+  body { background: white !important; }
+  body.printing > div > :not(.print-view),
+  .no-print { display: none !important; }
+  .print-view { position: static !important; inset: auto !important; box-shadow: none !important; }
+  #print-area { max-width: 100% !important; padding: 0 !important; }
+  aside, [data-testid="sidebar"], [data-testid="topbar"] { display: none !important; }
+  @page { margin: 12mm; size: A4; }
+}

@@ -12,9 +12,9 @@ DATA_DIR = Path(__file__).parent / "data"
 
 SEED_USERS = [
     {"username": "admin", "name": "Admin", "pin": "1234", "role": "admin", "icon": "AD", "color": "#1A1D1A", "pages": None},
-    {"username": "raghu", "name": "Raghu MF", "pin": "2222", "role": "user", "icon": "RM", "color": "#C85A32", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "tasks"]},
-    {"username": "nenmu", "name": "Nenmu", "pin": "3333", "role": "user", "icon": "NM", "color": "#4A5D4E", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "tasks"]},
-    {"username": "gowtham", "name": "Gowtham Hive", "pin": "4444", "role": "user", "icon": "GH", "color": "#D48B30", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "tasks"]},
+    {"username": "raghu", "name": "Raghu MF", "pin": "2222", "role": "user", "icon": "RM", "color": "#C85A32", "pages": ["dashboard", "pipeline", "quotes", "invoices", "sales", "visitors", "leads", "architects", "inventory", "tasks", "meets", "petty-cash", "outstanding", "attendance"]},
+    {"username": "nenmu", "name": "Nenmu", "pin": "3333", "role": "user", "icon": "NM", "color": "#4A5D4E", "pages": ["dashboard", "pipeline", "quotes", "invoices", "sales", "visitors", "leads", "architects", "inventory", "tasks", "meets", "petty-cash", "outstanding", "attendance"]},
+    {"username": "gowtham", "name": "Gowtham Hive", "pin": "4444", "role": "user", "icon": "GH", "color": "#D48B30", "pages": ["dashboard", "pipeline", "quotes", "invoices", "sales", "visitors", "leads", "architects", "inventory", "tasks", "meets", "petty-cash", "outstanding", "attendance"]},
 ]
 
 
