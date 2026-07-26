@@ -56,29 +56,45 @@ export default function Login() {
     <div className="min-h-screen flex bg-[var(--bg)] relative overflow-hidden">
       <Toaster position="top-right" />
 
-      {/* Left: hero */}
-      <div className="hidden lg:flex w-1/2 relative items-end p-12">
-        <img
-          src="/login-hero.jpg"
-          alt=""
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-        <div className="relative z-10 text-white max-w-md">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-11 h-11 rounded-xl bg-[var(--brand)] flex items-center justify-center font-heading font-bold text-lg">M</div>
-            <div>
-              <div className="font-heading text-xl font-bold tracking-tight">MADIO CRM</div>
-              <div className="text-[11px] uppercase tracking-[0.2em] text-white/70">Furniture · Paints · D&W</div>
-            </div>
-          </div>
-          <h2 className="font-heading text-4xl font-bold leading-tight mb-3">
+      {/* Left: brand hero */}
+      <div className="hidden lg:flex w-1/2 relative items-center justify-center p-12 bg-[#0e0f0d] overflow-hidden">
+        {/* subtle grain / vignette */}
+        <div className="absolute inset-0 bg-gradient-to-br from-[#1a1d1a] via-[#0e0f0d] to-black" />
+        <div className="absolute -top-40 -left-40 w-96 h-96 rounded-full bg-[var(--brand)]/10 blur-[100px]" />
+        <div className="absolute -bottom-40 -right-20 w-[500px] h-[500px] rounded-full bg-[#d4a460]/10 blur-[120px]" />
+
+        <div className="relative z-10 max-w-md text-center">
+          {/* Master brand */}
+          <img src="/logos/madio-white.png" alt="MADIO" className="w-64 mx-auto mb-8 drop-shadow-[0_4px_20px_rgba(212,164,96,0.15)]" />
+
+          <div className="text-white/50 text-[11px] uppercase tracking-[0.32em] font-semibold mb-3">Three divisions · one home</div>
+
+          <h2 className="font-heading text-3xl font-bold text-white leading-tight mb-3">
             Every visitor.<br />Every quote.<br />Every deal — captured.
           </h2>
-          <p className="text-white/80 text-sm leading-relaxed">
-            Built for showrooms that move fast. Track walk-ins, manage pipelines,
-            quote on the floor, and watch your inventory in real time.
+          <p className="text-white/60 text-sm leading-relaxed mb-10">
+            Built for showrooms that move fast. Track walk-ins, quote on the floor,
+            invoice with GST, and watch your inventory in real time.
           </p>
+
+          {/* Division logos */}
+          <div className="pt-8 border-t border-white/10">
+            <div className="text-white/40 text-[10px] uppercase tracking-[0.28em] font-semibold mb-5">Divisions</div>
+            <div className="grid grid-cols-3 gap-4 items-center">
+              <div className="flex flex-col items-center gap-2 opacity-90 hover:opacity-100 transition">
+                <img src="/logos/madio-white.png" alt="Furniture" className="h-8 object-contain" />
+                <div className="text-white/50 text-[10px] uppercase tracking-widest">Furniture</div>
+              </div>
+              <div className="flex flex-col items-center gap-2 opacity-90 hover:opacity-100 transition">
+                <img src="/logos/doors-windows.webp" alt="Doors & Windows" className="h-10 object-contain" />
+                <div className="text-white/50 text-[10px] uppercase tracking-widest">D & W</div>
+              </div>
+              <div className="flex flex-col items-center gap-2 opacity-90 hover:opacity-100 transition">
+                <img src="/logos/map-white.png" alt="MAP" className="h-8 object-contain" />
+                <div className="text-white/50 text-[10px] uppercase tracking-widest">MAP Paints</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -89,8 +105,10 @@ export default function Login() {
 
         <div className="w-full max-w-md relative z-10">
           <div className="lg:hidden mb-8 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold">M</div>
-            <div className="font-heading text-lg font-bold">MADIO CRM</div>
+            <div className="bg-[#0e0f0d] rounded-xl px-3 py-2 flex items-center">
+              <img src="/logos/madio-white.png" alt="MADIO" className="h-6 object-contain" />
+            </div>
+            <div className="text-[10px] uppercase tracking-widest text-[var(--ink-3)] font-semibold">CRM Suite</div>
           </div>
 
           {!selected ? (

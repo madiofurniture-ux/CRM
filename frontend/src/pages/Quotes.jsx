@@ -188,7 +188,9 @@ function QuotePrint({ quote, office, onClose }) {
       <div className="max-w-4xl mx-auto p-8 print:p-0" id="print-area">
         <div className="flex justify-between items-start mb-8">
           <div>
-            <div className="w-16 h-16 rounded-xl bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold text-2xl mb-3">M</div>
+            <div className="w-40 mb-3 bg-[#0e0f0d] rounded-lg px-4 py-3 inline-block">
+              <img src="/logos/madio-white.png" alt="MADIO" className="h-10 object-contain" />
+            </div>
             <div className="font-heading font-bold text-2xl text-[var(--ink)]">{office.name || "MADIO"}</div>
             <div className="text-sm text-[var(--ink-2)]">{office.address}</div>
             {office.gstin && <div className="text-xs font-mono text-[var(--ink-3)] mt-1">GSTIN: {office.gstin}</div>}

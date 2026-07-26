@@ -73,7 +73,9 @@ export default function Sidebar({ open, onClose }) {
       <aside className={asideClass} data-testid="sidebar">
         <div className="px-5 pt-5 pb-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-lg bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold text-sm">M</div>
+            <div className="w-9 h-9 rounded-lg bg-[#0e0f0d] flex items-center justify-center overflow-hidden">
+              <img src="/logos/madio-white.png" alt="MADIO" className="w-6 object-contain" />
+            </div>
             <div>
               <div className="font-heading font-bold text-[15px] tracking-tight text-[var(--ink)] leading-tight">MADIO</div>
               <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--ink-3)]">CRM Suite</div>
