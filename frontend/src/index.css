@@ -1,0 +1,164 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* MADIO palette — earthy, terracotta, deep moss */
+  --bg: #f8f7f4;
+  --surface: #fdfdfd;
+  --surface-2: #f4f3ee;
+  --surface-hover: #f2f0eb;
+  --ink: #1a1d1a;
+  --ink-2: #5c5f5c;
+  --ink-3: #8a8c8a;
+  --brand: #c85a32;
+  --brand-hover: #a84a28;
+  --brand-soft: #f7ebe6;
+  --moss: #4a5d4e;
+  --moss-soft: #edf2ee;
+  --warn: #d48b30;
+  --warn-soft: #fdf4e7;
+  --danger: #b24040;
+  --danger-soft: #f8eaea;
+  --border: #e2e0d9;
+  --border-light: #ebe9e4;
+
+  --background: 41 14% 96%;
+  --foreground: 60 5% 11%;
+  --card: 0 0% 99%;
+  --card-foreground: 60 5% 11%;
+  --popover: 0 0% 99%;
+  --popover-foreground: 60 5% 11%;
+  --primary: 18 60% 49%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 40 13% 94%;
+  --secondary-foreground: 60 5% 11%;
+  --muted: 40 13% 94%;
+  --muted-foreground: 60 3% 37%;
+  --accent: 40 13% 94%;
+  --accent-foreground: 60 5% 11%;
+  --destructive: 0 47% 47%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 47 17% 86%;
+  --input: 47 17% 86%;
+  --ring: 18 60% 49%;
+  --radius: 0.625rem;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
+}
+
+.font-heading {
+  font-family: "Manrope", sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.font-mono {
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d8d6cf;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c0bdb4;
+}
+
+/* selection */
+::selection {
+  background: rgba(200, 90, 50, 0.18);
+  color: var(--ink);
+}
+
+/* Subtle gradient blob for login */
+.madio-blob {
+  position: absolute;
+  inset: auto;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Kanban drag */
+.kanban-card-dragging {
+  opacity: 0.5;
+  transform: rotate(2deg);
+}
+
+/* Animations */
+@keyframes fadeup {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fadeup { animation: fadeup 0.3s ease-out both; }
+
+@keyframes pinPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+.pin-dot-active {
+  animation: pinPulse 0.25s ease-out;
+}
+
+/* Buttons */
+.btn-primary {
+  background: var(--brand);
+  color: white;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 0.55rem 1rem;
+  font-size: 0.875rem;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.btn-primary:hover {
+  background: var(--brand-hover);
+  transform: translateY(-1px);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--border);
+  font-weight: 500;
+  border-radius: 8px;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.875rem;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.btn-ghost:hover {
+  background: var(--surface-hover);
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+}

@@ -1,0 +1,12 @@
+# Runtime-only subset — exactly what server.py / auth.py / models.py import.
+# The full requirements.txt includes dev + Emergent tooling (jq, pandas, boto3,
+# emergentintegrations) that the app never imports and that fails to build on some
+# platforms; use THIS file for production images.
+fastapi==0.110.1
+uvicorn[standard]==0.25.0
+motor==3.3.1
+pymongo==4.5.0
+python-dotenv>=1.0.1
+pydantic>=2.6.4
+pyjwt>=2.10.1
+bcrypt==4.1.3
