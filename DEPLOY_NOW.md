@@ -51,6 +51,17 @@ git push -u origin production
    |---|---|
    | `MONGO_URL` | your **new** Atlas string from Step 0 |
    | `CORS_ORIGINS` | `*` for now — tighten in Step 4 |
+   | `SEED_PINS` | the 7 role PINs you choose (format below) |
+
+   **`SEED_PINS`** — logins are roles, not people, so nobody is edited when staff
+   change. Pick seven 4-digit PINs and enter them as one line:
+
+   ```
+   promoter:XXXX,admin:XXXX,mf:XXXX,map:XXXX,mdw:XXXX,accounting:XXXX,reception:XXXX
+   ```
+
+   Leave it out and each role gets a random PIN, printed **once** in the Render
+   logs at first boot. PINs are never stored in the repo.
 
    (`DB_NAME=madio_crm` and a strong random `JWT_SECRET` are set automatically.)
 5. **Apply** and wait for the first build (~3 min).
@@ -91,16 +102,20 @@ work on refresh.
 1. **Restrict CORS:** Render → your service → **Environment** → set
    `CORS_ORIGINS` to your exact Netlify URL (e.g. `https://madio-crm.netlify.app`)
    → **Save** (it redeploys itself).
-2. **Change every PIN.** The seeded ones are public knowledge:
+2. **Check the role logins.** Seven role-based logins, no personal names:
 
-   | User | Seeded PIN |
-   |---|---|
-   | admin | 1234 |
-   | raghu | 2222 |
-   | nenmu | 3333 |
-   | gowtham | 4444 |
+   | Login | Shown as | Access |
+   |---|---|---|
+   | `promoter` | Promoter | everything |
+   | `admin` | Admin | everything |
+   | `mf` | MF | Furniture sales + stock |
+   | `map` | MAP | MAP sales + site surveys |
+   | `mdw` | MDW | D&W sales + site surveys |
+   | `accounting` | Accounting | money, reports, no sales editing |
+   | `reception` | Reception | visitors, leads, meetings |
 
-   Log in as `admin` → **Admin → Role Manager** → change all four.
+   PINs are whatever you set in `SEED_PINS` (or the random ones from the Render
+   log). Change any of them any time via **Admin → Role Manager**.
 
 ---
 

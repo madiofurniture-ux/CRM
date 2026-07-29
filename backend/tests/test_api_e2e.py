@@ -13,14 +13,15 @@ SAFETY: read-mostly. Anything it creates is deleted again, and any setting it
 flips is restored in a finally block — so it is safe to point at production.
 """
 import argparse
+import os
 import json
 import sys
 import urllib.error
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
-ADMIN = {"username": "admin", "pin": "1234"}
-USER = {"username": "raghu", "pin": "2222"}
+ADMIN = {"username": os.environ.get("E2E_ADMIN_USER","admin"), "pin": os.environ.get("E2E_ADMIN_PIN","1234")}
+USER = {"username": os.environ.get("E2E_USER_USER","mf"), "pin": os.environ.get("E2E_USER_PIN","2222")}
 
 _pass, _fail, _skip = 0, 0, 0
 _failures = []
