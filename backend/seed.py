@@ -1,6 +1,8 @@
 """Seed real sample data on startup."""
 import json
+import os
 import random
+import secrets
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
@@ -10,11 +12,69 @@ from models import now_iso, new_id, GST_DEFAULT
 DATA_DIR = Path(__file__).parent / "data"
 
 
+# ── Logins are ROLES, not people ──────────────────────────────────────────
+# Staff share a role login, so someone joining or leaving never means editing
+# users. Names appear on records (via "attend person" / owner fields), not here.
+#
+# PINs are NEVER hardcoded — this file is in a public repo, and a committed PIN
+# is the same as no PIN at all. Supply them at deploy time:
+#
+#     SEED_PINS=Promoter:8471,Admin:2093,MF:5510,MAP:6624,MDW:7735,Accounting:3348,Reception:9902
+#
+# Anything not supplied gets a random 4-digit PIN, printed ONCE to the server log
+# at first startup so an admin can hand it out and then change it in Role Manager.
+
+_SALES_PAGES = ["dashboard", "alerts", "pipeline", "quotes", "sales", "visitors",
+                "leads", "architects", "inventory", "inv-analytics", "projects",
+                "meetplan", "tasks", "attendance", "reports"]
+
+# NOTE: /auth/login does username.lower(), so the stored username MUST be
+# lowercase or the lookup never matches. `name` is what the login screen shows.
+SEED_ROLES = [
+    # username     display       icon  colour     pages (None = full admin)
+    ("promoter",   "Promoter",   "PR", "#1A1D1A", None),
+    ("admin",      "Admin",      "AD", "#3A3F3A", None),
+    ("mf",         "MF",         "MF", "#C85A32", _SALES_PAGES),
+    ("map",        "MAP",        "MP", "#D48B30", _SALES_PAGES + ["dwsurvey"]),
+    ("mdw",        "MDW",        "DW", "#4A5D4E", _SALES_PAGES + ["dwsurvey"]),
+    ("accounting", "Accounting", "AC", "#2F5D7C",
+     ["dashboard", "alerts", "sales", "outstanding", "invoice-gen", "petty",
+      "reports", "tasks", "data-centre"]),
+    ("reception",  "Reception",  "RC", "#7C5D9C",
+     ["dashboard", "visitors", "leads", "meetplan", "tasks", "attendance"]),
+]
+
+
+def _seed_pins() -> dict:
+    """PINs from the SEED_PINS env var; the rest are random and logged once."""
+    supplied = {}
+    raw = os.environ.get("SEED_PINS", "")
+    for part in raw.split(","):
+        if ":" in part:
+            k, v = part.split(":", 1)
+            k, v = k.strip(), v.strip()
+            if k and v.isdigit():
+                supplied[k.lower()] = v
+    out, generated = {}, []
+    for username, *_ in SEED_ROLES:
+        pin = supplied.get(username.lower())
+        if not pin:
+            pin = f"{secrets.randbelow(9000) + 1000}"
+            generated.append(f"{username}={pin}")
+        out[username] = pin
+    if generated:
+        print("=" * 64)
+        print("MADIO CRM — generated PINs for roles with no SEED_PINS entry.")
+        print("Shown ONCE. Change them in Admin > Role Manager after first login.")
+        print("   " + "   ".join(generated))
+        print("=" * 64)
+    return out
+
+
 SEED_USERS = [
-    {"username": "admin", "name": "Admin", "pin": "1234", "role": "admin", "icon": "AD", "color": "#1A1D1A", "pages": None},
-    {"username": "raghu", "name": "Raghu MF", "pin": "2222", "role": "user", "icon": "RM", "color": "#C85A32", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "inv-analytics", "projects", "attendance", "tasks"]},
-    {"username": "nenmu", "name": "Nenmu", "pin": "3333", "role": "user", "icon": "NM", "color": "#4A5D4E", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "inv-analytics", "projects", "attendance", "tasks"]},
-    {"username": "gowtham", "name": "Gowtham Hive", "pin": "4444", "role": "user", "icon": "GH", "color": "#D48B30", "pages": ["dashboard", "pipeline", "quotes", "sales", "visitors", "leads", "architects", "inventory", "inv-analytics", "projects", "attendance", "tasks"]},
+    {"username": u, "name": name, "pin": "", "role": ("admin" if pages is None else "user"),
+     "icon": icon, "color": colour, "pages": pages}
+    for (u, name, icon, colour, pages) in SEED_ROLES
 ]
 
 
@@ -46,6 +106,7 @@ def _norm_phone(p):
 
 
 async def seed_users(db):
+    pins = _seed_pins()
     for u in SEED_USERS:
         existing = await db.users.find_one({"username": u["username"]})
         if existing:
@@ -56,7 +117,7 @@ async def seed_users(db):
             "id": new_id(),
             "username": u["username"],
             "name": u["name"],
-            "pin_hash": hash_pin(u["pin"]),
+            "pin_hash": hash_pin(pins[u["username"]]),
             "role": u["role"],
             "icon": u["icon"],
             "color": u["color"],
