@@ -1,0 +1,21 @@
+# Render.com blueprint — one free web service for the FastAPI backend.
+# In Render: New → Blueprint → connect this repo → it reads this file.
+# Set MONGO_URL and CORS_ORIGINS in the dashboard (they are secrets / per-deploy).
+services:
+  - type: web
+    name: madio-crm-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements-prod.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/
+    envVars:
+      - key: MONGO_URL          # from MongoDB Atlas — set in dashboard, do NOT commit
+        sync: false
+      - key: DB_NAME
+        value: madio_crm
+      - key: JWT_SECRET         # Render generates a strong random value
+        generateValue: true
+      - key: CORS_ORIGINS       # e.g. https://crm.madiofurniture.com
+        sync: false
