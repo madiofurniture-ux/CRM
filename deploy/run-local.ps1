@@ -23,7 +23,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$NodeDir = "C:\Users\jagad\AppData\Local\Temp\nd\node-v20.18.1-win-arm64"
+$NodeDir = "C:\Users\jagad\AppData\Local\nodejs-portable\node-v20.18.1-win-arm64"
 if (Test-Path $NodeDir) { $env:PATH = "$NodeDir;$env:PATH" }
 
 # ── 1. can we reach Atlas? ────────────────────────────────────────────────
@@ -118,14 +118,15 @@ Write-Host "======================================================" -ForegroundC
 Write-Host "  MADIO CRM is running:  $url"
 Write-Host "  API:                   $apiUrl/api/"
 Write-Host ""
-Write-Host "  Log in as   admin / 1234"
-Write-Host "  Sales user  raghu / 2222   (to check role restrictions)"
+Write-Host "  Logins are ROLES: promoter, admin, mf, map, mdw, accounting, reception"
+Write-Host "  PINs: backendole-pins.env (live) or the sandbox PINs printed in the log"
 Write-Host ""
 Write-Host "  Worth checking:"
 Write-Host "    Inventory            643 items, product photos"
 Write-Host "    Projects             opens without error (was crashing)"
 Write-Host "    D&W Survey           remarks + Add photo"
 Write-Host "    Admin > Financial Year   hide/show a year"
+Write-Host "    Admin > Workflows        edit stages, Use my data, enforce"
 Write-Host "    Sales                then re-check after hiding a year"
 Write-Host ""
 Write-Host "  Ctrl+C here to stop." -ForegroundColor DarkGray

@@ -275,6 +275,131 @@ def main():
         _skip += 1
         print(f"  SKIP  D&W survey tests (create returned {s})")
 
+    # ── workflows: the entity stage model ──────────────────────────────
+    section("Workflows — configurable stages per entity")
+    s, wfs = call("GET", "/api/workflows", token=admin_tok)
+    check("workflow list covers every entity",
+          s == 200 and isinstance(wfs, dict) and len(wfs) == 7,
+          f"got {s} {len(wfs) if isinstance(wfs, dict) else str(wfs)[:60]}")
+    if isinstance(wfs, dict) and wfs:
+        check("every entity has stages", all(w.get("stages") for w in wfs.values()),
+              [k for k, w in wfs.items() if not w.get("stages")])
+        # Reporting needs somewhere to end and something to count as success.
+        check("every workflow has an end and a win",
+              all(any(st.get("terminal") for st in w["stages"])
+                  and any(st.get("won") for st in w["stages"]) for w in wfs.values()),
+              [k for k, w in wfs.items()
+               if not (any(st.get("terminal") for st in w["stages"])
+                       and any(st.get("won") for st in w["stages"]))])
+        # A product must not ship with one customer's vocabulary baked in.
+        default_labels = {st["label"].lower()
+                          for w in wfs.values() if not w.get("customised")
+                          for st in w["stages"]}
+        check("shipped defaults are generic, not one business's words",
+              not (default_labels & {"vis", "madio", "map", "mdw", "pch", "nav", "arc"}),
+              sorted(default_labels & {"vis", "madio", "map", "mdw", "pch", "nav", "arc"}))
+
+    s, _ = call("GET", "/api/workflows/not-a-real-entity", token=admin_tok)
+    check("unknown entity is rejected", s == 404, f"got {s}")
+
+    s, _ = call("PUT", "/api/workflows/lead", {"stages": []})
+    check("unauthenticated cannot redefine a workflow", s in (401, 403), f"got {s}")
+    if user_tok:
+        for verb, path in (("PUT", "/api/workflows/lead"),
+                           ("POST", "/api/workflows/lead/adopt"),
+                           ("POST", "/api/workflows/lead/reset")):
+            s, _ = call(verb, path, {"stages": [{"label": "Hijacked"}]}, token=user_tok)
+            check(f"non-admin cannot {verb} {path.split('/')[-1]}", s == 403, f"got {s}")
+        s, _ = call("GET", "/api/workflows/lead", token=user_tok)
+        check("non-admin can still read the workflow", s == 200, f"got {s}")
+
+    s, _ = call("PUT", "/api/workflows/lead", {"stages": [{"label": ""}]}, token=admin_tok)
+    check("a nameless stage is rejected", s == 400, f"got {s}")
+
+    # Round-trip adopt → enforce → orphan guard → reset, restoring whatever
+    # this tenant had before so the run stays safe against production.
+    orig_lead = (wfs or {}).get("lead") or {}
+
+    def restore_lead():
+        if orig_lead.get("customised"):
+            call("PUT", "/api/workflows/lead",
+                 {"stages": orig_lead["stages"], "enforce": orig_lead.get("enforced", True),
+                  "force": True}, token=admin_tok)
+        else:
+            call("POST", "/api/workflows/lead/reset", token=admin_tok)
+
+    try:
+        s, ad = call("POST", "/api/workflows/lead/adopt", {"enforce": True}, token=admin_tok)
+        check("adopt learns the stages the data already uses",
+              s == 200 and isinstance(ad, dict) and "adopted_from_records" in ad,
+              f"got {s} {str(ad)[:80]}")
+        learned = (ad or {}).get("stages") or []
+        n_learned = (ad or {}).get("adopted_from_records", 0)
+
+        # Adoption is the safe route to enforcement: nothing existing may break.
+        s, re_put = call("PUT", "/api/workflows/lead",
+                         {"stages": learned, "enforce": True}, token=admin_tok)
+        check("adopted stages leave no record orphaned", s == 200 and not (re_put or {}).get("orphaned_stages"),
+              f"got {s} {(re_put or {}).get('orphaned_stages')}")
+
+        s, bad = call("POST", "/api/leads",
+                      {"date": "2026-05-14", "name": "ZZ E2E Stage Probe", "phone": "9000000003",
+                       "stage": "ZZ Definitely Not A Stage"}, token=admin_tok)
+        check("enforced workflow rejects an unknown stage", s == 400, f"got {s}")
+        check("rejection tells the user which stages are valid",
+              isinstance(bad, dict) and bool((bad.get("detail") or {}).get("valid_stages")
+                                             if isinstance(bad.get("detail"), dict) else False),
+              str(bad)[:90])
+
+        if learned:
+            label = learned[0]["label"]
+            s, ok = call("POST", "/api/leads",
+                         {"date": "2026-05-14", "name": "ZZ E2E Stage Probe", "phone": "9000000003",
+                          "stage": label.lower()}, token=admin_tok)
+            check("a valid stage is accepted whatever the casing", s == 200, f"got {s}")
+            if s == 200 and ok and ok.get("id"):
+                check("stage is stored in its canonical spelling", ok.get("stage") == label,
+                      f"sent {label.lower()!r}, stored {ok.get('stage')!r}")
+                call("DELETE", f"/api/leads/{ok['id']}", token=admin_tok)
+
+        # Dropping a stage records still sit on must warn before it strands them.
+        if n_learned >= 2 and len(learned) >= 2:
+            dropped = learned[0]["label"]
+            s, conflict = call("PUT", "/api/workflows/lead",
+                               {"stages": learned[1:], "enforce": True}, token=admin_tok)
+            det = conflict.get("detail") if isinstance(conflict, dict) else {}
+            check("dropping a stage in use is refused with 409", s == 409, f"got {s}")
+            check("the refusal names the stranded stages",
+                  isinstance(det, dict) and dropped in (det.get("orphaned_stages") or []),
+                  str(det)[:90])
+            s, forced = call("PUT", "/api/workflows/lead",
+                             {"stages": learned[1:], "enforce": True, "force": True},
+                             token=admin_tok)
+            check("force:true lets the admin proceed deliberately", s == 200, f"got {s}")
+        else:
+            _skip += 1
+            print("  SKIP  orphaned-stage guard (not enough distinct stages in the data)")
+
+        s, rs = call("POST", "/api/workflows/lead/reset", token=admin_tok)
+        check("reset returns to the shipped defaults",
+              s == 200 and (rs or {}).get("customised") is False, f"got {s}")
+        s, after = call("GET", "/api/workflows/lead", token=admin_tok)
+        check("reset also lifts enforcement", not (after or {}).get("enforced"),
+              f"enforced={(after or {}).get('enforced')}")
+        s, free = call("POST", "/api/leads",
+                       {"date": "2026-05-14", "name": "ZZ E2E Stage Probe", "phone": "9000000003",
+                        "stage": "Anything Goes Now"}, token=admin_tok)
+        check("un-enforced workflow accepts any stage", s == 200, f"got {s}")
+        if s == 200 and free and free.get("id"):
+            call("DELETE", f"/api/leads/{free['id']}", token=admin_tok)
+    finally:
+        restore_lead()
+    s, back = call("GET", "/api/workflows/lead", token=admin_tok)
+    check("the tenant's original workflow is restored",
+          [st["label"] for st in (back or {}).get("stages", [])] ==
+          [st["label"] for st in orig_lead.get("stages", [])],
+          "workflow left modified — check manually")
+
     # ── reports / alerts shape ─────────────────────────────────────────
     section("Reports & alerts")
     s, rep = call("GET", "/api/reports", token=admin_tok)

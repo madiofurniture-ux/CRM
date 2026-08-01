@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Columns3, FileText, Receipt, UserPlus,
   Sparkles, Building2, Package, BarChart3, ListTodo, Users, LogOut, HardHat, MapPin,
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
-  CalendarRange
+  CalendarRange, Workflow
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
@@ -58,6 +58,7 @@ const SECTIONS = [
     items: [
       { id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database, adminOnly: true },
       { id: "financial-year", to: "/admin/financial-year", label: "Financial Year", icon: CalendarRange, adminOnly: true },
+      { id: "workflows", to: "/admin/workflows", label: "Workflows", icon: Workflow, adminOnly: true },
       { id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
     ],
   },

@@ -35,6 +35,7 @@ import QuoteWorkspace from "@/pages/QuoteWorkspace";
 import StockLedger from "@/pages/StockLedger";
 import DataCentre from "@/pages/DataCentre";
 import FinancialYear from "@/pages/FinancialYear";
+import Workflows from "@/pages/Workflows";
 
 function App() {
   return (
@@ -78,6 +79,7 @@ function App() {
           <Route path="/stock-ledger" element={<ProtectedRoute page="stock-ledger"><Layout><StockLedger /></Layout></ProtectedRoute>} />
           <Route path="/data-centre" element={<ProtectedRoute page="data-centre"><Layout><DataCentre /></Layout></ProtectedRoute>} />
           <Route path="/admin/financial-year" element={<ProtectedRoute page="financial-year"><Layout><FinancialYear /></Layout></ProtectedRoute>} />
+          <Route path="/admin/workflows" element={<ProtectedRoute page="workflows"><Layout><Workflows /></Layout></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
