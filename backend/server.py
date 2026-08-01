@@ -13,6 +13,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 
+import tenancy
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -217,9 +218,18 @@ async def visibility_settings() -> dict:
     }
 
 
-async def fy_query(collection: str, base: dict = None) -> dict:
-    """Mongo filter applying every visibility rule an admin has configured."""
+async def fy_query(collection: str, base: dict = None, user: dict = None) -> dict:
+    """
+    Mongo filter applying every visibility rule: tenant isolation first, then
+    whatever an admin has configured (hidden financial years, hidden records,
+    auto-hidden closed business).
+
+    Tenant scoping is applied HERE, at the single chokepoint every list route
+    goes through, so a new endpoint cannot forget it.
+    """
     from datetime import date as _d, timedelta as _td
+
+    base = tenancy.scope(base, collection, user)
 
     q = dict(base or {})
     st = await visibility_settings()
@@ -248,8 +258,8 @@ async def fy_query(collection: str, base: dict = None) -> dict:
 # ---------- Generic CRUD helper (per-collection) ----------
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model):
     @router.get(f"/{base}")
-    async def _list(_: dict = Depends(get_current_user)):
-        q = await fy_query(collection)
+    async def _list(user: dict = Depends(get_current_user)):
+        q = await fy_query(collection, user=user)
         items = await db[collection].find(q, {"_id": 0}).sort("created_at", -1).to_list(3000)
         return items
 
@@ -258,8 +268,10 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         doc = payload.model_dump()
         doc["id"] = new_id()
         doc["created_at"] = now_iso()
+        await validate_stage(collection, doc, user)
         stamp_fy(doc, collection)
         stamp_closure(doc, collection)
+        tenancy.stamp(doc, collection, user)
         await db[collection].insert_one(doc)
         doc.pop("_id", None)
         return doc
@@ -268,19 +280,53 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     async def _update(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
         payload.pop("_id", None)
         payload.pop("id", None)
-        existing = await db[collection].find_one({"id": item_id})
+        payload.pop("tenant_id", None)   # a caller may never move a record between tenants
+        # Scoped lookup: an id from another tenant must read as "not found",
+        # not as someone else's record.
+        owned = tenancy.scope({"id": item_id}, collection, user)
+        existing = await db[collection].find_one(owned)
         if not existing:
             raise HTTPException(status_code=404, detail="Not found")
+        await validate_stage(collection, payload, user)
         stamp_fy(payload, collection)
         stamp_closure(payload, collection, existing)
-        await db[collection].update_one({"id": item_id}, {"$set": payload})
-        out = await db[collection].find_one({"id": item_id}, {"_id": 0})
+        await db[collection].update_one(owned, {"$set": payload})
+        out = await db[collection].find_one(owned, {"_id": 0})
         return out
 
     @router.delete(f"/{base}/{{item_id}}")
     async def _delete(item_id: str, user: dict = Depends(get_current_user)):
-        await db[collection].delete_one({"id": item_id})
+        # Scoped so one tenant can never delete another's record by id.
+        res = await db[collection].delete_one(tenancy.scope({"id": item_id}, collection, user))
+        if res.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Not found")
         return {"ok": True}
+
+
+DEFAULT_TENANT = os.environ.get("DEFAULT_TENANT", "madio")
+DEFAULT_TENANT_NAME = os.environ.get("DEFAULT_TENANT_NAME", "MADIO Furniture")
+
+
+async def backfill_tenant() -> int:
+    """
+    Give every untagged user and record a tenant.
+
+    Scoping is deliberately fail-closed, so a user with no tenant_id sees an
+    empty application. Seeded, imported and migrated rows never go through the
+    API's stamping, so without this a fresh install would look completely blank.
+    Idempotent — only touches documents that lack a tenant_id.
+    """
+    if not await db.tenants.find_one({"id": DEFAULT_TENANT}):
+        await db.tenants.insert_one({
+            "id": DEFAULT_TENANT, "slug": DEFAULT_TENANT, "name": DEFAULT_TENANT_NAME,
+            "plan": "owner", "status": "active", "created_at": now_iso(),
+        })
+    touched = 0
+    for coll in list(tenancy.TENANT_COLLECTIONS) + ["users"]:
+        res = await db[coll].update_many({"tenant_id": {"$exists": False}},
+                                         {"$set": {"tenant_id": DEFAULT_TENANT}})
+        touched += res.modified_count
+    return touched
 
 
 async def backfill_fy() -> int:
@@ -305,6 +351,248 @@ async def backfill_fy() -> int:
                 await db[coll].update_one({"_id": doc["_id"]}, {"$set": {"fy": fy}})
                 touched += 1
     return touched
+
+
+# ══════════════════════════════════════════════════════════════════
+# TENANTS — onboarding a business onto the platform.
+# ══════════════════════════════════════════════════════════════════
+@api.get("/tenants/me")
+async def tenant_me(user: dict = Depends(get_current_user)):
+    """Which business the caller belongs to — drives branding and limits."""
+    tid = tenancy.tenant_of(user)
+    t = await db.tenants.find_one({"id": tid}, {"_id": 0}) if tid else None
+    return t or {"id": tid, "name": tid or "(no tenant)", "status": "unknown"}
+
+
+@api.get("/tenants")
+async def tenants_list(user: dict = Depends(require_admin)):
+    """Platform view. Only the owner tenant may see the full customer list."""
+    if tenancy.tenant_of(user) != DEFAULT_TENANT:
+        raise HTTPException(status_code=403, detail="Not permitted")
+    out = []
+    for t in await db.tenants.find({}, {"_id": 0}).to_list(500):
+        t["users"] = await db.users.count_documents({"tenant_id": t["id"]})
+        t["records"] = sum([await db[c].count_documents({"tenant_id": t["id"]})
+                            for c in ("leads", "quotes", "sales", "inventory")])
+        out.append(t)
+    return out
+
+
+@api.post("/tenants")
+async def tenant_create(payload: dict, user: dict = Depends(require_admin)):
+    """
+    Onboard a business: creates the tenant and its first admin login.
+
+    Restricted to the owner tenant — this is the platform operator's action,
+    not something one customer can do to another.
+    """
+    if tenancy.tenant_of(user) != DEFAULT_TENANT:
+        raise HTTPException(status_code=403, detail="Not permitted")
+
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A business name is required")
+    tid = tenancy.slugify_tenant(payload.get("slug") or name)
+    if await db.tenants.find_one({"id": tid}):
+        raise HTTPException(status_code=400, detail=f"Tenant '{tid}' already exists")
+
+    admin_user = str(payload.get("admin_username") or f"{tid}-admin").lower().strip()
+    if await db.users.find_one({"username": admin_user}):
+        raise HTTPException(status_code=400, detail=f"Username '{admin_user}' is taken")
+    pin = str(payload.get("admin_pin") or "").strip()
+    if pin and (not pin.isdigit() or len(pin) < 4):
+        raise HTTPException(status_code=400, detail="PIN must be at least 4 digits")
+    if not pin:
+        import secrets as _s
+        pin = f"{_s.randbelow(9000) + 1000}"
+
+    await db.tenants.insert_one({
+        "id": tid, "slug": tid, "name": name,
+        "plan": str(payload.get("plan") or "trial"),
+        "status": "active", "created_at": now_iso(),
+    })
+    await db.users.insert_one({
+        "id": new_id(), "username": admin_user, "name": "Admin",
+        "pin_hash": hash_pin(pin), "role": "admin",
+        "icon": "AD", "color": "#3A3F3A", "pages": None,
+        "tenant_id": tid, "created_at": now_iso(),
+    })
+    # PIN is returned once, at creation, so the operator can hand it over.
+    return {"tenant": {"id": tid, "name": name},
+            "admin_username": admin_user, "admin_pin": pin,
+            "note": "Give this PIN to the customer and have them change it."}
+
+
+# ══════════════════════════════════════════════════════════════════
+# ENTITY WORKFLOWS — each tenant defines its own stages per entity.
+# Stages used to be hardcoded in five places in one furniture business's
+# vocabulary. They are now data: a clinic, an agency and a retailer can each
+# describe their own pipeline without a code change.
+# ══════════════════════════════════════════════════════════════════
+async def workflow_for(entity: str, user: dict):
+    """
+    A tenant's stages for an entity, plus whether they are ENFORCED.
+
+    Enforcement is opt-in on purpose. Live records use stages the generic
+    defaults don't contain ("Quoted", "Partial", "Negotiation"), so validating
+    against defaults would reject every save on existing data. A workflow only
+    becomes binding once the tenant has deliberately defined one — until then
+    the defaults are a suggestion for the UI.
+    """
+    doc = await db.workflows.find_one(
+        tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
+    if doc and doc.get("stages"):
+        return doc["stages"], bool(doc.get("enforced", True))
+    return tenancy.default_workflow(entity), False
+
+
+async def validate_stage(collection: str, doc: dict, user: dict):
+    """
+    Keep `stage` inside the tenant's workflow, and normalise its spelling.
+
+    Only runs for collections that map to a workflow entity, only when a stage
+    is actually supplied, and only when the tenant has opted in.
+    """
+    entity = tenancy.COLLECTION_ENTITY.get(collection)
+    if not entity or "stage" not in doc:
+        return
+    raw = str(doc.get("stage") or "").strip()
+    if not raw:
+        return
+    stages, enforced = await workflow_for(entity, user)
+    match = tenancy.resolve_stage(stages, raw)
+    if match:
+        doc["stage"] = match["label"]        # canonical casing/spelling
+        return
+    if enforced:
+        raise HTTPException(status_code=400, detail={
+            "message": f"'{raw}' is not a valid {entity} stage for your workflow.",
+            "valid_stages": [s["label"] for s in stages],
+        })
+
+
+@api.post("/workflows/{entity}/adopt")
+async def workflow_adopt(entity: str, payload: dict = None,
+                         user: dict = Depends(require_admin)):
+    """
+    Build this entity's workflow from the stages the data already uses.
+
+    The safe way to switch enforcement on: nothing existing becomes invalid,
+    and the business can then rename or reorder from a true starting point.
+    """
+    if entity not in tenancy.WORKFLOW_ENTITIES:
+        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
+    coll = tenancy.ENTITY_COLLECTION.get(entity)
+    if not coll:
+        raise HTTPException(status_code=400, detail=f"'{entity}' has no records to learn from")
+
+    seen = []
+    async for d in db[coll].find(tenancy.scope({}, coll, user), {"_id": 0, "stage": 1}):
+        s = str(d.get("stage") or "").strip()
+        if s and s not in seen:
+            seen.append(s)
+    if not seen:
+        stages = tenancy.default_workflow(entity)
+    else:
+        # Anything that looks final is marked terminal; wins are flagged so
+        # reporting still works after adoption.
+        won_words = {"won", "converted", "completed", "delivered", "paid", "closed"}
+        end_words = won_words | {"lost", "cancelled", "canceled", "dormant",
+                                 "expired", "dead", "rejected"}
+        stages = [
+            tenancy.make_stage(
+                label,
+                terminal=label.strip().lower() in end_words,
+                won=label.strip().lower() in won_words,
+            ) for label in seen
+        ]
+
+    await db.workflows.update_one(
+        tenancy.scope({"entity": entity}, "workflows", user),
+        {"$set": tenancy.stamp(
+            {"entity": entity, "stages": stages,
+             "enforced": bool((payload or {}).get("enforce", True)),
+             "updated_at": now_iso()}, "workflows", user)},
+        upsert=True)
+    return {"entity": entity, "stages": stages, "adopted_from_records": len(seen),
+            "enforced": bool((payload or {}).get("enforce", True))}
+
+
+@api.get("/workflows")
+async def workflows_list(user: dict = Depends(get_current_user)):
+    """Every entity's workflow for this tenant, falling back to sane defaults."""
+    out = {}
+    for entity in tenancy.WORKFLOW_ENTITIES:
+        doc = await db.workflows.find_one(
+            tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
+        out[entity] = {
+            "entity": entity,
+            "stages": (doc or {}).get("stages") or tenancy.default_workflow(entity),
+            "customised": bool(doc),
+            "enforced": bool(doc and doc.get("enforced", True)),
+        }
+    return out
+
+
+@api.get("/workflows/{entity}")
+async def workflow_get(entity: str, user: dict = Depends(get_current_user)):
+    if entity not in tenancy.WORKFLOW_ENTITIES:
+        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
+    doc = await db.workflows.find_one(
+        tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
+    return {"entity": entity,
+            "stages": (doc or {}).get("stages") or tenancy.default_workflow(entity),
+            "customised": bool(doc),
+            "enforced": bool(doc and doc.get("enforced", True))}
+
+
+@api.put("/workflows/{entity}")
+async def workflow_set(entity: str, payload: dict, user: dict = Depends(require_admin)):
+    """Admin-only: redefine an entity's stages for this tenant."""
+    if entity not in tenancy.WORKFLOW_ENTITIES:
+        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
+    try:
+        stages = tenancy.validate_stages(payload.get("stages"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Refuse to strand live records on a stage that no longer exists.
+    coll = {"lead": "leads", "customer": "customers", "quote": "quotes",
+            "sale": "sales", "project": "projects", "product": "inventory",
+            "task": "tasks"}.get(entity)
+    orphaned = []
+    if coll:
+        seen = set()
+        async for d in db[coll].find(tenancy.scope({}, coll, user), {"_id": 0, "stage": 1}):
+            s = str(d.get("stage") or "").strip()
+            if s:
+                seen.add(s)
+        orphaned = sorted(s for s in seen if not tenancy.resolve_stage(stages, s))
+    if orphaned and not payload.get("force"):
+        raise HTTPException(status_code=409, detail={
+            "message": "Some records use stages that the new workflow drops.",
+            "orphaned_stages": orphaned,
+            "hint": "Rename instead of removing, or resend with force:true.",
+        })
+
+    await db.workflows.update_one(
+        tenancy.scope({"entity": entity}, "workflows", user),
+        {"$set": tenancy.stamp(
+            {"entity": entity, "stages": stages,
+             "enforced": bool(payload.get("enforce", True)),
+             "updated_at": now_iso()},
+            "workflows", user)},
+        upsert=True)
+    return {"entity": entity, "stages": stages, "customised": True,
+            "orphaned_stages": orphaned}
+
+
+@api.post("/workflows/{entity}/reset")
+async def workflow_reset(entity: str, user: dict = Depends(require_admin)):
+    if entity not in tenancy.WORKFLOW_ENTITIES:
+        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
+    await db.workflows.delete_one(tenancy.scope({"entity": entity}, "workflows", user))
+    return {"entity": entity, "stages": tenancy.default_workflow(entity), "customised": False}
 
 
 @api.get("/fy/options")
@@ -1078,8 +1366,11 @@ async def startup():
         await seed_all(db)
         # Seeded/imported rows bypass the API's stamp_fy(), so make sure every
         # dated record carries its financial year before anyone filters by it.
+        # Tenant first: scoping is fail-closed, so an untagged user sees nothing.
+        tenanted = await backfill_tenant()
         stamped = await backfill_fy()
-        logger.info("MADIO CRM started; seeded data. FY stamped on %s record(s).", stamped)
+        logger.info("MADIO CRM started; seeded data. Tenant stamped on %s, FY on %s record(s).",
+                    tenanted, stamped)
     except Exception as e:
         logger.warning(f"MongoDB connection skipped or unavailable on local machine: {e}")
 

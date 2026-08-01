@@ -15,7 +15,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Portable Node (no system install needed on this machine)
-$NodeDir = "C:\Users\jagad\AppData\Local\Temp\nd\node-v20.18.1-win-arm64"
+$NodeDir = "C:\Users\jagad\AppData\Local\nodejs-portable\node-v20.18.1-win-arm64"
 if (Test-Path $NodeDir) { $env:PATH = "$NodeDir;$env:PATH" }
 
 try { node --version | Out-Null } catch {
