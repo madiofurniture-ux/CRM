@@ -79,6 +79,32 @@ async def login(payload: LoginRequest):
     return {"token": token, "user": public}
 
 
+@api.get("/auth/roles")
+async def login_roles():
+    """
+    The profiles the login screen offers, before anyone has authenticated.
+
+    The tiles used to be hardcoded in the frontend, so renaming or adding a role
+    silently left people with no way to sign in. Reading them from the database
+    keeps the screen honest for any business, not just the one it was built for.
+
+    Display fields only — never pin_hash, and never `pages`, which would tell an
+    unauthenticated caller exactly which screens are worth attacking.
+    """
+    out = []
+    async for u in db.users.find(
+            {"tenant_id": DEFAULT_TENANT},
+            {"_id": 0, "username": 1, "name": 1, "icon": 1, "color": 1, "role": 1}):
+        out.append({
+            "username": u.get("username", ""),
+            "name": u.get("name") or u.get("username", ""),
+            "icon": u.get("icon") or (u.get("name") or "?")[:2].upper(),
+            "color": u.get("color") or "#3A3F3A",
+            "subtitle": "Full access" if u.get("role") == "admin" else "Team",
+        })
+    return out
+
+
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     return user
@@ -107,6 +133,10 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
         "pages": payload.pages,
         "created_at": now_iso(),
     }
+    # New colleagues join the tenant of the admin creating them. Without this the
+    # account is real but tenant-less, and fail-closed scoping shows them an
+    # entirely empty application — a login that appears to work but has no data.
+    doc["tenant_id"] = tenancy.tenant_of(user) or DEFAULT_TENANT
     await db.users.insert_one(doc)
     return {k: v for k, v in doc.items() if k not in ("pin_hash", "_id")}
 

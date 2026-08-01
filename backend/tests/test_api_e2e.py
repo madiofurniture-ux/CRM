@@ -99,6 +99,27 @@ def main():
     s, _ = call("GET", "/api/inventory")
     check("unauthenticated request is rejected", s in (401, 403), f"got {s}")
 
+    # The login screen reads its profiles from here. When these were hardcoded in
+    # the frontend, renaming the roles left everyone unable to sign in.
+    s, roles = call("GET", "/api/auth/roles")
+    check("login profiles are readable before sign-in", s == 200 and isinstance(roles, list),
+          f"got {s} {str(roles)[:70]}")
+    if isinstance(roles, list):
+        check("every seeded role has a login tile", len(roles) >= 7, f"got {len(roles)}")
+        names = {r.get("username") for r in roles}
+        check("the seven role logins are offered",
+              {"promoter", "admin", "mf", "map", "mdw", "accounting", "reception"} <= names,
+              f"missing {sorted({'promoter','admin','mf','map','mdw','accounting','reception'} - names)}")
+        # Logins are roles, not people — no personal names may reappear here.
+        check("no personal-name logins remain",
+              not (names & {"raghu", "nenmu", "gowtham"}),
+              f"found {sorted(names & {'raghu', 'nenmu', 'gowtham'})}")
+        leaked = {k for r in roles for k in r if k in ("pin", "pin_hash", "pages", "id", "tenant_id")}
+        check("the public profile list leaks nothing sensitive", not leaked, f"exposed {sorted(leaked)}")
+        check("every tile can be rendered",
+              all(r.get("username") and r.get("name") and r.get("icon") for r in roles),
+              "a tile is missing username/name/icon")
+
     # ── every route returns 200 ────────────────────────────────────────
     section("All endpoints respond")
     endpoints = [
@@ -274,6 +295,37 @@ def main():
     else:
         _skip += 1
         print(f"  SKIP  D&W survey tests (create returned {s})")
+
+    # ── adding a colleague ─────────────────────────────────────────────
+    section("Adding a user through Role Manager")
+    # REGRESSION: a user created without a tenant_id logs in fine but sees an
+    # entirely empty app, because record scoping is deliberately fail-closed.
+    s, nu = call("POST", "/api/auth/users",
+                 {"username": "zze2eprobe", "name": "ZZ E2E Probe", "pin": "4321",
+                  "role": "user", "icon": "ZZ", "color": "#888888",
+                  "pages": ["dashboard", "inventory"]}, token=admin_tok)
+    if s == 200 and nu and nu.get("id"):
+        try:
+            check("a new colleague joins the admin's tenant", bool(nu.get("tenant_id")),
+                  "tenant_id missing — this user would see a blank app")
+            s2, lg = call("POST", "/api/auth/login",
+                          {"username": "zze2eprobe", "pin": "4321"})
+            check("the new colleague can sign in", s2 == 200 and bool((lg or {}).get("token")),
+                  f"got {s2}")
+            if (lg or {}).get("token"):
+                s3, inv = call("GET", "/api/inventory", token=lg["token"])
+                check("the new colleague actually sees data",
+                      s3 == 200 and isinstance(inv, list) and len(inv) > 0,
+                      f"got {s3} with {len(inv) if isinstance(inv, list) else '?'} rows")
+            s4, rl = call("GET", "/api/auth/roles")
+            check("the new colleague appears on the login screen",
+                  any(r.get("username") == "zze2eprobe" for r in (rl or [])),
+                  "missing from /auth/roles")
+        finally:
+            call("DELETE", f"/api/auth/users/{nu['id']}", token=admin_tok)
+    else:
+        _skip += 1
+        print(f"  SKIP  new-user tenancy checks (create returned {s})")
 
     # ── workflows: the entity stage model ──────────────────────────────
     section("Workflows — configurable stages per entity")
