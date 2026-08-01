@@ -26,7 +26,20 @@ Set-Location $Root
 $NodeDir = "C:\Users\jagad\AppData\Local\nodejs-portable\node-v20.18.1-win-arm64"
 if (Test-Path $NodeDir) { $env:PATH = "$NodeDir;$env:PATH" }
 
-# ── 1. can we reach Atlas? ────────────────────────────────────────────────
+# Reuse the PINs already recorded in backend\role-pins.env so a sandbox run has
+# the SAME logins as live. Without this the sandbox mints a fresh random PIN for
+# every role on every run, and there is no way to log in.
+$PinFile = Join-Path $Root "backend\role-pins.env"
+$KnownPins = $false
+if (Test-Path $PinFile) {
+    $line = Select-String -Path $PinFile -Pattern '^SEED_PINS=' | Select-Object -First 1
+    if ($line) {
+        $env:SEED_PINS = ($line.Line -replace '^SEED_PINS=', '').Trim()
+        $KnownPins = $true
+    }
+}
+
+# -- 1. can we reach Atlas? ------------------------------------------------
 $useReal = $false
 if (-not $ForceSandbox) {
     Write-Host "Checking MongoDB Atlas..." -NoNewline
@@ -63,7 +76,7 @@ if ($useReal) {
 }
 Write-Host ""
 
-# ── 2. backend ────────────────────────────────────────────────────────────
+# -- 2. backend ------------------------------------------------------------
 $apiLog = Join-Path $env:TEMP "madio_api.log"
 if ($useReal) {
     $api = Start-Process python -ArgumentList "-m","uvicorn","server:app","--port",$ApiPort `
@@ -91,7 +104,7 @@ if (-not $ready) {
 }
 Write-Host " ready" -ForegroundColor Green
 
-# ── 3. frontend build ─────────────────────────────────────────────────────
+# -- 3. frontend build -----------------------------------------------------
 $apiUrl   = "http://127.0.0.1:$ApiPort"
 $buildDir = Join-Path $Root "frontend\build"
 $envFile  = Join-Path $Root "frontend\.env"
@@ -107,7 +120,7 @@ if ($needs) {
     Write-Host "Reusing existing build (already points at $apiUrl)."
 }
 
-# ── 4. serve + open ───────────────────────────────────────────────────────
+# -- 4. serve + open -------------------------------------------------------
 $web = Start-Process python -ArgumentList "deploy/serve_spa.py","--dir","frontend/build","--port",$WebPort `
        -WorkingDirectory $Root -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 2
@@ -119,7 +132,12 @@ Write-Host "  MADIO CRM is running:  $url"
 Write-Host "  API:                   $apiUrl/api/"
 Write-Host ""
 Write-Host "  Logins are ROLES: promoter, admin, mf, map, mdw, accounting, reception"
-Write-Host "  PINs: backendole-pins.env (live) or the sandbox PINs printed in the log"
+if ($KnownPins) {
+    Write-Host "  PINs:   backend\role-pins.env  (same PINs in sandbox and live)"
+} else {
+    Write-Host "  PINs:   generated randomly this run - see $apiLog" -ForegroundColor Yellow
+    Write-Host "          (create backend\role-pins.env to keep them stable)" -ForegroundColor DarkGray
+}
 Write-Host ""
 Write-Host "  Worth checking:"
 Write-Host "    Inventory            643 items, product photos"

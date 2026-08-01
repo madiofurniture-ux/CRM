@@ -5,13 +5,6 @@ import { useAuth } from "@/context/AuthContext";
 import api, { formatApiError } from "@/lib/api";
 import { toast, Toaster } from "sonner";
 
-const ROLE_CARDS = [
-  { username: "admin", name: "Admin", icon: "AD", color: "#1A1D1A", subtitle: "Full access" },
-  { username: "raghu", name: "Raghu MF", icon: "RM", color: "#C85A32", subtitle: "Sales" },
-  { username: "nenmu", name: "Nenmu", icon: "NM", color: "#4A5D4E", subtitle: "Sales" },
-  { username: "gowtham", name: "Gowtham Hive", icon: "GH", color: "#D48B30", subtitle: "Sales" },
-];
-
 export default function Login() {
   const { user, login } = useAuth();
   const nav = useNavigate();
@@ -21,9 +14,24 @@ export default function Login() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  // Profiles come from the server. They used to be a hardcoded list, which meant
+  // renaming a role left real people unable to sign in at all.
+  const [cards, setCards] = useState([]);
+  const [loadingCards, setLoadingCards] = useState(true);
+  const [typedUser, setTypedUser] = useState("");
+
   useEffect(() => {
     if (user) nav("/", { replace: true });
   }, [user, nav]);
+
+  useEffect(() => {
+    let alive = true;
+    api.get("/auth/roles")
+      .then(({ data }) => { if (alive) setCards(Array.isArray(data) ? data : []); })
+      .catch(() => { if (alive) setCards([]); })
+      .finally(() => { if (alive) setLoadingCards(false); });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     if (selected && pin.length === 4) {
@@ -100,27 +108,60 @@ export default function Login() {
             <div className="fadeup">
               <h1 className="font-heading text-3xl font-bold tracking-tight text-[var(--ink)] mb-1">Welcome back</h1>
               <p className="text-[var(--ink-2)] text-sm mb-8">Select your profile to continue</p>
-              <div className="grid grid-cols-2 gap-3">
-                {ROLE_CARDS.map((r) => (
-                  <button
-                    key={r.username}
-                    onClick={() => { setSelected(r); setPin(""); setError(""); }}
-                    className="text-left p-4 rounded-xl bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--brand)] hover:-translate-y-0.5 transition-all duration-150 group"
-                    data-testid={`role-${r.username}`}
-                  >
-                    <div
-                      className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-heading font-bold text-sm mb-3"
-                      style={{ background: r.color }}
+              {loadingCards ? (
+                <div className="text-sm text-[var(--ink-3)]">Loading profiles…</div>
+              ) : cards.length ? (
+                <div className="grid grid-cols-2 gap-3" data-testid="role-cards">
+                  {cards.map((r) => (
+                    <button
+                      key={r.username}
+                      onClick={() => { setSelected(r); setPin(""); setError(""); }}
+                      className="text-left p-4 rounded-xl bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--brand)] hover:-translate-y-0.5 transition-all duration-150 group"
+                      data-testid={`role-${r.username}`}
                     >
-                      {r.icon}
-                    </div>
-                    <div className="font-heading font-semibold text-[var(--ink)] text-[15px] leading-tight">{r.name}</div>
-                    <div className="text-[11px] text-[var(--ink-3)] uppercase tracking-wider mt-0.5">{r.subtitle}</div>
+                      <div
+                        className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-heading font-bold text-sm mb-3"
+                        style={{ background: r.color }}
+                      >
+                        {r.icon}
+                      </div>
+                      <div className="font-heading font-semibold text-[var(--ink)] text-[15px] leading-tight">{r.name}</div>
+                      <div className="text-[11px] text-[var(--ink-3)] uppercase tracking-wider mt-0.5">{r.subtitle}</div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                /* Server unreachable or no profiles yet — never strand the user
+                   on a screen with nothing to click. */
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const u = typedUser.trim().toLowerCase();
+                    if (u) { setSelected({ username: u, name: u, icon: u.slice(0, 2).toUpperCase(), color: "#3A3F3A", subtitle: "Sign in" }); setPin(""); }
+                  }}
+                  data-testid="username-fallback"
+                >
+                  <label className="block text-xs uppercase tracking-[0.16em] text-[var(--ink-3)] font-semibold mb-2">
+                    Username
+                  </label>
+                  <input
+                    value={typedUser}
+                    onChange={(e) => setTypedUser(e.target.value)}
+                    placeholder="e.g. admin"
+                    autoFocus
+                    className="w-full px-3 py-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-sm outline-none focus:border-[var(--brand)]"
+                    data-testid="username-input"
+                  />
+                  <button
+                    type="submit"
+                    className="mt-3 w-full py-2.5 rounded-lg bg-[var(--brand)] text-white text-sm font-semibold"
+                  >
+                    Continue
                   </button>
-                ))}
-              </div>
+                </form>
+              )}
               <div className="mt-8 text-xs text-[var(--ink-3)] text-center">
-                Admin PIN <span className="font-mono">1234</span> · Sales PINs <span className="font-mono">2222 · 3333 · 4444</span>
+                Ask your administrator for your PIN.
               </div>
             </div>
           ) : (
