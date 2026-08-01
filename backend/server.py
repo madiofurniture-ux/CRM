@@ -268,6 +268,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         doc = payload.model_dump()
         doc["id"] = new_id()
         doc["created_at"] = now_iso()
+        await validate_stage(collection, doc, user)
         stamp_fy(doc, collection)
         stamp_closure(doc, collection)
         tenancy.stamp(doc, collection, user)
@@ -286,6 +287,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         existing = await db[collection].find_one(owned)
         if not existing:
             raise HTTPException(status_code=404, detail="Not found")
+        await validate_stage(collection, payload, user)
         stamp_fy(payload, collection)
         stamp_closure(payload, collection, existing)
         await db[collection].update_one(owned, {"$set": payload})
@@ -427,6 +429,95 @@ async def tenant_create(payload: dict, user: dict = Depends(require_admin)):
 # vocabulary. They are now data: a clinic, an agency and a retailer can each
 # describe their own pipeline without a code change.
 # ══════════════════════════════════════════════════════════════════
+async def workflow_for(entity: str, user: dict):
+    """
+    A tenant's stages for an entity, plus whether they are ENFORCED.
+
+    Enforcement is opt-in on purpose. Live records use stages the generic
+    defaults don't contain ("Quoted", "Partial", "Negotiation"), so validating
+    against defaults would reject every save on existing data. A workflow only
+    becomes binding once the tenant has deliberately defined one — until then
+    the defaults are a suggestion for the UI.
+    """
+    doc = await db.workflows.find_one(
+        tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
+    if doc and doc.get("stages"):
+        return doc["stages"], bool(doc.get("enforced", True))
+    return tenancy.default_workflow(entity), False
+
+
+async def validate_stage(collection: str, doc: dict, user: dict):
+    """
+    Keep `stage` inside the tenant's workflow, and normalise its spelling.
+
+    Only runs for collections that map to a workflow entity, only when a stage
+    is actually supplied, and only when the tenant has opted in.
+    """
+    entity = tenancy.COLLECTION_ENTITY.get(collection)
+    if not entity or "stage" not in doc:
+        return
+    raw = str(doc.get("stage") or "").strip()
+    if not raw:
+        return
+    stages, enforced = await workflow_for(entity, user)
+    match = tenancy.resolve_stage(stages, raw)
+    if match:
+        doc["stage"] = match["label"]        # canonical casing/spelling
+        return
+    if enforced:
+        raise HTTPException(status_code=400, detail={
+            "message": f"'{raw}' is not a valid {entity} stage for your workflow.",
+            "valid_stages": [s["label"] for s in stages],
+        })
+
+
+@api.post("/workflows/{entity}/adopt")
+async def workflow_adopt(entity: str, payload: dict = None,
+                         user: dict = Depends(require_admin)):
+    """
+    Build this entity's workflow from the stages the data already uses.
+
+    The safe way to switch enforcement on: nothing existing becomes invalid,
+    and the business can then rename or reorder from a true starting point.
+    """
+    if entity not in tenancy.WORKFLOW_ENTITIES:
+        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
+    coll = tenancy.ENTITY_COLLECTION.get(entity)
+    if not coll:
+        raise HTTPException(status_code=400, detail=f"'{entity}' has no records to learn from")
+
+    seen = []
+    async for d in db[coll].find(tenancy.scope({}, coll, user), {"_id": 0, "stage": 1}):
+        s = str(d.get("stage") or "").strip()
+        if s and s not in seen:
+            seen.append(s)
+    if not seen:
+        stages = tenancy.default_workflow(entity)
+    else:
+        # Anything that looks final is marked terminal; wins are flagged so
+        # reporting still works after adoption.
+        won_words = {"won", "converted", "completed", "delivered", "paid", "closed"}
+        end_words = won_words | {"lost", "cancelled", "canceled", "dormant",
+                                 "expired", "dead", "rejected"}
+        stages = [
+            tenancy.make_stage(
+                label,
+                terminal=label.strip().lower() in end_words,
+                won=label.strip().lower() in won_words,
+            ) for label in seen
+        ]
+
+    await db.workflows.update_one(
+        tenancy.scope({"entity": entity}, "workflows", user),
+        {"$set": tenancy.stamp(
+            {"entity": entity, "stages": stages,
+             "enforced": bool((payload or {}).get("enforce", True)),
+             "updated_at": now_iso()}, "workflows", user)},
+        upsert=True)
+    return {"entity": entity, "stages": stages, "adopted_from_records": len(seen),
+            "enforced": bool((payload or {}).get("enforce", True))}
+
+
 @api.get("/workflows")
 async def workflows_list(user: dict = Depends(get_current_user)):
     """Every entity's workflow for this tenant, falling back to sane defaults."""
@@ -438,6 +529,7 @@ async def workflows_list(user: dict = Depends(get_current_user)):
             "entity": entity,
             "stages": (doc or {}).get("stages") or tenancy.default_workflow(entity),
             "customised": bool(doc),
+            "enforced": bool(doc and doc.get("enforced", True)),
         }
     return out
 
@@ -450,7 +542,8 @@ async def workflow_get(entity: str, user: dict = Depends(get_current_user)):
         tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
     return {"entity": entity,
             "stages": (doc or {}).get("stages") or tenancy.default_workflow(entity),
-            "customised": bool(doc)}
+            "customised": bool(doc),
+            "enforced": bool(doc and doc.get("enforced", True))}
 
 
 @api.put("/workflows/{entity}")
@@ -485,7 +578,9 @@ async def workflow_set(entity: str, payload: dict, user: dict = Depends(require_
     await db.workflows.update_one(
         tenancy.scope({"entity": entity}, "workflows", user),
         {"$set": tenancy.stamp(
-            {"entity": entity, "stages": stages, "updated_at": now_iso()},
+            {"entity": entity, "stages": stages,
+             "enforced": bool(payload.get("enforce", True)),
+             "updated_at": now_iso()},
             "workflows", user)},
         upsert=True)
     return {"entity": entity, "stages": stages, "customised": True,

@@ -31,6 +31,13 @@ from typing import Any, Iterable
 # for the API and UI to expose it.
 WORKFLOW_ENTITIES = ["lead", "customer", "quote", "sale", "project", "product", "task"]
 
+# Which collection each entity's records live in.
+ENTITY_COLLECTION = {
+    "lead": "leads", "customer": "customers", "quote": "quotes", "sale": "sales",
+    "project": "projects", "product": "inventory", "task": "tasks",
+}
+COLLECTION_ENTITY = {v: k for k, v in ENTITY_COLLECTION.items()}
+
 # Collections that hold per-tenant business data and must always be scoped.
 TENANT_COLLECTIONS = {
     "visitors", "leads", "architects", "quotes", "sales", "inventory", "tasks",
