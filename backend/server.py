@@ -1460,10 +1460,11 @@ async def journey(phone: str, _: dict = Depends(get_current_user)):
 
 @api.post("/convert/lead-to-quote/{lead_id}")
 async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
-    lead = await db.leads.find_one({"id": lead_id}, {"_id": 0})
+    lead = await db.leads.find_one(tenancy.scope({"id": lead_id}, "leads", user), {"_id": 0})
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    existing = await db.quotes.find({}, {"quote_no": 1, "_id": 0}).to_list(5000)
+    existing = await db.quotes.find(
+        tenancy.scope({}, "quotes", user), {"quote_no": 1, "_id": 0}).to_list(5000)
     quote = {
         "id": new_id(), "created_at": now_iso(),
         "quote_no": lc.next_quote_no(existing), "date": lc.today_iso(),
@@ -1472,17 +1473,21 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
         "by_user": user.get("name", ""), "stage": "Quoted", "status": "Sent",
         "value": 0, "remarks": lead.get("requirement", ""), "version": 1,
     }
+    stamp_fy(quote, "quotes")
+    tenancy.stamp(quote, "quotes", user)
     await db.quotes.insert_one(dict(quote))
-    await db.leads.update_one({"id": lead_id}, {"$set": {"stage": "Quoted"}})
+    await db.leads.update_one(
+        tenancy.scope({"id": lead_id}, "leads", user), {"$set": {"stage": "Quoted"}})
     return quote
 
 
 @api.post("/convert/quote-to-sale/{quote_id}")
 async def quote_to_sale(quote_id: str, user: dict = Depends(get_current_user)):
-    quote = await db.quotes.find_one({"id": quote_id}, {"_id": 0})
+    quote = await db.quotes.find_one(tenancy.scope({"id": quote_id}, "quotes", user), {"_id": 0})
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found")
-    existing = await db.sales.find({}, {"sale_no": 1, "_id": 0}).to_list(5000)
+    existing = await db.sales.find(
+        tenancy.scope({}, "sales", user), {"sale_no": 1, "_id": 0}).to_list(5000)
     value = lc.money(quote.get("value"))
     sale = {
         "id": new_id(), "created_at": now_iso(),
@@ -1492,19 +1497,25 @@ async def quote_to_sale(quote_id: str, user: dict = Depends(get_current_user)):
         "by_user": user.get("name", ""), "value": value, "paid": 0, "balance": value,
         "stage": "Confirmed", "remarks": "",
     }
+    stamp_fy(sale, "sales")
+    tenancy.stamp(sale, "sales", user)
     await db.sales.insert_one(dict(sale))
-    await db.quotes.update_one({"id": quote_id}, {"$set": {"stage": "Adv Received", "status": "Won"}})
+    await db.quotes.update_one(tenancy.scope({"id": quote_id}, "quotes", user),
+                               {"$set": {"stage": "Adv Received", "status": "Won"}})
     return sale
 
 
 @api.post("/convert/survey-to-quote/{survey_id}")
 async def survey_to_quote(survey_id: str, user: dict = Depends(get_current_user)):
-    survey = await db.dw_surveys.find_one({"id": survey_id}, {"_id": 0})
+    survey = await db.dw_surveys.find_one(
+        tenancy.scope({"id": survey_id}, "dw_surveys", user), {"_id": 0})
     if not survey:
         raise HTTPException(status_code=404, detail="Survey not found")
-    openings = await db.dw_openings.find({"survey_id": survey_id}, {"_id": 0}).to_list(500)
+    openings = await db.dw_openings.find(
+        tenancy.scope({"survey_id": survey_id}, "dw_openings", user), {"_id": 0}).to_list(500)
     total_area = round(sum(lc.money(lc.calc_opening(dict(o))["area"]) for o in openings), 2)
-    existing = await db.quotes.find({}, {"quote_no": 1, "_id": 0}).to_list(5000)
+    existing = await db.quotes.find(
+        tenancy.scope({}, "quotes", user), {"quote_no": 1, "_id": 0}).to_list(5000)
     quote = {
         "id": new_id(), "created_at": now_iso(),
         "quote_no": lc.next_quote_no(existing), "date": lc.today_iso(),
@@ -1514,8 +1525,11 @@ async def survey_to_quote(survey_id: str, user: dict = Depends(get_current_user)
         "remarks": f"From survey {survey.get('survey_id')} · "
                    f"{len(openings)} openings · {total_area} sqft",
     }
+    stamp_fy(quote, "quotes")
+    tenancy.stamp(quote, "quotes", user)
     await db.quotes.insert_one(dict(quote))
-    await db.dw_surveys.update_one({"id": survey_id}, {"$set": {"status": "Quoted"}})
+    await db.dw_surveys.update_one(
+        tenancy.scope({"id": survey_id}, "dw_surveys", user), {"$set": {"status": "Quoted"}})
     return quote
 
 app.include_router(api)
