@@ -1081,6 +1081,144 @@ from models import (
 make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
 make_crud(api, "dw-openings", "dw_openings", DWOpeningCreate, DWOpening)
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# Quote workspace — line-item builder, discount approval, versions.
+#
+# The domain rules for all of this already lived in lifecycle.py (calc_line,
+# lines_subtotal, needs_approval, quote_total); only the HTTP surface the
+# QuoteWorkspace page calls was missing, so the page 404'd on load.
+# ─────────────────────────────────────────────────────────────────────────
+async def _quote_or_404(quote_id: str, user: dict) -> dict:
+    """Tenant-scoped fetch: another tenant's id must read as 'not found'."""
+    q = await db.quotes.find_one(
+        tenancy.scope({"id": quote_id}, "quotes", user), {"_id": 0})
+    if not q:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return q
+
+
+async def _quote_lines(quote_id: str, user: dict) -> list:
+    return await db.quote_lines.find(
+        tenancy.scope({"quote_id": quote_id}, "quote_lines", user), {"_id": 0}
+    ).sort("created_at", 1).to_list(500)
+
+
+def _quote_view(q: dict, all_lines: list) -> dict:
+    """
+    Assemble what the workspace screen renders.
+
+    sft and amount are recomputed on read rather than trusted from storage: the
+    page PUTs a whole line back on every keystroke, so a stale figure from an
+    older client would otherwise stick. calc_line is the same function the rest
+    of the app uses, so the numbers cannot drift between screens.
+    """
+    version = int(q.get("version") or 1)
+    lines = [lc.calc_line(dict(l)) for l in all_lines
+             if int(l.get("version") or 1) == version]
+    subtotal = lc.lines_subtotal(lines)
+    totals = lc.quote_total(subtotal, q.get("discount") or 0,
+                            q.get("tax_pct") if q.get("tax_pct") is not None else 18.0)
+    versions = sorted({int(l.get("version") or 1) for l in all_lines} | {version})
+    q = dict(q)
+    q["derived_status"] = lc.quote_status(q)
+    return {"quote": q, "lines": lines, "subtotal": subtotal,
+            "totals": totals, "versions": versions}
+
+
+@api.get("/quotes/{quote_id}/workspace")
+async def quote_workspace(quote_id: str, user: dict = Depends(get_current_user)):
+    q = await _quote_or_404(quote_id, user)
+    return _quote_view(q, await _quote_lines(quote_id, user))
+
+
+@api.post("/quotes/{quote_id}/save-total")
+async def quote_save_total(quote_id: str, payload: dict,
+                           user: dict = Depends(get_current_user)):
+    """Persist the discount and the totals it implies onto the quote."""
+    q = await _quote_or_404(quote_id, user)
+    version = int(q.get("version") or 1)
+    lines = [lc.calc_line(dict(l)) for l in await _quote_lines(quote_id, user)
+             if int(l.get("version") or 1) == version]
+    subtotal = lc.lines_subtotal(lines)
+    discount = lc.money(payload.get("discount"))
+    totals = lc.quote_total(subtotal, discount,
+                            q.get("tax_pct") if q.get("tax_pct") is not None else 18.0)
+
+    # A discount past the threshold needs an admin. An existing approval only
+    # survives if the amount is unchanged — otherwise raising the discount
+    # after sign-off would quietly inherit the old approval.
+    prev = lc.money(q.get("discount"))
+    approval = str(q.get("approval") or "")
+    if not lc.needs_approval(subtotal, discount):
+        approval = ""
+    elif approval == "approved" and abs(discount - prev) < 0.005:
+        approval = "approved"
+    else:
+        approval = "pending"
+
+    upd = {"discount": totals["discount"], "subtotal": totals["subtotal"],
+           "tax_total": totals["tax_total"], "grand_total": totals["grand_total"],
+           "value": totals["value"], "approval": approval}
+    if approval != "approved":
+        upd["approved_by"] = ""
+        upd["approved_at"] = ""
+    owned = tenancy.scope({"id": quote_id}, "quotes", user)
+    await db.quotes.update_one(owned, {"$set": upd})
+    out = await db.quotes.find_one(owned, {"_id": 0})
+    out["derived_status"] = lc.quote_status(out)
+    return out
+
+
+@api.post("/quotes/{quote_id}/approve")
+async def quote_approve(quote_id: str, payload: dict,
+                        user: dict = Depends(require_admin)):
+    """Admin-only sign-off on a discount that exceeds the policy threshold."""
+    await _quote_or_404(quote_id, user)
+    ok = bool(payload.get("approved", True))
+    upd = {"approval": "approved" if ok else "rejected",
+           "approved_by": (user.get("username") or "") if ok else "",
+           "approved_at": now_iso() if ok else ""}
+    owned = tenancy.scope({"id": quote_id}, "quotes", user)
+    await db.quotes.update_one(owned, {"$set": upd})
+    out = await db.quotes.find_one(owned, {"_id": 0})
+    out["derived_status"] = lc.quote_status(out)
+    return out
+
+
+@api.post("/quotes/{quote_id}/revise")
+async def quote_revise(quote_id: str, user: dict = Depends(get_current_user)):
+    """
+    Open a new version, copying the current lines forward.
+
+    The previous version's lines are kept, so an earlier revision stays
+    readable rather than being overwritten in place. `stage` is deliberately
+    left alone — it belongs to the tenant's configurable workflow and may be
+    enforced — while `status` is set to Sent, which is what quote_status reads
+    first and what the screen promises ("reopens the quote as Sent").
+    """
+    q = await _quote_or_404(quote_id, user)
+    cur = int(q.get("version") or 1)
+    new_version = cur + 1
+    for line in await _quote_lines(quote_id, user):
+        if int(line.get("version") or 1) != cur:
+            continue
+        copy = dict(line)
+        copy.update({"id": new_id(), "version": new_version, "created_at": now_iso()})
+        copy.pop("_id", None)
+        tenancy.stamp(copy, "quote_lines", user)
+        await db.quote_lines.insert_one(copy)
+
+    owned = tenancy.scope({"id": quote_id}, "quotes", user)
+    await db.quotes.update_one(owned, {"$set": {
+        "version": new_version, "status": "Sent",
+        "approval": "", "approved_by": "", "approved_at": "",
+    }})
+    out = await db.quotes.find_one(owned, {"_id": 0})
+    out["derived_status"] = lc.quote_status(out)
+    return out
+
+
 @api.get("/dw-surveys")
 async def list_dw_surveys(_: dict = Depends(get_current_user)):
     return await db.dw_surveys.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000)
