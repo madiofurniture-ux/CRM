@@ -7,6 +7,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 import os
 import logging
+import time
 from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
@@ -39,7 +40,9 @@ logger = logging.getLogger("madio")
 # Mongo
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 db_name = os.environ.get("DB_NAME", "madio_crm")
-os.environ.setdefault("JWT_SECRET", "madio_secret_key_2026_crm")
+# Deliberately no JWT_SECRET default here: setdefault would put a key that is
+# readable in this public repo into the environment, and auth.py could no longer
+# tell that it was missing. See auth._secret().
 client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
 
@@ -67,13 +70,59 @@ async def root():
 
 
 # ---------- Auth ----------
+# ── Login throttling ──────────────────────────────────────────────────────
+# The only credential is a 4-digit PIN — 10,000 possibilities against a handful
+# of known usernames. Without a limit those guesses are free and an admin PIN
+# falls in minutes. Held in memory, which is enough for a single instance; a
+# multi-instance deployment would need a shared store to be strict.
+LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "6"))
+LOGIN_LOCKOUT_SECONDS = int(os.environ.get("LOGIN_LOCKOUT_SECONDS", "900"))
+_login_fails: dict = {}
+
+
+def _login_key(request: Request, username: str) -> str:
+    ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+          or (request.client.host if request.client else "?"))
+    return f"{ip}|{username}"
+
+
+def _login_check(key: str):
+    rec = _login_fails.get(key)
+    if not rec:
+        return
+    count, until = rec
+    if count >= LOGIN_MAX_ATTEMPTS and until > time.time():
+        wait = int(until - time.time())
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in {wait // 60 + 1} minute(s).",
+            headers={"Retry-After": str(wait)},
+        )
+
+
+def _login_fail(key: str):
+    count = _login_fails.get(key, (0, 0.0))[0] + 1
+    _login_fails[key] = (count, time.time() + LOGIN_LOCKOUT_SECONDS)
+    if len(_login_fails) > 5000:          # bound the dict against junk usernames
+        now = time.time()
+        for k, (_, u) in list(_login_fails.items()):
+            if u < now:
+                _login_fails.pop(k, None)
+
+
 @api.post("/auth/login", response_model=LoginResponse)
-async def login(payload: LoginRequest):
-    user = await db.users.find_one({"username": payload.username.lower().strip()})
+async def login(payload: LoginRequest, request: Request):
+    username = payload.username.lower().strip()
+    key = _login_key(request, username)
+    _login_check(key)
+    user = await db.users.find_one({"username": username})
     if not user:
+        _login_fail(key)
         raise HTTPException(status_code=401, detail="Invalid username or PIN")
     if not verify_pin(payload.pin, user["pin_hash"]):
+        _login_fail(key)
         raise HTTPException(status_code=401, detail="Invalid username or PIN")
+    _login_fails.pop(key, None)           # a good PIN clears the counter
     token = create_token(user["id"], user["username"], user["role"])
     public = {k: v for k, v in user.items() if k not in ("_id", "pin_hash")}
     return {"token": token, "user": public}
