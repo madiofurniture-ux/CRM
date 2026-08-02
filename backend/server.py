@@ -1200,19 +1200,28 @@ async def quote_revise(quote_id: str, user: dict = Depends(get_current_user)):
     q = await _quote_or_404(quote_id, user)
     cur = int(q.get("version") or 1)
     new_version = cur + 1
+    carried = []
     for line in await _quote_lines(quote_id, user):
         if int(line.get("version") or 1) != cur:
             continue
+        carried.append(lc.calc_line(dict(line)))
         copy = dict(line)
         copy.update({"id": new_id(), "version": new_version, "created_at": now_iso()})
         copy.pop("_id", None)
         tenancy.stamp(copy, "quote_lines", user)
         await db.quote_lines.insert_one(copy)
 
+    # A revision starts unapproved — the previous sign-off covered the previous
+    # version. But the discount carries forward, so re-derive whether it still
+    # needs approval instead of blanket-clearing: otherwise revising an
+    # over-threshold quote would silently drop its pending flag and re-enable
+    # conversion without anyone signing off.
+    approval = "pending" if lc.needs_approval(
+        lc.lines_subtotal(carried), lc.money(q.get("discount"))) else ""
     owned = tenancy.scope({"id": quote_id}, "quotes", user)
     await db.quotes.update_one(owned, {"$set": {
         "version": new_version, "status": "Sent",
-        "approval": "", "approved_by": "", "approved_at": "",
+        "approval": approval, "approved_by": "", "approved_at": "",
     }})
     out = await db.quotes.find_one(owned, {"_id": 0})
     out["derived_status"] = lc.quote_status(out)
