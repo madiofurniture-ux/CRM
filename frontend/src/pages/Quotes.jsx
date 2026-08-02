@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
-import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers } from "lucide-react";
+import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers, SlidersHorizontal } from "lucide-react";
 
 const DIVISIONS = ["Furniture", "MAP", "D&W"];
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 
 export default function Quotes() {
+  const nav = useNavigate();
   const [rows, setRows] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [search, setSearch] = useState("");
@@ -216,6 +218,12 @@ export default function Quotes() {
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-bold text-[var(--ink)]">{inrFull(r.value)}</td>
                     <td className="px-4 py-3 text-right space-x-1">
+                      {/* The workspace route existed but nothing linked to it, so the
+                          line-item builder, discount approval and versions were
+                          reachable only by typing the URL. */}
+                      <button onClick={() => nav(`/quotes/ws/${r.id}`)} className="p-1.5 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Open workspace — line items, discount, versions">
+                        <SlidersHorizontal size={15} />
+                      </button>
                       <button onClick={() => openEdit(r)} className="p-1.5 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Edit">
                         <Edit2 size={15} />
                       </button>
