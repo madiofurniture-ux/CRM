@@ -27,7 +27,10 @@ export default function QuoteWorkspace() {
 
   const q = ws.quote;
   const isAdmin = user?.role === "admin";
-  const pending = q.approval === "pending";
+  const rejected = q.approval === "rejected";
+  // Rejected must block conversion too — checking only "pending" meant a
+  // refused discount unlocked the Convert button instead of holding it.
+  const pending = q.approval === "pending" || rejected;
 
   const addLine = async () => {
     await api.post("/quote-lines", { quote_id: id, version: q.version || 1, description: "", w: 0, h: 0, qty: 1, rate: 0 });
@@ -74,7 +77,11 @@ export default function QuoteWorkspace() {
 
         {pending && (
           <div className="bg-[var(--warn-soft)] border border-[var(--warn)] rounded-lg px-4 py-3 flex items-center justify-between">
-            <span className="text-sm text-[var(--ink)]">Discount {inrFull(q.discount)} exceeds 10% of subtotal — needs approval.</span>
+            <span className="text-sm text-[var(--ink)]">
+              {rejected
+                ? `Discount ${inrFull(q.discount)} was rejected — lower it or ask an admin again.`
+                : `Discount ${inrFull(q.discount)} exceeds 10% of subtotal — needs approval.`}
+            </span>
             {isAdmin
               ? <div className="flex gap-2"><button onClick={() => approve(true)} className="btn-primary">Approve</button><button onClick={() => approve(false)} className="btn-ghost text-[var(--danger)]">Reject</button></div>
               : <span className="text-xs text-[var(--ink-3)]">Awaiting an admin</span>}

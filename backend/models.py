@@ -148,6 +148,15 @@ class QuoteBase(BaseModel):
     tax_pct: Optional[float] = GST_DEFAULT
     tax_total: Optional[float] = 0
     grand_total: Optional[float] = 0
+    # ---- workspace: line-item builder, discount approval, versions ----
+    # `discount` is an absolute rupee amount off the subtotal, not a percentage
+    # (LineItem.discount_pct is the per-line percentage and is unrelated).
+    version: int = 1
+    discount: Optional[float] = 0
+    # "" (none needed) | "pending" | "approved" | "rejected"
+    approval: Optional[str] = ""
+    approved_by: Optional[str] = ""
+    approved_at: Optional[str] = ""
 
 
 class QuoteCreate(QuoteBase):

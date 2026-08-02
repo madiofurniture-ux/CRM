@@ -1,47 +1,64 @@
-# Netlify configuration for MADIO CRM
+# Netlify configuration — MADIO CRM (React frontend)
 #
-# The app is a single self-contained file (MADIO_CRM_v16.html). This rewrite
-# serves it at every path with a 200, so the site root (e.g. crm.yourdomain.com)
-# loads the app directly — no index.html duplicate and no redirect flash.
+# This branch contains the React + FastAPI application. The frontend is built
+# from frontend/ and served as a single-page app; the FastAPI backend deploys
+# separately (see render.yaml).
 #
-# In the Netlify UI: leave the build command blank and set the
-# publish directory to "." (the repo root).
+# NOTE: this file previously published the repo root and rewrote every path to
+# the legacy single-file MADIO_CRM_v16.html. On this branch that deployed the
+# old standalone app instead of this one, so it has been replaced.
 
 [build]
-  publish = "."
-  command = ""
+  base = "frontend"
+  command = "npm ci --no-audit --no-fund && npm run build"
+  publish = "frontend/build"
 
-[[headers]]
-  for = "/*"
-  [headers.values]
-    X-Frame-Options = "SAMEORIGIN"
-    X-Content-Type-Options = "nosniff"
-    Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "camera=(self), geolocation=(self)"
+[build.environment]
+  # Create React App treats warnings as errors on CI, which fails the build on
+  # lint noise that does not affect the running app.
+  CI = "false"
+  NODE_VERSION = "20"
 
-[[headers]]
-  for = "/MADIO_CRM_v16.html"
-  [headers.values]
-    Cache-Control = "no-cache, no-store, must-revalidate"
-
+# ── API ────────────────────────────────────────────────────────────────────
+# The frontend calls same-origin "/api" when REACT_APP_BACKEND_URL is unset
+# (frontend/src/lib/api.js). Proxying here keeps the browser on one origin, so
+# the backend needs no CORS configuration.
+#
+# CHANGE THIS to your deployed backend URL. The host below follows from the
+# service name in render.yaml ("madio-crm-api"); confirm it in the Render
+# dashboard once the backend is live.
 [[redirects]]
-  from = "/crm"
-  to = "/MADIO_CRM_v16.html"
+  from = "/api/*"
+  to = "https://madio-crm-api.onrender.com/api/:splat"
   status = 200
+  force = true
 
-[[redirects]]
-  from = "/app"
-  to = "/MADIO_CRM_v16.html"
-  status = 200
+# ── SPA fallback ───────────────────────────────────────────────────────────
+# Must stay after the API rule, or it would swallow /api/* as well. React
+# Router owns every other path, so unknown URLs serve index.html, not a 404.
 [[redirects]]
   from = "/*"
-  to = "/MADIO_CRM_v16.html"
+  to = "/index.html"
   status = 200
 
-# Security headers — sensible defaults for a static app.
+# ── Headers ────────────────────────────────────────────────────────────────
 [[headers]]
   for = "/*"
   [headers.values]
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "SAMEORIGIN"
     Referrer-Policy = "strict-origin-when-cross-origin"
+    # Attendance takes a selfie and reads location at check-in.
+    Permissions-Policy = "camera=(self), geolocation=(self)"
+
+# Hashed bundles are immutable. index.html must never be cached, or users keep
+# loading an old document that points at asset filenames the deploy removed.
+[[headers]]
+  for = "/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
