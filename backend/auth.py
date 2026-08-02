@@ -1,5 +1,7 @@
 """PIN-based authentication, JWT, and dependency."""
+import logging
 import os
+import secrets
 import bcrypt
 import jwt
 from datetime import datetime, timezone, timedelta
@@ -9,8 +11,27 @@ JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
 
 
+# A literal default here is the same as no signing key at all: this repo is
+# public, so anyone could read it and mint a token for any user in any tenant.
+# When JWT_SECRET is unset we generate a random one per process instead. That
+# fails safe — nobody can forge a token — at the cost of sessions not surviving
+# a restart, which is the visible nudge to set the variable properly.
+_EPHEMERAL_SECRET = secrets.token_urlsafe(48)
+_warned = False
+
+
 def _secret() -> str:
-    return os.environ.get("JWT_SECRET", "madio_secret_key_2026_crm")
+    global _warned
+    env = os.environ.get("JWT_SECRET", "").strip()
+    if env:
+        return env
+    if not _warned:
+        _warned = True
+        logging.getLogger("madio").warning(
+            "JWT_SECRET is not set — using a random per-process key. Tokens will "
+            "be invalidated on every restart. Set JWT_SECRET in the environment."
+        )
+    return _EPHEMERAL_SECRET
 
 
 
