@@ -789,10 +789,10 @@ make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash)
 
 # ---------- Outstanding report ----------
 @api.get("/outstanding")
-async def outstanding_report(_: dict = Depends(get_current_user)):
-    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
-    invoices = await db.invoices.find({}, {"_id": 0}).to_list(5000)
-    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
+async def outstanding_report(user: dict = Depends(get_current_user)):
+    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
+    invoices = await db.invoices.find(tenancy.scope({}, "invoices", user), {"_id": 0}).to_list(5000)
+    quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
 
     outstanding_sales = [s for s in sales if (s.get("balance") or 0) > 0]
     outstanding_invoices = [i for i in invoices if (i.get("balance") or 0) > 0]
@@ -1000,12 +1000,12 @@ def _calc_monthly_revenue(sales: List[dict]) -> List[dict]:
 
 # ---------- Dashboard / Analytics ----------
 @api.get("/dashboard/stats")
-async def dashboard_stats(_: dict = Depends(get_current_user)):
-    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
-    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
-    leads = await db.leads.find({}, {"_id": 0}).to_list(5000)
-    visitors = await db.visitors.find({}, {"_id": 0}).to_list(5000)
+async def dashboard_stats(user: dict = Depends(get_current_user)):
+    quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
+    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
+    inventory = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)
+    leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
+    visitors = await db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0}).to_list(5000)
 
     today = now_iso()[:10]
     return {
@@ -1025,8 +1025,8 @@ async def dashboard_stats(_: dict = Depends(get_current_user)):
 
 
 @api.get("/analytics/inventory")
-async def inventory_analytics(_: dict = Depends(get_current_user)):
-    items = await db.inventory.find({}, {"_id": 0}).to_list(5000)
+async def inventory_analytics(user: dict = Depends(get_current_user)):
+    items = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)
     by_category = {}
     by_vendor = {}
     by_location = {}
@@ -1065,7 +1065,8 @@ async def inventory_analytics(_: dict = Depends(get_current_user)):
 async def get_projects(user=Depends(get_current_user)):
     # {"_id": 0} is essential: without it Mongo's ObjectId reaches the JSON
     # encoder and the whole page 500s with "Unable to serialize ObjectId".
-    return await db.projects.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return await db.projects.find(
+        tenancy.scope({}, "projects", user), {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 
 @api.post("/projects", response_model=dict)
@@ -1480,12 +1481,13 @@ async def reports(period: str = "thisweek", _: dict = Depends(get_current_user))
 
 # ---------- Alerts (follow-ups + money + dead stock) ----------
 @api.get("/alerts")
-async def alerts(_: dict = Depends(get_current_user)):
-    leads = await db.leads.find({}, {"_id": 0}).to_list(5000)
-    navaki = await db.visitors.find({"source": "Navaki"}, {"_id": 0}).to_list(5000)
-    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
-    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
+async def alerts(user: dict = Depends(get_current_user)):
+    leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
+    navaki = await db.visitors.find(
+        tenancy.scope({"source": "Navaki"}, "visitors", user), {"_id": 0}).to_list(5000)
+    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
+    quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
+    inventory = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)
     items = lc.build_alerts(leads, navaki, sales, quotes, inventory)
     counts: dict = {}
     for a in items:
