@@ -11,7 +11,10 @@
 [build]
   base = "frontend"
   command = "npm ci --no-audit --no-fund && npm run build"
-  publish = "frontend/build"
+  # Relative to `base`, not the repo root — Netlify prepends base to publish,
+  # so "frontend/build" here resolved to frontend/frontend/build and failed
+  # with "Deploy directory does not exist".
+  publish = "build"
 
 [build.environment]
   # Create React App treats warnings as errors on CI, which fails the build on
