@@ -161,7 +161,9 @@ async def me(user: dict = Depends(get_current_user)):
 
 @api.get("/auth/users")
 async def list_users(user: dict = Depends(require_admin)):
-    users = await db.users.find({}, {"_id": 0, "pin_hash": 0}).to_list(200)
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    users = await db.users.find(
+        {"tenant_id": tid}, {"_id": 0, "pin_hash": 0}).to_list(200)
     return users
 
 
@@ -191,16 +193,17 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
 
 
 @api.put("/auth/users/{user_id}")
-async def update_user(user_id: str, payload: UserUpdate, _: dict = Depends(require_admin)):
-    existing = await db.users.find_one({"id": user_id})
+async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(require_admin)):
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    existing = await db.users.find_one({"id": user_id, "tenant_id": tid})
     if not existing:
         raise HTTPException(status_code=404, detail="User not found")
     update = {k: v for k, v in payload.model_dump(exclude_none=True).items() if k != "pin"}
     if payload.pin:
         update["pin_hash"] = hash_pin(payload.pin)
     if update:
-        await db.users.update_one({"id": user_id}, {"$set": update})
-    out = await db.users.find_one({"id": user_id}, {"_id": 0, "pin_hash": 0})
+        await db.users.update_one({"id": user_id, "tenant_id": tid}, {"$set": update})
+    out = await db.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0, "pin_hash": 0})
     return out
 
 
@@ -208,7 +211,10 @@ async def update_user(user_id: str, payload: UserUpdate, _: dict = Depends(requi
 async def delete_user(user_id: str, current: dict = Depends(require_admin)):
     if current["id"] == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    await db.users.delete_one({"id": user_id})
+    tid = tenancy.tenant_of(current) or "__no_tenant__"
+    res = await db.users.delete_one({"id": user_id, "tenant_id": tid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
     return {"ok": True}
 
 
@@ -449,7 +455,7 @@ async def tenants_list(user: dict = Depends(require_admin)):
     if tenancy.tenant_of(user) != DEFAULT_TENANT:
         raise HTTPException(status_code=403, detail="Not permitted")
     out = []
-    for t in await db.tenants.find({}, {"_id": 0}).to_list(500):
+    for t in await db.tenants.find({}, {"_id": 0}).to_list(500):  # tenant-safe: platform registry, not per-tenant data; owner-only above
         t["users"] = await db.users.count_documents({"tenant_id": t["id"]})
         t["records"] = sum([await db[c].count_documents({"tenant_id": t["id"]})
                             for c in ("leads", "quotes", "sales", "inventory")])
@@ -869,7 +875,8 @@ def _today():
 
 @api.get("/attendance/today")
 async def attendance_today(user: dict = Depends(get_current_user)):
-    rec = await db.attendance.find_one({"user_id": user["id"], "date": _today()}, {"_id": 0})
+    rec = await db.attendance.find_one(
+        tenancy.scope({"user_id": user["id"], "date": _today()}, "attendance", user), {"_id": 0})
     return rec
 
 
@@ -880,6 +887,9 @@ async def list_attendance(
     days: Optional[int] = None,
     user: dict = Depends(get_current_user),
 ):
+    # The real risk here: an admin viewing the team list with no user_id gives
+    # q = {}, which without tenant scoping returned every tenant's staff
+    # attendance mixed together -- names, check-in GPS, photos.
     q = {}
     if date:
         q["date"] = date
@@ -896,7 +906,8 @@ async def list_attendance(
         from datetime import date as _date, timedelta
         cutoff = (_date.today() - timedelta(days=days)).isoformat()
         q["date"] = {"$gte": cutoff}
-    return await db.attendance.find(q, {"_id": 0}).sort("date", -1).to_list(500)
+    return await db.attendance.find(
+        tenancy.scope(q, "attendance", user), {"_id": 0}).sort("date", -1).to_list(500)
 
 
 @api.post("/attendance/check-in")
@@ -905,7 +916,8 @@ async def check_in(payload: AttendanceCheckIn, user: dict = Depends(get_current_
     dist = _haversine_m(payload.lat, payload.lng, settings["lat"], settings["lng"])
     within = dist <= settings["radius_m"]
     today = _today()
-    existing = await db.attendance.find_one({"user_id": user["id"], "date": today})
+    existing = await db.attendance.find_one(
+        tenancy.scope({"user_id": user["id"], "date": today}, "attendance", user))
     if existing and existing.get("check_in_at"):
         raise HTTPException(status_code=400, detail="Already checked in today")
     doc = {
@@ -923,9 +935,11 @@ async def check_in(payload: AttendanceCheckIn, user: dict = Depends(get_current_
         "note": payload.note,
         "created_at": now_iso(),
     }
+    tenancy.stamp(doc, "attendance", user)
     if existing:
         await db.attendance.update_one({"_id": existing["_id"]}, {"$set": {k: v for k, v in doc.items() if k != "id"}})
-        rec = await db.attendance.find_one({"user_id": user["id"], "date": today}, {"_id": 0})
+        rec = await db.attendance.find_one(
+            tenancy.scope({"user_id": user["id"], "date": today}, "attendance", user), {"_id": 0})
         return rec
     await db.attendance.insert_one(doc)
     doc.pop("_id", None)
@@ -938,7 +952,8 @@ async def check_out(payload: AttendanceCheckIn, user: dict = Depends(get_current
     dist = _haversine_m(payload.lat, payload.lng, settings["lat"], settings["lng"])
     within = dist <= settings["radius_m"]
     today = _today()
-    rec = await db.attendance.find_one({"user_id": user["id"], "date": today})
+    rec = await db.attendance.find_one(
+        tenancy.scope({"user_id": user["id"], "date": today}, "attendance", user))
     if not rec or not rec.get("check_in_at"):
         raise HTTPException(status_code=400, detail="Not checked in yet")
     if rec.get("check_out_at"):
@@ -1074,6 +1089,7 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
     doc = data.dict()
     doc["id"] = new_id()
     doc["created_at"] = now_iso()
+    tenancy.stamp(doc, "projects", user)
     await db.projects.insert_one(doc)
     doc.pop("_id", None)
     return doc
@@ -1084,10 +1100,11 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
     patch = {k: v for k, v in data.dict().items() if v is not None}
     if not patch:
         raise HTTPException(400, "No fields to update")
-    res = await db.projects.update_one({"id": project_id}, {"$set": patch})
+    owned = tenancy.scope({"id": project_id}, "projects", user)
+    res = await db.projects.update_one(owned, {"$set": patch})
     if res.matched_count == 0:
         raise HTTPException(404, "Project not found")
-    item = await db.projects.find_one({"id": project_id})
+    item = await db.projects.find_one(owned)
     item.pop("_id", None)
     return item
 
@@ -1097,17 +1114,18 @@ async def update_project_stage(project_id: str, data: ProjectStageUpdate, user=D
     valid_stages = ["Survey", "Quoted", "Execution", "Review", "Closure"]
     if data.stage not in valid_stages:
         raise HTTPException(400, f"Invalid stage. Must be one of: {valid_stages}")
-    res = await db.projects.update_one({"id": project_id}, {"$set": {"stage": data.stage}})
+    owned = tenancy.scope({"id": project_id}, "projects", user)
+    res = await db.projects.update_one(owned, {"$set": {"stage": data.stage}})
     if res.matched_count == 0:
         raise HTTPException(404, "Project not found")
-    item = await db.projects.find_one({"id": project_id})
+    item = await db.projects.find_one(owned)
     item.pop("_id", None)
     return item
 
 
 @api.delete("/projects/{project_id}")
 async def delete_project(project_id: str, user=Depends(get_current_user)):
-    res = await db.projects.delete_one({"id": project_id})
+    res = await db.projects.delete_one(tenancy.scope({"id": project_id}, "projects", user))
     if res.deleted_count == 0:
         raise HTTPException(404, "Project not found")
     return {"status": "deleted"}
@@ -1279,48 +1297,59 @@ async def quote_revise(quote_id: str, user: dict = Depends(get_current_user)):
 
 
 @api.get("/dw-surveys")
-async def list_dw_surveys(_: dict = Depends(get_current_user)):
-    return await db.dw_surveys.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+async def list_dw_surveys(user: dict = Depends(get_current_user)):
+    return await db.dw_surveys.find(
+        tenancy.scope({}, "dw_surveys", user), {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 
 @api.post("/dw-surveys")
-async def create_dw_survey(payload: DWSurveyCreate, _: dict = Depends(get_current_user)):
+async def create_dw_survey(payload: DWSurveyCreate, user: dict = Depends(get_current_user)):
     doc = payload.model_dump()
     doc["id"] = new_id()
     doc["created_at"] = now_iso()
     if not doc.get("date"):
         doc["date"] = lc.today_iso()
     if not doc.get("survey_id"):
-        existing = await db.dw_surveys.find({}, {"survey_id": 1, "_id": 0}).to_list(2000)
+        existing = await db.dw_surveys.find(
+            tenancy.scope({}, "dw_surveys", user), {"survey_id": 1, "_id": 0}).to_list(2000)
         doc["survey_id"] = lc.next_survey_id(existing)
+    tenancy.stamp(doc, "dw_surveys", user)
     await db.dw_surveys.insert_one(doc)
     doc.pop("_id", None)
     return doc
 
 
 @api.put("/dw-surveys/{item_id}")
-async def update_dw_survey(item_id: str, payload: dict, _: dict = Depends(get_current_user)):
-    payload.pop("_id", None); payload.pop("id", None)
-    if not await db.dw_surveys.find_one({"id": item_id}):
+async def update_dw_survey(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    payload.pop("_id", None); payload.pop("id", None); payload.pop("tenant_id", None)
+    owned = tenancy.scope({"id": item_id}, "dw_surveys", user)
+    if not await db.dw_surveys.find_one(owned):
         raise HTTPException(status_code=404, detail="Not found")
-    await db.dw_surveys.update_one({"id": item_id}, {"$set": payload})
-    return await db.dw_surveys.find_one({"id": item_id}, {"_id": 0})
+    await db.dw_surveys.update_one(owned, {"$set": payload})
+    return await db.dw_surveys.find_one(owned, {"_id": 0})
 
 
 @api.delete("/dw-surveys/{item_id}")
-async def delete_dw_survey(item_id: str, _: dict = Depends(get_current_user)):
-    await db.dw_surveys.delete_one({"id": item_id})
-    await db.dw_openings.delete_many({"survey_id": item_id})
+async def delete_dw_survey(item_id: str, user: dict = Depends(get_current_user)):
+    res = await db.dw_surveys.delete_one(tenancy.scope({"id": item_id}, "dw_surveys", user))
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.dw_openings.delete_many(tenancy.scope({"survey_id": item_id}, "dw_openings", user))
     return {"ok": True}
 
 
 # ---------- Leads (auto-assigned LD- id, phone dedup on create) ----------
+# NOTE: this GET is shadowed by make_crud(api, "leads", ...) above, which
+# registers GET /leads first and is the handler that actually serves every
+# request. Fixed for consistency; the live behaviour was already correct.
 @api.get("/leads")
-async def list_leads(_: dict = Depends(get_current_user)):
-    return await db.leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+async def list_leads(user: dict = Depends(get_current_user)):
+    return await db.leads.find(
+        tenancy.scope({}, "leads", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
 @api.get("/payments")
-async def list_payments(_: dict = Depends(get_current_user)):
-    return await db.payments.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+async def list_payments(user: dict = Depends(get_current_user)):
+    return await db.payments.find(
+        tenancy.scope({}, "payments", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
 @api.post("/payments")
@@ -1330,13 +1359,16 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
     doc["created_at"] = now_iso()
     if not doc.get("date"):
         doc["date"] = lc.today_iso()
-    existing = await db.payments.find({}, {"payment_id": 1, "_id": 0}).to_list(5000)
+    existing = await db.payments.find(
+        tenancy.scope({}, "payments", user), {"payment_id": 1, "_id": 0}).to_list(5000)
     doc["payment_id"] = lc.next_payment_id(existing)
+    tenancy.stamp(doc, "payments", user)
     await db.payments.insert_one(doc)
     doc.pop("_id", None)
     # Roll the amount into the sale it is against and re-derive the balance.
     if doc.get("against_sale_id") and doc.get("direction") != "Refund":
-        sale = await db.sales.find_one({"id": doc["against_sale_id"]})
+        sale = await db.sales.find_one(
+            tenancy.scope({"id": doc["against_sale_id"]}, "sales", user))
         if sale:
             paid = lc.money(sale.get("paid")) + lc.money(doc.get("amount"))
             value = lc.money(sale.get("value"))
@@ -1344,25 +1376,33 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
             update = {"paid": paid, "balance": balance}
             if balance == 0:
                 update["stage"] = "Payment Received"
-            await db.sales.update_one({"id": sale["id"]}, {"$set": update})
+            await db.sales.update_one(
+                tenancy.scope({"id": sale["id"]}, "sales", user), {"$set": update})
     return doc
 
 
 @api.delete("/payments/{item_id}")
-async def delete_payment(item_id: str, _: dict = Depends(get_current_user)):
-    await db.payments.delete_one({"id": item_id})
+async def delete_payment(item_id: str, user: dict = Depends(get_current_user)):
+    res = await db.payments.delete_one(tenancy.scope({"id": item_id}, "payments", user))
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
 
 
 # ---------- Projects (auto PM- id) ----------
+# NOTE: this GET is shadowed by get_projects (~line 1064), which registers
+# GET /projects first and is the handler that actually serves every request.
+# Fixed for consistency; the live behaviour was already correct.
 @api.get("/projects")
-async def list_projects(_: dict = Depends(get_current_user)):
-    return await db.projects.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+async def list_projects(user: dict = Depends(get_current_user)):
+    return await db.projects.find(
+        tenancy.scope({}, "projects", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
 @api.get("/stock-movements")
-async def list_stock_movements(_: dict = Depends(get_current_user)):
-    return await db.stock_movements.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+async def list_stock_movements(user: dict = Depends(get_current_user)):
+    return await db.stock_movements.find(
+        tenancy.scope({}, "stock_movements", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
 @api.post("/stock-movements")
@@ -1374,11 +1414,15 @@ async def create_stock_movement(payload: StockMovementCreate, user: dict = Depen
         doc["date"] = lc.today_iso()
     if not doc.get("by_user"):
         doc["by_user"] = user.get("name", "")
-    existing = await db.stock_movements.find({}, {"movement_no": 1, "_id": 0}).to_list(5000)
+    existing = await db.stock_movements.find(
+        tenancy.scope({}, "stock_movements", user), {"movement_no": 1, "_id": 0}).to_list(5000)
     doc["movement_no"] = lc.next_movement_id(existing)
+    tenancy.stamp(doc, "stock_movements", user)
     await db.stock_movements.insert_one(doc)
     doc.pop("_id", None)
     # A transfer is booked as an issue here + an offsetting receipt into the destination.
+    # mirror copies doc (via **doc) after doc has been stamped, so it inherits the
+    # same tenant_id rather than needing a second stamp() call.
     if doc["type"] == "Transfer" and doc.get("to_warehouse"):
         mirror = {**doc, "id": new_id(), "type": "Receipt",
                   "warehouse": doc.get("to_warehouse"), "to_warehouse": "",
@@ -1389,15 +1433,20 @@ async def create_stock_movement(payload: StockMovementCreate, user: dict = Depen
 
 
 @api.delete("/stock-movements/{item_id}")
-async def delete_stock_movement(item_id: str, _: dict = Depends(get_current_user)):
-    await db.stock_movements.delete_one({"id": item_id})
+async def delete_stock_movement(item_id: str, user: dict = Depends(get_current_user)):
+    res = await db.stock_movements.delete_one(
+        tenancy.scope({"id": item_id}, "stock_movements", user))
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
 
 
 @api.get("/stock-movements/summary")
-async def stock_summary(_: dict = Depends(get_current_user)):
-    moves = await db.stock_movements.find({}, {"_id": 0}).to_list(5000)
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(5000)
+async def stock_summary(user: dict = Depends(get_current_user)):
+    moves = await db.stock_movements.find(
+        tenancy.scope({}, "stock_movements", user), {"_id": 0}).to_list(5000)
+    inventory = await db.inventory.find(
+        tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)
     return lc.stock_summary(moves, inventory)
 
 
@@ -1423,20 +1472,24 @@ DC_COLLECTIONS = {
 }
 
 @api.get("/data-centre/collections")
-async def dc_collections(_: dict = Depends(get_current_user)):
+async def dc_collections(user: dict = Depends(get_current_user)):
     out = []
     for name, (coll, id_field, fields) in DC_COLLECTIONS.items():
         out.append({"name": name, "id_field": id_field, "fields": fields,
-                    "count": await db[coll].count_documents({})})
+                    "count": await db[coll].count_documents(tenancy.scope({}, coll, user))})
     return out
 
 
+# Admin-only: an unscoped export let any authenticated user dump every row of
+# leads/quotes/sales/... across every tenant. DC_COLLECTIONS does not include
+# users or tenants, so those two were never exportable through this endpoint
+# even before this fix -- only the tenant-boundary was missing.
 @api.get("/data-centre/export/{name}")
-async def dc_export(name: str, _: dict = Depends(get_current_user)):
+async def dc_export(name: str, user: dict = Depends(require_admin)):
     if name not in DC_COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown collection")
     coll, _id, fields = DC_COLLECTIONS[name]
-    rows = await db[coll].find({}, {"_id": 0}).to_list(20000)
+    rows = await db[coll].find(tenancy.scope({}, coll, user), {"_id": 0}).to_list(20000)
     return {"name": name, "fields": fields, "csv": lc.to_csv(rows, fields), "count": len(rows)}
 
 
@@ -1456,24 +1509,27 @@ async def dc_import(name: str, request: Request, user: dict = Depends(require_ad
         if not key:                                   # never create empty-keyed rows
             skipped += 1
             continue
-        existing = await db[coll].find_one({id_field: key})
+        rec.pop("tenant_id", None)                     # a caller may never move a record between tenants
+        owned = tenancy.scope({id_field: key}, coll, user)
+        existing = await db[coll].find_one(owned)
         if existing:
-            await db[coll].update_one({id_field: key}, {"$set": rec})
+            await db[coll].update_one(owned, {"$set": rec})
             updated += 1
         else:
             rec["id"] = new_id()
             rec["created_at"] = now_iso()
+            tenancy.stamp(rec, coll, user)
             await db[coll].insert_one(rec)
             inserted += 1
     return {"inserted": inserted, "updated": updated, "skipped": skipped, "total": len(records)}
 
 
 @api.get("/reports")
-async def reports(period: str = "thisweek", _: dict = Depends(get_current_user)):
-    leads = await db.leads.find({}, {"_id": 0}).to_list(5000)
-    quotes = await db.quotes.find({}, {"_id": 0}).to_list(5000)
-    sales = await db.sales.find({}, {"_id": 0}).to_list(5000)
-    payments = await db.payments.find({}, {"_id": 0}).to_list(5000)
+async def reports(period: str = "thisweek", user: dict = Depends(get_current_user)):
+    leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
+    quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
+    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
+    payments = await db.payments.find(tenancy.scope({}, "payments", user), {"_id": 0}).to_list(5000)
     report = lc.build_report(period, leads, quotes, sales, payments)
     report["whatsapp"] = lc.whatsapp_summary(report)
     return report
@@ -1497,15 +1553,15 @@ async def alerts(user: dict = Depends(get_current_user)):
 
 # ---------- Customer journey (one timeline by phone) ----------
 @api.get("/journey/{phone}")
-async def journey(phone: str, _: dict = Depends(get_current_user)):
+async def journey(phone: str, user: dict = Depends(get_current_user)):
     return lc.build_journey(
         phone,
-        visitors=await db.visitors.find({}, {"_id": 0}).to_list(5000),
-        leads=await db.leads.find({}, {"_id": 0}).to_list(5000),
-        quotes=await db.quotes.find({}, {"_id": 0}).to_list(5000),
-        sales=await db.sales.find({}, {"_id": 0}).to_list(5000),
-        payments=await db.payments.find({}, {"_id": 0}).to_list(5000),
-        activities=await db.activities.find({}, {"_id": 0}).to_list(5000),
+        visitors=await db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0}).to_list(5000),
+        leads=await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000),
+        quotes=await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000),
+        sales=await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
+        payments=await db.payments.find(tenancy.scope({}, "payments", user), {"_id": 0}).to_list(5000),
+        activities=await db.activities.find(tenancy.scope({}, "activities", user), {"_id": 0}).to_list(5000),
     )
 
 
