@@ -5,8 +5,9 @@ import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Download, Upload, Database } from "lucide-react";
 
-// Import / export any dataset as CSV. Export is open to all; import is admin-only
-// (it writes across the whole collection) and upserts on each dataset's id field.
+// Import / export any dataset as CSV. Both are admin-only: export reads
+// across the whole tenant's data, import writes across the whole collection.
+// Upserts on each dataset's id field.
 export default function DataCentre() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -58,7 +59,9 @@ export default function DataCentre() {
                   <div className="text-sm font-medium capitalize">{c.name}</div>
                   <div className="text-[11px] text-[var(--ink-3)]">{c.count} rows</div>
                 </div>
-                <button onClick={(e) => { e.stopPropagation(); exportCsv(c.name); }} className="p-1.5 rounded-md hover:bg-white text-[var(--ink-2)]" title="Export CSV"><Download size={15} /></button>
+                {isAdmin && (
+                  <button onClick={(e) => { e.stopPropagation(); exportCsv(c.name); }} className="p-1.5 rounded-md hover:bg-white text-[var(--ink-2)]" title="Export CSV"><Download size={15} /></button>
+                )}
               </div>
             ))}
           </div>

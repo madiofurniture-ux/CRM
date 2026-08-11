@@ -52,7 +52,12 @@ SHEETS_URL = (
     "https://script.google.com/macros/s/"
     "AKfycbzO5fU8CrHmm6Kf1zWOvHgqNMyFz9voXF1G2P9DmWvr-S_KR6SYWzoRk5fUTW51kAjbZg/exec"
 )
-API_KEY = "madio_secret_crm_key_2026"
+API_KEY = os.environ.get("SHEETS_API_KEY", "")
+if not API_KEY:
+    raise SystemExit(
+        "SHEETS_API_KEY is not set. Put it in backend/.env (never committed) "
+        "or export it before running this tool."
+    )
 _ctx = ssl.create_default_context()
 
 
