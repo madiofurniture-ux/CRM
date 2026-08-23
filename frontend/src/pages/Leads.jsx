@@ -14,7 +14,6 @@ export default function Leads() {
   const [search, setSearch] = useState("");
   const [fStage, setFStage] = useState("All");
   const [show, setShow] = useState(false);
-  const [fixingAll, setFixingAll] = useState(false);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", phone: "", source: "Walk-in",
     stage: "New", follow_up_date: "", remarks: "", assigned_to: "", value: 0,
@@ -28,10 +27,7 @@ export default function Leads() {
     const q = search.toLowerCase();
     return rows.filter((r) => {
       const stage = String(r.stage || "New").trim().toLowerCase();
-      const stageMatch =
-        fStage === "All" ||
-        (fStage === "__other__" ? !isKnownStage(r.stage) : stage === fStage.toLowerCase());
-      return stageMatch &&
+      return (fStage === "All" || stage === fStage.toLowerCase()) &&
         (!q || (r.name || "").toLowerCase().includes(q) || (r.remarks || "").toLowerCase().includes(q));
     });
   }, [rows, search, fStage]);
@@ -48,23 +44,6 @@ export default function Leads() {
   };
   const remove = async (id) => { if (!window.confirm("Delete?")) return; await api.delete(`/leads/${id}`); load(); };
 
-  const fixAllToNew = async () => {
-    const targets = filtered.filter((r) => !isKnownStage(r.stage));
-    if (targets.length === 0) return;
-    if (!window.confirm(`Set ${targets.length} record(s) to "New"?`)) return;
-    setFixingAll(true);
-    try {
-      await Promise.all(targets.map((r) => api.put(`/leads/${r.id}`, { ...r, stage: "New" })));
-      toast.success(`Updated ${targets.length} record(s) to New`);
-      load();
-    } catch {
-      toast.error("Some updates failed — please retry");
-      load();
-    } finally {
-      setFixingAll(false);
-    }
-  };
-
   return (
     <>
       <Topbar title="Leads" subtitle={`${filtered.length} leads · pipeline ${inrFull(filtered.reduce((a, b) => a + (b.value || 0), 0))}`} onAdd={() => { setForm(empty); setShow(true); }} addLabel="Add Lead" />
@@ -74,18 +53,7 @@ export default function Leads() {
           <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             <option value="All">All</option>
             {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
-            <option value="__other__">Other / Unrecognized</option>
           </select>
-          {fStage === "__other__" && filtered.length > 0 && (
-            <button
-              onClick={fixAllToNew}
-              disabled={fixingAll}
-              className="px-3 py-2 rounded-lg bg-[var(--brand)] text-white text-sm font-semibold disabled:opacity-60"
-              data-testid="fix-all-to-new"
-            >
-              {fixingAll ? "Updating…" : `Set all ${filtered.length} to New`}
-            </button>
-          )}
         </div>
 
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
