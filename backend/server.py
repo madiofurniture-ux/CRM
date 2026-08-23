@@ -226,8 +226,9 @@ async def delete_user(user_id: str, current: dict = Depends(require_admin)):
 # filter only; nothing is ever deleted, and undated rows are never swallowed.
 # ══════════════════════════════════════════════════════════════════
 FY_COLLECTIONS = {"quotes", "sales", "visitors", "leads", "invoices",
-                  "petty_cash", "payments", "meets", "tasks"}
-FY_DATE_FIELD = {"tasks": "due"}   # which field holds the record's date
+                  "petty_cash", "payments", "meets", "tasks",
+                  "projects", "dw_surveys", "stock_movements"}
+FY_DATE_FIELD = {"tasks": "due", "projects": "start_date"}   # which field holds the record's date
 
 
 def fy_of(iso) -> str:
@@ -1085,8 +1086,8 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
 async def get_projects(user=Depends(get_current_user)):
     # {"_id": 0} is essential: without it Mongo's ObjectId reaches the JSON
     # encoder and the whole page 500s with "Unable to serialize ObjectId".
-    return await db.projects.find(
-        tenancy.scope({}, "projects", user), {"_id": 0}).sort("created_at", -1).to_list(1000)
+    q = await fy_query("projects", user=user)
+    return await db.projects.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 
 @api.post("/projects", response_model=dict)
@@ -1094,6 +1095,7 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
     doc = data.dict()
     doc["id"] = new_id()
     doc["created_at"] = now_iso()
+    stamp_fy(doc, "projects")
     tenancy.stamp(doc, "projects", user)
     await db.projects.insert_one(doc)
     doc.pop("_id", None)
@@ -1105,6 +1107,7 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
     patch = {k: v for k, v in data.dict().items() if v is not None}
     if not patch:
         raise HTTPException(400, "No fields to update")
+    stamp_fy(patch, "projects")
     owned = tenancy.scope({"id": project_id}, "projects", user)
     res = await db.projects.update_one(owned, {"$set": patch})
     if res.matched_count == 0:
@@ -1303,8 +1306,8 @@ async def quote_revise(quote_id: str, user: dict = Depends(get_current_user)):
 
 @api.get("/dw-surveys")
 async def list_dw_surveys(user: dict = Depends(get_current_user)):
-    return await db.dw_surveys.find(
-        tenancy.scope({}, "dw_surveys", user), {"_id": 0}).sort("created_at", -1).to_list(2000)
+    q = await fy_query("dw_surveys", user=user)
+    return await db.dw_surveys.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
 
 
 @api.post("/dw-surveys")
@@ -1318,6 +1321,7 @@ async def create_dw_survey(payload: DWSurveyCreate, user: dict = Depends(get_cur
         existing = await db.dw_surveys.find(
             tenancy.scope({}, "dw_surveys", user), {"survey_id": 1, "_id": 0}).to_list(2000)
         doc["survey_id"] = lc.next_survey_id(existing)
+    stamp_fy(doc, "dw_surveys")
     tenancy.stamp(doc, "dw_surveys", user)
     await db.dw_surveys.insert_one(doc)
     doc.pop("_id", None)
@@ -1327,6 +1331,7 @@ async def create_dw_survey(payload: DWSurveyCreate, user: dict = Depends(get_cur
 @api.put("/dw-surveys/{item_id}")
 async def update_dw_survey(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
     payload.pop("_id", None); payload.pop("id", None); payload.pop("tenant_id", None)
+    stamp_fy(payload, "dw_surveys")
     owned = tenancy.scope({"id": item_id}, "dw_surveys", user)
     if not await db.dw_surveys.find_one(owned):
         raise HTTPException(status_code=404, detail="Not found")
@@ -1353,8 +1358,8 @@ async def list_leads(user: dict = Depends(get_current_user)):
         tenancy.scope({}, "leads", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
 @api.get("/payments")
 async def list_payments(user: dict = Depends(get_current_user)):
-    return await db.payments.find(
-        tenancy.scope({}, "payments", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
+    q = await fy_query("payments", user=user)
+    return await db.payments.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
 @api.post("/payments")
@@ -1367,6 +1372,7 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
     existing = await db.payments.find(
         tenancy.scope({}, "payments", user), {"payment_id": 1, "_id": 0}).to_list(5000)
     doc["payment_id"] = lc.next_payment_id(existing)
+    stamp_fy(doc, "payments")
     tenancy.stamp(doc, "payments", user)
     await db.payments.insert_one(doc)
     doc.pop("_id", None)
@@ -1406,8 +1412,8 @@ async def list_projects(user: dict = Depends(get_current_user)):
 
 @api.get("/stock-movements")
 async def list_stock_movements(user: dict = Depends(get_current_user)):
-    return await db.stock_movements.find(
-        tenancy.scope({}, "stock_movements", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
+    q = await fy_query("stock_movements", user=user)
+    return await db.stock_movements.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
 @api.post("/stock-movements")
@@ -1422,6 +1428,7 @@ async def create_stock_movement(payload: StockMovementCreate, user: dict = Depen
     existing = await db.stock_movements.find(
         tenancy.scope({}, "stock_movements", user), {"movement_no": 1, "_id": 0}).to_list(5000)
     doc["movement_no"] = lc.next_movement_id(existing)
+    stamp_fy(doc, "stock_movements")
     tenancy.stamp(doc, "stock_movements", user)
     await db.stock_movements.insert_one(doc)
     doc.pop("_id", None)
