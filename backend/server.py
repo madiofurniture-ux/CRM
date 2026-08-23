@@ -8,6 +8,7 @@ load_dotenv(ROOT_DIR / ".env")
 import os
 import logging
 import time
+import asyncio
 from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
@@ -1016,11 +1017,15 @@ def _calc_monthly_revenue(sales: List[dict]) -> List[dict]:
 # ---------- Dashboard / Analytics ----------
 @api.get("/dashboard/stats")
 async def dashboard_stats(user: dict = Depends(get_current_user)):
-    quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
-    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
-    inventory = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)
-    leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
-    visitors = await db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0}).to_list(5000)
+    # These five reads are independent, so running them concurrently costs one
+    # round trip instead of five stacked end-to-end.
+    quotes, sales, inventory, leads, visitors = await asyncio.gather(
+        db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000),
+        db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
+        db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000),
+        db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000),
+        db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0}).to_list(5000),
+    )
 
     today = now_iso()[:10]
     return {
