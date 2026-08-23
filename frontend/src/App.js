@@ -1,4 +1,5 @@
 import "@/App.css";
+import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 
@@ -6,42 +7,55 @@ import { AuthProvider } from "@/context/AuthContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Layout from "@/components/Layout";
 
+// Login is the only screen every visitor needs before auth, so it stays in
+// the main bundle. Everything past it loads on demand — the app was
+// shipping all ~27 pages in one bundle regardless of which one you landed
+// on, which is most of what made the very first load feel slow.
 import Login from "@/pages/Login";
-import Dashboard from "@/pages/Dashboard";
-import Pipeline from "@/pages/Pipeline";
-import Quotes from "@/pages/Quotes";
-import Sales from "@/pages/Sales";
-import Visitors from "@/pages/Visitors";
-import Leads from "@/pages/Leads";
-import Architects from "@/pages/Architects";
-import Inventory from "@/pages/Inventory";
-import InventoryAnalytics from "@/pages/InventoryAnalytics";
-import Tasks from "@/pages/Tasks";
-import Projects from "@/pages/Projects";
-import Attendance from "@/pages/Attendance";
-import RoleManager from "@/pages/RoleManager";
+const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const Pipeline = lazy(() => import("@/pages/Pipeline"));
+const Quotes = lazy(() => import("@/pages/Quotes"));
+const Sales = lazy(() => import("@/pages/Sales"));
+const Visitors = lazy(() => import("@/pages/Visitors"));
+const Leads = lazy(() => import("@/pages/Leads"));
+const Architects = lazy(() => import("@/pages/Architects"));
+const Inventory = lazy(() => import("@/pages/Inventory"));
+const InventoryAnalytics = lazy(() => import("@/pages/InventoryAnalytics"));
+const Tasks = lazy(() => import("@/pages/Tasks"));
+const Projects = lazy(() => import("@/pages/Projects"));
+const Attendance = lazy(() => import("@/pages/Attendance"));
+const RoleManager = lazy(() => import("@/pages/RoleManager"));
 
 // Previously orphaned — the sidebar linked to these but no route existed
-import Outstanding from "@/pages/Outstanding";
-import Invoices from "@/pages/Invoices";
-import PettyCash from "@/pages/PettyCash";
-import Meets from "@/pages/Meets";
+const Outstanding = lazy(() => import("@/pages/Outstanding"));
+const Invoices = lazy(() => import("@/pages/Invoices"));
+const PettyCash = lazy(() => import("@/pages/PettyCash"));
+const Meets = lazy(() => import("@/pages/Meets"));
 
 // Recovered parity modules
-import Reports from "@/pages/Reports";
-import Alerts from "@/pages/Alerts";
-import DWSurvey from "@/pages/DWSurvey";
-import QuoteWorkspace from "@/pages/QuoteWorkspace";
-import StockLedger from "@/pages/StockLedger";
-import DataCentre from "@/pages/DataCentre";
-import FinancialYear from "@/pages/FinancialYear";
-import Workflows from "@/pages/Workflows";
+const Reports = lazy(() => import("@/pages/Reports"));
+const Alerts = lazy(() => import("@/pages/Alerts"));
+const DWSurvey = lazy(() => import("@/pages/DWSurvey"));
+const QuoteWorkspace = lazy(() => import("@/pages/QuoteWorkspace"));
+const StockLedger = lazy(() => import("@/pages/StockLedger"));
+const DataCentre = lazy(() => import("@/pages/DataCentre"));
+const FinancialYear = lazy(() => import("@/pages/FinancialYear"));
+const Workflows = lazy(() => import("@/pages/Workflows"));
+
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center min-h-screen text-sm text-[var(--ink-3)]">
+      Loading…
+    </div>
+  );
+}
 
 function App() {
   return (
     <AuthProvider>
       <Toaster position="top-right" richColors closeButton />
       <BrowserRouter>
+        <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
@@ -81,6 +95,7 @@ function App() {
           <Route path="/admin/financial-year" element={<ProtectedRoute page="financial-year"><Layout><FinancialYear /></Layout></ProtectedRoute>} />
           <Route path="/admin/workflows" element={<ProtectedRoute page="workflows"><Layout><Workflows /></Layout></ProtectedRoute>} />
         </Routes>
+        </Suspense>
       </BrowserRouter>
     </AuthProvider>
   );
