@@ -495,6 +495,7 @@ class PaymentBase(BaseModel):
     kind: Optional[str] = "Advance"     # Advance / Part / Final / Refund
     received_by: Optional[str] = ""
     against_sale_id: Optional[str] = ""
+    against_invoice_id: Optional[str] = ""
     against_quote_no: Optional[str] = ""
     phone: Optional[str] = ""
     remarks: Optional[str] = ""

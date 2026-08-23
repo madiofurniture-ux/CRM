@@ -1397,7 +1397,7 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
     tenancy.stamp(doc, "payments", user)
     await db.payments.insert_one(doc)
     doc.pop("_id", None)
-    # Roll the amount into the sale it is against and re-derive the balance.
+    # Roll the amount into the sale/invoice it is against and re-derive the balance.
     if doc.get("against_sale_id") and doc.get("direction") != "Refund":
         sale = await db.sales.find_one(
             tenancy.scope({"id": doc["against_sale_id"]}, "sales", user))
@@ -1410,6 +1410,18 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
                 update["stage"] = "Payment Received"
             await db.sales.update_one(
                 tenancy.scope({"id": sale["id"]}, "sales", user), {"$set": update})
+    if doc.get("against_invoice_id") and doc.get("direction") != "Refund":
+        invoice = await db.invoices.find_one(
+            tenancy.scope({"id": doc["against_invoice_id"]}, "invoices", user))
+        if invoice:
+            paid = lc.money(invoice.get("paid")) + lc.money(doc.get("amount"))
+            total = lc.money(invoice.get("total"))
+            balance = max(0.0, total - paid)
+            update = {"paid": paid, "balance": balance}
+            if balance == 0:
+                update["status"] = "Paid"
+            await db.invoices.update_one(
+                tenancy.scope({"id": invoice["id"]}, "invoices", user), {"$set": update})
     return doc
 
 

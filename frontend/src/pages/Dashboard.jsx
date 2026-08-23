@@ -22,7 +22,10 @@ export default function Dashboard() {
     setLoading(true);
     try {
       const [s, q, l] = await Promise.all([
-        api.get("/dashboard/stats"),
+        // Computed server-side from quotes/sales/inventory/leads/visitors, so it
+        // can't be kept fresh by the generic per-resource cache invalidation —
+        // skip the cache rather than risk stale totals.
+        api.get("/dashboard/stats", { skipCache: true }),
         api.get("/quotes"),
         api.get("/leads"),
       ]);
