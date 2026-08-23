@@ -3,7 +3,7 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
-import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, Plus, ChevronRight, X, UserCheck, Calendar } from "lucide-react";
+import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 const STAGES = [
@@ -26,6 +26,8 @@ export default function Projects() {
   const [activeStage, setActiveStage] = useState("All");
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const emptyForm = {
     project_no: `PRJ-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -81,20 +83,52 @@ export default function Projects() {
     }
   };
 
+  const openNew = () => {
+    setEditing(null);
+    setForm(emptyForm);
+    setShowModal(true);
+  };
+
+  const openEdit = (p) => {
+    setEditing(p);
+    setForm({ ...emptyForm, ...p });
+    setShowModal(true);
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
+    if (saving) return;
     if (!form.customer || !form.project_no) {
       toast.error("Please fill required fields");
       return;
     }
+    setSaving(true);
     try {
-      await api.post("/projects", form);
-      toast.success("Project created successfully");
+      if (editing) {
+        await api.put(`/projects/${editing.id}`, form);
+        toast.success("Project updated");
+      } else {
+        await api.post("/projects", form);
+        toast.success("Project created successfully");
+      }
       setShowModal(false);
       setForm(emptyForm);
       load();
     } catch {
-      toast.error("Failed to create project");
+      toast.error(editing ? "Failed to update project" : "Failed to create project");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (p) => {
+    if (!window.confirm(`Delete project "${p.project_no}" for ${p.customer}?`)) return;
+    try {
+      await api.delete(`/projects/${p.id}`);
+      toast.success("Project deleted");
+      load();
+    } catch {
+      toast.error("Failed to delete project");
     }
   };
 
@@ -106,10 +140,7 @@ export default function Projects() {
       <Topbar
         title="Project Execution Workflow"
         subtitle={`${filtered.length} projects · Value ${inrFull(totalValue)} · Collected ${inrFull(totalPaid)}`}
-        onAdd={() => {
-          setForm(emptyForm);
-          setShowModal(true);
-        }}
+        onAdd={openNew}
         addLabel="New Project"
       />
 
@@ -182,7 +213,25 @@ export default function Projects() {
                     <span className="font-mono text-xs font-semibold px-2 py-0.5 rounded bg-[var(--surface-2)] text-[var(--ink-2)]">
                       {p.project_no}
                     </span>
-                    <StageBadge stage={p.stage} />
+                    <div className="flex items-center gap-1.5">
+                      <StageBadge stage={p.stage} />
+                      <button
+                        onClick={() => openEdit(p)}
+                        className="p-1 rounded hover:bg-[var(--surface-2)] text-[var(--ink-2)]"
+                        title="Edit project"
+                        data-testid={`project-edit-${p.id}`}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        onClick={() => remove(p)}
+                        className="p-1 rounded hover:bg-red-50 text-red-600"
+                        title="Delete project"
+                        data-testid={`project-delete-${p.id}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </div>
 
                   <h3 className="font-heading font-bold text-base text-[var(--ink)] mb-1">{p.customer}</h3>
@@ -264,7 +313,7 @@ export default function Projects() {
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl border border-[var(--border)] w-full max-w-lg shadow-xl overflow-hidden animate-in fade-in zoom-in duration-150">
             <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface-2)]">
-              <h3 className="font-heading font-bold text-base text-[var(--ink)]">Create Project Workflow</h3>
+              <h3 className="font-heading font-bold text-base text-[var(--ink)]">{editing ? "Edit Project" : "Create Project Workflow"}</h3>
               <button onClick={() => setShowModal(false)} className="p-1 rounded-lg text-[var(--ink-3)] hover:bg-white">
                 <X size={18} />
               </button>
@@ -388,9 +437,11 @@ export default function Projects() {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-semibold rounded-lg bg-[var(--brand)] text-white hover:opacity-90 transition shadow-sm"
+                  disabled={saving}
+                  className="px-5 py-2 text-xs font-semibold rounded-lg bg-[var(--brand)] text-white hover:opacity-90 transition shadow-sm disabled:opacity-60"
+                  data-testid="project-save"
                 >
-                  Create Project
+                  {saving ? "Saving…" : editing ? "Save Changes" : "Create Project"}
                 </button>
               </div>
             </form>
