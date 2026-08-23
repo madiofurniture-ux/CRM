@@ -14,6 +14,7 @@ export default function Visitors() {
   const [search, setSearch] = useState("");
   const [fStage, setFStage] = useState("All");
   const [show, setShow] = useState(false);
+  const [fixingAll, setFixingAll] = useState(false);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", location: "", reference: "",
     phone: "", requirement: "", attend_person: "", remarks: "", status: "New", stage: "New", ticket_value: 0,
@@ -45,6 +46,23 @@ export default function Visitors() {
   };
   const remove = async (id) => { if (!window.confirm("Delete?")) return; await api.delete(`/visitors/${id}`); load(); };
 
+  const fixAllToNew = async () => {
+    const targets = filtered.filter((r) => !isKnownStage(r.stage));
+    if (targets.length === 0) return;
+    if (!window.confirm(`Set ${targets.length} record(s) to "New"?`)) return;
+    setFixingAll(true);
+    try {
+      await Promise.all(targets.map((r) => api.put(`/visitors/${r.id}`, { ...r, stage: "New" })));
+      toast.success(`Updated ${targets.length} record(s) to New`);
+      load();
+    } catch {
+      toast.error("Some updates failed — please retry");
+      load();
+    } finally {
+      setFixingAll(false);
+    }
+  };
+
   return (
     <>
       <Topbar title="Visitors" subtitle={`${filtered.length} walk-ins · today's lobby`} onAdd={() => { setForm(empty); setShow(true); }} addLabel="Log Visitor" />
@@ -56,6 +74,16 @@ export default function Visitors() {
             {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
             <option value="__other__">Other / Unrecognized</option>
           </select>
+          {fStage === "__other__" && filtered.length > 0 && (
+            <button
+              onClick={fixAllToNew}
+              disabled={fixingAll}
+              className="px-3 py-2 rounded-lg bg-[var(--brand)] text-white text-sm font-semibold disabled:opacity-60"
+              data-testid="fix-all-to-new"
+            >
+              {fixingAll ? "Updating…" : `Set all ${filtered.length} to New`}
+            </button>
+          )}
         </div>
 
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
