@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Phone, Calendar, X, Trash2 } from "lucide-react";
 
 const STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
+const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 
 export default function Leads() {
   const [rows, setRows] = useState([]);
@@ -25,8 +26,11 @@ export default function Leads() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return rows.filter((r) => {
-      const stage = (r.stage || "New").trim().toLowerCase();
-      return (fStage === "All" || stage === fStage.toLowerCase()) &&
+      const stage = String(r.stage || "New").trim().toLowerCase();
+      const stageMatch =
+        fStage === "All" ||
+        (fStage === "__other__" ? !isKnownStage(r.stage) : stage === fStage.toLowerCase());
+      return stageMatch &&
         (!q || (r.name || "").toLowerCase().includes(q) || (r.remarks || "").toLowerCase().includes(q));
     });
   }, [rows, search, fStage]);
@@ -50,8 +54,9 @@ export default function Leads() {
         <div className="flex flex-wrap gap-2 mb-4">
           <input placeholder="Search lead, remarks…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="leads-search" />
           <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
-            <option>All</option>
-            {STAGES.map((s) => <option key={s}>{s}</option>)}
+            <option value="All">All</option>
+            {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+            <option value="__other__">Other / Unrecognized</option>
           </select>
         </div>
 
@@ -83,7 +88,8 @@ export default function Leads() {
                       </td>
                       <td className="px-4 py-3 text-[var(--ink-2)]">{l.source}</td>
                       <td className="px-4 py-3">
-                        <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs">
+                        <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs" title={!isKnownStage(l.stage) ? "Legacy/imported value — pick a stage to normalize it" : undefined}>
+                          {l.stage && !isKnownStage(l.stage) && <option value={l.stage}>{l.stage} (unrecognized)</option>}
                           {STAGES.map((s) => <option key={s}>{s}</option>)}
                         </select>
                       </td>

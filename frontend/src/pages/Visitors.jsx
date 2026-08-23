@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Trash2, X, Phone } from "lucide-react";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost", "Delivered"];
+const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 
 export default function Visitors() {
   const [rows, setRows] = useState([]);
@@ -25,8 +26,11 @@ export default function Visitors() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return rows.filter((r) => {
-      const stage = (r.stage || "New").trim().toLowerCase();
-      return (fStage === "All" || stage === fStage.toLowerCase()) &&
+      const stage = String(r.stage || "New").trim().toLowerCase();
+      const stageMatch =
+        fStage === "All" ||
+        (fStage === "__other__" ? !isKnownStage(r.stage) : stage === fStage.toLowerCase());
+      return stageMatch &&
         (!q || (r.name || "").toLowerCase().includes(q) || (r.requirement || "").toLowerCase().includes(q) || (r.reference || "").toLowerCase().includes(q));
     });
   }, [rows, search, fStage]);
@@ -48,8 +52,9 @@ export default function Visitors() {
         <div className="flex flex-wrap gap-2 mb-4">
           <input placeholder="Search name, requirement, reference…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-80" data-testid="visitors-search" />
           <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
-            <option>All</option>
-            {STAGES.map((s) => <option key={s}>{s}</option>)}
+            <option value="All">All</option>
+            {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+            <option value="__other__">Other / Unrecognized</option>
           </select>
         </div>
 
@@ -85,7 +90,8 @@ export default function Visitors() {
                     <td className="px-4 py-3 text-[var(--ink-2)] max-w-[200px] truncate">{v.requirement}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)]">{v.attend_person}</td>
                     <td className="px-4 py-3">
-                      <select value={v.stage || "New"} onChange={(e) => updateStage(v, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs">
+                      <select value={v.stage || "New"} onChange={(e) => updateStage(v, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs" title={!isKnownStage(v.stage) ? "Legacy/imported value — pick a stage to normalize it" : undefined}>
+                        {v.stage && !isKnownStage(v.stage) && <option value={v.stage}>{v.stage} (unrecognized)</option>}
                         {STAGES.map((s) => <option key={s}>{s}</option>)}
                       </select>
                     </td>
