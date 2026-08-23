@@ -46,8 +46,8 @@ class UserPublic(UserBase):
 
 
 class LoginRequest(BaseModel):
-    username: str
-    pin: str
+    username: str = Field(max_length=64)
+    pin: str = Field(max_length=64)
 
 
 class LoginResponse(BaseModel):

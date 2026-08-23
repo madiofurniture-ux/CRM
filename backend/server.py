@@ -73,12 +73,22 @@ async def root():
 # ---------- Auth ----------
 # ── Login throttling ──────────────────────────────────────────────────────
 # The only credential is a 4-digit PIN — 10,000 possibilities against a handful
-# of known usernames. Without a limit those guesses are free and an admin PIN
-# falls in minutes. Held in memory, which is enough for a single instance; a
-# multi-instance deployment would need a shared store to be strict.
+# of known usernames (GET /auth/roles lists them all, by design, for the login
+# screen's profile tiles). Without a limit those guesses are free and an admin
+# PIN falls in minutes.
+#
+# The IP-keyed bucket is cheap and gives fast, precise throttling per source —
+# but "IP" here is read from a client-suppliable X-Forwarded-For header with no
+# trusted-proxy validation, so it must never be the ONLY defense: an attacker
+# who sends a fresh fake value on every request bypasses it completely. The
+# username-keyed bucket below cannot be bypassed that way (it doesn't depend on
+# any client-controlled input) and is what actually bounds the guess rate
+# against a given account. Both are in memory, enough for a single instance;
+# a multi-instance deployment would need a shared store to be strict.
 LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "6"))
 LOGIN_LOCKOUT_SECONDS = int(os.environ.get("LOGIN_LOCKOUT_SECONDS", "900"))
-_login_fails: dict = {}
+_login_fails: dict = {}           # "ip|username" -> (count, lockout_until)
+_login_fails_by_user: dict = {}   # "username" -> (count, lockout_until)
 
 
 def _login_key(request: Request, username: str) -> str:
@@ -87,8 +97,8 @@ def _login_key(request: Request, username: str) -> str:
     return f"{ip}|{username}"
 
 
-def _login_check(key: str):
-    rec = _login_fails.get(key)
+def _check_bucket(bucket: dict, key: str):
+    rec = bucket.get(key)
     if not rec:
         return
     count, until = rec
@@ -101,29 +111,40 @@ def _login_check(key: str):
         )
 
 
-def _login_fail(key: str):
-    count = _login_fails.get(key, (0, 0.0))[0] + 1
-    _login_fails[key] = (count, time.time() + LOGIN_LOCKOUT_SECONDS)
-    if len(_login_fails) > 5000:          # bound the dict against junk usernames
+def _fail_bucket(bucket: dict, key: str):
+    count = bucket.get(key, (0, 0.0))[0] + 1
+    bucket[key] = (count, time.time() + LOGIN_LOCKOUT_SECONDS)
+    if len(bucket) > 5000:          # bound the dict against junk keys
         now = time.time()
-        for k, (_, u) in list(_login_fails.items()):
+        for k, (_, u) in list(bucket.items()):
             if u < now:
-                _login_fails.pop(k, None)
+                bucket.pop(k, None)
+
+
+def _login_check(key: str, username: str):
+    _check_bucket(_login_fails, key)
+    _check_bucket(_login_fails_by_user, username)
+
+
+def _login_fail(key: str, username: str):
+    _fail_bucket(_login_fails, key)
+    _fail_bucket(_login_fails_by_user, username)
 
 
 @api.post("/auth/login", response_model=LoginResponse)
 async def login(payload: LoginRequest, request: Request):
     username = payload.username.lower().strip()
     key = _login_key(request, username)
-    _login_check(key)
+    _login_check(key, username)
     user = await db.users.find_one({"username": username})
     if not user:
-        _login_fail(key)
+        _login_fail(key, username)
         raise HTTPException(status_code=401, detail="Invalid username or PIN")
     if not verify_pin(payload.pin, user["pin_hash"]):
-        _login_fail(key)
+        _login_fail(key, username)
         raise HTTPException(status_code=401, detail="Invalid username or PIN")
-    _login_fails.pop(key, None)           # a good PIN clears the counter
+    _login_fails.pop(key, None)           # a good PIN clears both counters
+    _login_fails_by_user.pop(username, None)
     token = create_token(user["id"], user["username"], user["role"])
     public = {k: v for k, v in user.items() if k not in ("_id", "pin_hash")}
     return {"token": token, "user": public}
