@@ -24,10 +24,11 @@ export default function Visitors() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) =>
-      (fStage === "All" || r.stage === fStage) &&
-      (!q || r.name.toLowerCase().includes(q) || (r.requirement || "").toLowerCase().includes(q) || (r.reference || "").toLowerCase().includes(q))
-    );
+    return rows.filter((r) => {
+      const stage = (r.stage || "New").trim().toLowerCase();
+      return (fStage === "All" || stage === fStage.toLowerCase()) &&
+        (!q || (r.name || "").toLowerCase().includes(q) || (r.requirement || "").toLowerCase().includes(q) || (r.reference || "").toLowerCase().includes(q));
+    });
   }, [rows, search, fStage]);
 
   const save = async () => {
@@ -84,7 +85,7 @@ export default function Visitors() {
                     <td className="px-4 py-3 text-[var(--ink-2)] max-w-[200px] truncate">{v.requirement}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)]">{v.attend_person}</td>
                     <td className="px-4 py-3">
-                      <select value={v.stage} onChange={(e) => updateStage(v, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs">
+                      <select value={v.stage || "New"} onChange={(e) => updateStage(v, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs">
                         {STAGES.map((s) => <option key={s}>{s}</option>)}
                       </select>
                     </td>

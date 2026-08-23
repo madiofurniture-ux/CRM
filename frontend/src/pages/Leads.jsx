@@ -24,10 +24,11 @@ export default function Leads() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) =>
-      (fStage === "All" || r.stage === fStage) &&
-      (!q || r.name.toLowerCase().includes(q) || (r.remarks || "").toLowerCase().includes(q))
-    );
+    return rows.filter((r) => {
+      const stage = (r.stage || "New").trim().toLowerCase();
+      return (fStage === "All" || stage === fStage.toLowerCase()) &&
+        (!q || (r.name || "").toLowerCase().includes(q) || (r.remarks || "").toLowerCase().includes(q));
+    });
   }, [rows, search, fStage]);
 
   const today = new Date().toISOString().slice(0, 10);
@@ -82,7 +83,7 @@ export default function Leads() {
                       </td>
                       <td className="px-4 py-3 text-[var(--ink-2)]">{l.source}</td>
                       <td className="px-4 py-3">
-                        <select value={l.stage} onChange={(e) => updateStage(l, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs">
+                        <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs">
                           {STAGES.map((s) => <option key={s}>{s}</option>)}
                         </select>
                       </td>
