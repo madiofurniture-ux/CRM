@@ -99,6 +99,19 @@ export default function DWSurvey() {
   };
   const removeOpening = async (id) => { await api.delete(`/dw-openings/${id}`); setOpenings((p) => p.filter((x) => x.id !== id)); };
 
+  const removeSurvey = async (s, e) => {
+    e?.stopPropagation();
+    if (!window.confirm(`Delete survey ${s.survey_id}${s.customer ? ` (${s.customer})` : ""}? This also removes its openings.`)) return;
+    try {
+      await api.delete(`/dw-surveys/${s.id}`);
+      toast.success("Survey deleted");
+      if (openId === s.id) setOpenId(null);
+      loadList();
+    } catch {
+      toast.error("Delete failed");
+    }
+  };
+
   const convert = async () => {
     try { const { data } = await api.post(`/convert/survey-to-quote/${openId}`); toast.success(`D&W quote ${data.quote_no} created`); loadList(); }
     catch { toast.error("Convert failed"); }
@@ -112,7 +125,16 @@ export default function DWSurvey() {
         <Topbar title={`D&W Survey · ${current.survey_id}`} subtitle={`${openings.length} openings · ${totalArea.toFixed(2)} sqft`}
           actions={<button onClick={convert} className="btn-ghost"><FileText size={14} /> Convert to Quote</button>} />
         <div className="p-6 space-y-5" data-testid="dwsurvey-detail">
-          <button onClick={() => { setOpenId(null); loadList(); }} className="text-sm text-[var(--ink-2)] inline-flex items-center gap-1"><ChevronLeft size={14} /> All surveys</button>
+          <div className="flex items-center justify-between">
+            <button onClick={() => { setOpenId(null); loadList(); }} className="text-sm text-[var(--ink-2)] inline-flex items-center gap-1"><ChevronLeft size={14} /> All surveys</button>
+            <button
+              onClick={(e) => removeSurvey(current, e)}
+              className="text-sm text-[var(--danger)] inline-flex items-center gap-1 hover:bg-[var(--danger-soft)] px-2 py-1 rounded-lg"
+              data-testid="dws-delete-survey"
+            >
+              <Trash2 size={14} /> Delete survey
+            </button>
+          </div>
 
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
             <F l="Customer" v={current.customer} oc={(v) => patchSurvey({ customer: v })} />
@@ -271,6 +293,7 @@ export default function DWSurvey() {
                 <th className="text-left font-semibold px-4 py-2.5">Customer</th>
                 <th className="text-left font-semibold px-4 py-2.5">Date</th>
                 <th className="text-left font-semibold px-4 py-2.5">Status</th>
+                <th className="w-10"></th>
               </tr>
             </thead>
             <tbody>
@@ -280,9 +303,19 @@ export default function DWSurvey() {
                   <td className="px-4 py-3 font-medium">{s.customer || <span className="text-[var(--ink-3)]">Untitled</span>}</td>
                   <td className="px-4 py-3 text-[var(--ink-2)]">{fmtDate(s.date)}</td>
                   <td className="px-4 py-3 text-[var(--ink-2)]">{s.status}</td>
+                  <td className="px-2 py-3">
+                    <button
+                      onClick={(e) => removeSurvey(s, e)}
+                      className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"
+                      title="Delete survey"
+                      data-testid={`dws-delete-${s.id}`}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </td>
                 </tr>
               ))}
-              {surveys.length === 0 && <tr><td colSpan="4" className="text-center py-10 text-[var(--ink-3)]">No surveys yet</td></tr>}
+              {surveys.length === 0 && <tr><td colSpan="5" className="text-center py-10 text-[var(--ink-3)]">No surveys yet</td></tr>}
             </tbody>
           </table>
         </div>
