@@ -3,9 +3,10 @@ import {
   LayoutDashboard, Columns3, FileText, Receipt, UserPlus,
   Sparkles, Building2, Package, BarChart3, ListTodo, Users, LogOut, HardHat, MapPin,
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
-  CalendarRange, Workflow
+  CalendarRange, Workflow, X
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { useSidebar } from "@/context/SidebarContext";
 
 const SECTIONS = [
   {
@@ -66,12 +67,28 @@ const SECTIONS = [
 
 export default function Sidebar() {
   const { user, canAccess, logout } = useAuth();
+  const { open, setOpen } = useSidebar();
   if (!user) return null;
 
   return (
-    <aside className="w-[240px] shrink-0 bg-[var(--surface-2)] border-r border-[var(--border)] flex flex-col h-screen sticky top-0" data-testid="sidebar">
+    <>
+      {/* Mobile/tablet backdrop */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+          onClick={() => setOpen(false)}
+          data-testid="sidebar-backdrop"
+        />
+      )}
+
+      <aside
+        className={`w-[240px] shrink-0 bg-[var(--surface-2)] border-r border-[var(--border)] flex flex-col h-screen fixed lg:sticky top-0 z-50 lg:z-auto transition-transform duration-200 ease-out ${
+          open ? "translate-x-0" : "-translate-x-full"
+        } lg:translate-x-0`}
+        data-testid="sidebar"
+      >
       {/* Logo */}
-      <div className="px-5 pt-6 pb-4">
+      <div className="px-5 pt-6 pb-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="w-9 h-9 rounded-lg bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold text-sm">M</div>
           <div>
@@ -79,6 +96,14 @@ export default function Sidebar() {
             <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--ink-3)]">CRM Suite</div>
           </div>
         </div>
+        <button
+          onClick={() => setOpen(false)}
+          className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)] lg:hidden"
+          aria-label="Close menu"
+          data-testid="sidebar-close-btn"
+        >
+          <X size={18} strokeWidth={1.7} />
+        </button>
       </div>
 
       {/* Nav */}
@@ -101,6 +126,7 @@ export default function Sidebar() {
                     key={it.id}
                     to={it.to}
                     end={it.to === "/"}
+                    onClick={() => setOpen(false)}
                     className={({ isActive }) =>
                       `flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-colors mb-0.5 ${
                         isActive
@@ -141,6 +167,7 @@ export default function Sidebar() {
           <LogOut size={15} strokeWidth={1.7} />
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
