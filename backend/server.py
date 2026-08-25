@@ -14,6 +14,7 @@ from typing import List, Optional
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 
 import tenancy
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
@@ -1397,27 +1398,37 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
     tenancy.stamp(doc, "payments", user)
     await db.payments.insert_one(doc)
     doc.pop("_id", None)
-    # Roll the amount into the sale/invoice it is against and re-derive the balance.
+    # Roll the amount into the sale/invoice it is against and re-derive the
+    # balance. The increment itself is atomic ($inc), so two payments landing
+    # at the same moment (a busy showroom counter, two staff at once) can
+    # never lose one to a read-modify-write race — a plain read-then-add-
+    # then-set here would silently drop whichever write lost the race.
     if doc.get("against_sale_id") and doc.get("direction") != "Refund":
-        sale = await db.sales.find_one(
-            tenancy.scope({"id": doc["against_sale_id"]}, "sales", user))
+        sale = await db.sales.find_one_and_update(
+            tenancy.scope({"id": doc["against_sale_id"]}, "sales", user),
+            {"$inc": {"paid": lc.money(doc.get("amount"))}},
+            return_document=ReturnDocument.AFTER,
+        )
         if sale:
-            paid = lc.money(sale.get("paid")) + lc.money(doc.get("amount"))
+            paid = lc.money(sale.get("paid"))
             value = lc.money(sale.get("value"))
             balance = max(0.0, value - paid)
-            update = {"paid": paid, "balance": balance}
+            update = {"balance": balance}
             if balance == 0:
                 update["stage"] = "Payment Received"
             await db.sales.update_one(
                 tenancy.scope({"id": sale["id"]}, "sales", user), {"$set": update})
     if doc.get("against_invoice_id") and doc.get("direction") != "Refund":
-        invoice = await db.invoices.find_one(
-            tenancy.scope({"id": doc["against_invoice_id"]}, "invoices", user))
+        invoice = await db.invoices.find_one_and_update(
+            tenancy.scope({"id": doc["against_invoice_id"]}, "invoices", user),
+            {"$inc": {"paid": lc.money(doc.get("amount"))}},
+            return_document=ReturnDocument.AFTER,
+        )
         if invoice:
-            paid = lc.money(invoice.get("paid")) + lc.money(doc.get("amount"))
+            paid = lc.money(invoice.get("paid"))
             total = lc.money(invoice.get("total"))
             balance = max(0.0, total - paid)
-            update = {"paid": paid, "balance": balance}
+            update = {"balance": balance}
             if balance == 0:
                 update["status"] = "Paid"
             await db.invoices.update_one(
