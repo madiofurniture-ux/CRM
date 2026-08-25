@@ -18,6 +18,7 @@ export default function Invoices() {
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [printRow, setPrintRow] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [office, setOffice] = useState({ name: "MADIO", address: "", gstin: "", invoice_prefix: "MAD" });
 
   const empty = {
@@ -77,12 +78,15 @@ export default function Invoices() {
   const openEdit = (r) => { setEditing(r); setForm({ ...r, line_items: r.line_items?.length ? r.line_items : [emptyItem()] }); setShow(true); };
 
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     const payload = { ...form, ...computed };
     try {
       if (editing) { await api.put(`/invoices/${editing.id}`, payload); toast.success("Invoice updated"); }
       else { await api.post("/invoices", payload); toast.success("Invoice created"); }
       setShow(false); load();
     } catch (e) { toast.error("Save failed"); }
+    finally { setSaving(false); }
   };
   const remove = async (id) => {
     if (!window.confirm("Delete invoice?")) return;
@@ -244,7 +248,7 @@ export default function Invoices() {
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-              <button className="btn-primary" onClick={save} data-testid="inv-save">{editing ? "Save" : "Create Invoice"}</button>
+              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="inv-save">{saving ? "Saving…" : editing ? "Save" : "Create Invoice"}</button>
             </div>
           </div>
         </div>

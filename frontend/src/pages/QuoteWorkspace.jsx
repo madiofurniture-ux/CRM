@@ -15,6 +15,7 @@ export default function QuoteWorkspace() {
   const { user } = useAuth();
   const [ws, setWs] = useState(null);
   const [tab, setTab] = useState("lines");
+  const [busy, setBusy] = useState(false);
   const lineTimers = useRef({});   // per-line debounce timers, kept across renders
 
   const load = useCallback(async () => {
@@ -33,8 +34,10 @@ export default function QuoteWorkspace() {
   const pending = q.approval === "pending" || rejected;
 
   const addLine = async () => {
-    await api.post("/quote-lines", { quote_id: id, version: q.version || 1, description: "", w: 0, h: 0, qty: 1, rate: 0 });
-    load();
+    if (busy) return;
+    setBusy(true);
+    try { await api.post("/quote-lines", { quote_id: id, version: q.version || 1, description: "", w: 0, h: 0, qty: 1, rate: 0 }); await load(); }
+    finally { setBusy(false); }
   };
   // Debounced per-line save so rapid keystrokes collapse into one write.
   const patchLine = (line, changes) => {
@@ -49,17 +52,35 @@ export default function QuoteWorkspace() {
   const removeLine = async (lid) => { await api.delete(`/quote-lines/${lid}`); load(); };
 
   const saveTotal = async (discount) => {
-    const { data } = await api.post(`/quotes/${id}/save-total`, { discount });
-    setWs((p) => ({ ...p, quote: data }));
-    toast.success("Totals saved to quote");
-    load();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post(`/quotes/${id}/save-total`, { discount });
+      setWs((p) => ({ ...p, quote: data }));
+      toast.success("Totals saved to quote");
+      await load();
+    } finally { setBusy(false); }
   };
-  const approve = async (ok) => { await api.post(`/quotes/${id}/approve`, { approved: ok }); toast.success(ok ? "Approved" : "Rejected"); load(); };
-  const revise = async () => { if (!window.confirm("Start a new revision? Current lines are copied forward.")) return; const { data } = await api.post(`/quotes/${id}/revise`); toast.success(`Now v${data.version}`); load(); };
+  const approve = async (ok) => {
+    if (busy) return;
+    setBusy(true);
+    try { await api.post(`/quotes/${id}/approve`, { approved: ok }); toast.success(ok ? "Approved" : "Rejected"); await load(); }
+    finally { setBusy(false); }
+  };
+  const revise = async () => {
+    if (busy) return;
+    if (!window.confirm("Start a new revision? Current lines are copied forward.")) return;
+    setBusy(true);
+    try { const { data } = await api.post(`/quotes/${id}/revise`); toast.success(`Now v${data.version}`); await load(); }
+    finally { setBusy(false); }
+  };
   const convert = async () => {
+    if (busy) return;
     if (pending) { toast.error("Approve the discount before converting"); return; }
     if (!window.confirm(`Convert ${q.quote_no} to a sale?`)) return;
-    const { data } = await api.post(`/convert/quote-to-sale/${id}`); toast.success(`Sale ${data.sale_no} created`); load();
+    setBusy(true);
+    try { const { data } = await api.post(`/convert/quote-to-sale/${id}`); toast.success(`Sale ${data.sale_no} created`); await load(); }
+    finally { setBusy(false); }
   };
 
   return (
@@ -68,8 +89,8 @@ export default function QuoteWorkspace() {
         actions={
           <div className="flex items-center gap-2">
             <StageBadge stage={q.derived_status} />
-            <button onClick={revise} className="btn-ghost"><GitBranch size={14} /> Revise</button>
-            <button onClick={convert} disabled={pending} className={`btn-primary ${pending ? "opacity-50 cursor-not-allowed" : ""}`}><ArrowRightCircle size={15} /> Convert to Sale</button>
+            <button onClick={revise} disabled={busy} className="btn-ghost disabled:opacity-60"><GitBranch size={14} /> Revise</button>
+            <button onClick={convert} disabled={pending || busy} className={`btn-primary ${pending || busy ? "opacity-50 cursor-not-allowed" : ""}`}><ArrowRightCircle size={15} /> Convert to Sale</button>
           </div>
         } />
       <div className="p-6 space-y-4" data-testid="quote-workspace">
@@ -102,7 +123,7 @@ export default function QuoteWorkspace() {
             <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
               <div className="p-3 border-b border-[var(--border-light)] flex justify-between items-center">
                 <div className="font-heading font-semibold text-sm">Line items</div>
-                <button onClick={addLine} className="btn-ghost"><Plus size={14} /> Add line</button>
+                <button onClick={addLine} disabled={busy} className="btn-ghost disabled:opacity-60"><Plus size={14} /> Add line</button>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -136,7 +157,7 @@ export default function QuoteWorkspace() {
                 </table>
               </div>
             </div>
-            <TotalsBar ws={ws} onSave={saveTotal} />
+            <TotalsBar ws={ws} onSave={saveTotal} busy={busy} />
           </>
         )}
 
@@ -156,7 +177,7 @@ export default function QuoteWorkspace() {
   );
 }
 
-function TotalsBar({ ws, onSave }) {
+function TotalsBar({ ws, onSave, busy }) {
   const [discount, setDiscount] = useState(ws.quote.discount || 0);
   useEffect(() => { setDiscount(ws.quote.discount || 0); }, [ws.quote.discount]);
   const t = ws.totals;
@@ -171,7 +192,7 @@ function TotalsBar({ ws, onSave }) {
         <Cell label={`Tax (${ws.quote.tax_pct || 18}%)`} value={inrFull(t.tax_total)} />
         <Cell label="Grand Total" value={inrFull(t.grand_total)} strong />
       </div>
-      <button onClick={() => onSave(discount)} className="btn-primary">Save totals to quote</button>
+      <button onClick={() => onSave(discount)} disabled={busy} className="btn-primary disabled:opacity-60">{busy ? "Saving…" : "Save totals to quote"}</button>
     </div>
   );
 }

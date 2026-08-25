@@ -27,6 +27,7 @@ export default function RoleManager() {
   const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: ALL_PAGES.map((p) => p.id) };
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const load = async () => { const { data } = await api.get("/auth/users"); setUsers(data); };
   useEffect(() => { load(); }, []);
@@ -43,6 +44,8 @@ export default function RoleManager() {
   };
 
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     try {
       if (editing) {
         const payload = { name: form.name, role: form.role, icon: form.icon, color: form.color, pages: form.role === "admin" ? null : form.pages };
@@ -58,6 +61,8 @@ export default function RoleManager() {
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Save failed");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -152,7 +157,7 @@ export default function RoleManager() {
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-              <button className="btn-primary" onClick={save} data-testid="ru-save">{editing ? "Save" : "Create"}</button>
+              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="ru-save">{saving ? "Saving…" : editing ? "Save" : "Create"}</button>
             </div>
           </div>
         </div>

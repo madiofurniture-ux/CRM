@@ -15,6 +15,7 @@ export default function DataCentre() {
   const [sel, setSel] = useState("");
   const [csv, setCsv] = useState("");
   const [result, setResult] = useState(null);
+  const [importing, setImporting] = useState(false);
 
   const load = () => api.get("/data-centre/collections").then((r) => { setCols(r.data); if (!sel && r.data[0]) setSel(r.data[0].name); });
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -33,8 +34,10 @@ export default function DataCentre() {
   };
 
   const importCsv = async () => {
+    if (importing) return;
     if (!csv.trim()) { toast.error("Paste some CSV first"); return; }
     if (!window.confirm(`Import into "${sel}"? Existing rows with a matching ${active?.id_field} are updated.`)) return;
+    setImporting(true);
     try {
       const { data } = await api.post(`/data-centre/import/${sel}`, { csv });
       setResult(data);
@@ -42,6 +45,8 @@ export default function DataCentre() {
       load();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Import failed");
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -85,7 +90,7 @@ export default function DataCentre() {
               )}
               <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={10} placeholder={`Paste CSV for "${sel}" here…`} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-xs font-mono outline-none focus:border-[var(--brand)]" data-testid="dc-import-textarea" />
               <div className="flex items-center gap-2 mt-3">
-                <button className="btn-primary" onClick={importCsv}><Upload size={14} /> Import</button>
+                <button className="btn-primary disabled:opacity-60" onClick={importCsv} disabled={importing}><Upload size={14} /> {importing ? "Importing…" : "Import"}</button>
                 <button className="btn-ghost" onClick={() => exportCsv(sel)}><Download size={14} /> Export current as template</button>
               </div>
               {result && (

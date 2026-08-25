@@ -21,6 +21,7 @@ export default function Meets() {
   const [view, setView] = useState("week"); // week / list
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
   const empty = { title: "", date: new Date().toISOString().slice(0, 10), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Internal", ref_name: "", agenda: "", status: "Scheduled", attendees: [] };
   const [form, setForm] = useState(empty);
 
@@ -48,11 +49,14 @@ export default function Meets() {
   };
   const openEdit = (m) => { setEditing(m); setForm(m); setShow(true); };
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     try {
       if (editing) { await api.put(`/meets/${editing.id}`, form); toast.success("Meet updated"); }
       else { await api.post("/meets", form); toast.success("Meet scheduled"); }
       setShow(false); load();
     } catch { toast.error("Save failed"); }
+    finally { setSaving(false); }
   };
   const remove = async (id) => { if (!window.confirm("Delete meeting?")) return; await api.delete(`/meets/${id}`); load(); };
 
@@ -191,7 +195,7 @@ export default function Meets() {
               {editing ? <button onClick={() => { remove(editing.id); setShow(false); }} className="btn-ghost text-[var(--danger)]"><Trash2 size={13} />Delete</button> : <span />}
               <div className="flex gap-2">
                 <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-                <button className="btn-primary" onClick={save} data-testid="meet-save">{editing ? "Save" : "Schedule"}</button>
+                <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="meet-save">{saving ? "Saving…" : editing ? "Save" : "Schedule"}</button>
               </div>
             </div>
           </div>

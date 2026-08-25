@@ -13,6 +13,7 @@ export default function Tasks() {
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState("Open"); // Open / Done / All
   const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
   const empty = { title: "", priority: "Medium", due_date: "", assigned_to: "", category: "General", notes: "", done: false };
   const [form, setForm] = useState(empty);
 
@@ -39,8 +40,11 @@ export default function Tasks() {
     setRows((p) => p.map((x) => x.id === t.id ? { ...x, done: !x.done } : x));
   };
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     try { await api.post("/tasks", form); toast.success("Task added"); setShow(false); setForm(empty); load(); }
     catch { toast.error("Save failed"); }
+    finally { setSaving(false); }
   };
   const remove = async (id) => { if (!window.confirm("Delete task?")) return; await api.delete(`/tasks/${id}`); load(); };
 
@@ -131,7 +135,7 @@ export default function Tasks() {
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-              <button className="btn-primary" onClick={save} data-testid="task-save">Create</button>
+              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="task-save">{saving ? "Saving…" : "Create"}</button>
             </div>
           </div>
         </div>

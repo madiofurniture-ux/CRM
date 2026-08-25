@@ -16,6 +16,7 @@ export default function Inventory() {
   const [view, setView] = useState("grid");
   const [show, setShow] = useState(false);
   const [editingId, setEditingId] = useState(null); // null = creating, else the item id being edited
+  const [saving, setSaving] = useState(false);
   const empty = { sku: "", name: "", category: "", vendor: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "Warehouse A", image_url: "" };
   const [form, setForm] = useState(empty);
 
@@ -41,7 +42,7 @@ export default function Inventory() {
     return rows.filter((r) =>
       (fStatus === "All" || r.status === fStatus) &&
       (fCat === "All" || r.category === fCat) &&
-      (!q || r.name.toLowerCase().includes(q) || r.sku.toLowerCase().includes(q) || (r.vendor || "").toLowerCase().includes(q))
+      (!q || (r.name || "").toLowerCase().includes(q) || (r.sku || "").toLowerCase().includes(q) || (r.vendor || "").toLowerCase().includes(q))
     );
   }, [rows, search, fStatus, fCat]);
 
@@ -49,8 +50,10 @@ export default function Inventory() {
   const totalCost = filtered.reduce((a, b) => a + (b.cost || 0) * (b.qty || 0), 0);
 
   const save = async () => {
+    if (saving) return;
     if (!form.sku.trim() || !form.name.trim()) { toast.error("SKU and Name are required"); return; }
     const margin = form.cost > 0 ? +(((form.mrp - form.cost) / form.cost) * 100).toFixed(2) : 0;
+    setSaving(true);
     try {
       if (editingId) {
         await api.put(`/inventory/${editingId}`, { ...form, margin });
@@ -61,6 +64,7 @@ export default function Inventory() {
       }
       setShow(false); setForm(empty); setEditingId(null); load();
     } catch { toast.error("Save failed"); }
+    finally { setSaving(false); }
   };
 
   const remove = async () => {
@@ -205,7 +209,7 @@ export default function Inventory() {
               )}
               <div className="flex-1" />
               <button className="btn-ghost" onClick={() => { setShow(false); setEditingId(null); }}>Cancel</button>
-              <button className="btn-primary" onClick={save} data-testid="item-save">{editingId ? "Save Changes" : "Save"}</button>
+              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="item-save">{saving ? "Saving…" : editingId ? "Save Changes" : "Save"}</button>
             </div>
           </div>
         </div>

@@ -14,6 +14,7 @@ export default function Visitors() {
   const [search, setSearch] = useState("");
   const [fStage, setFStage] = useState("All");
   const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", location: "", reference: "",
     phone: "", requirement: "", attend_person: "", remarks: "", status: "New", stage: "New", ticket_value: 0,
@@ -33,8 +34,11 @@ export default function Visitors() {
   }, [rows, search, fStage]);
 
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     try { await api.post("/visitors", form); toast.success("Visitor logged"); setShow(false); setForm(empty); load(); }
     catch { toast.error("Save failed"); }
+    finally { setSaving(false); }
   };
   const updateStage = async (v, stage) => {
     await api.put(`/visitors/${v.id}`, { ...v, stage });
@@ -128,7 +132,7 @@ export default function Visitors() {
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-              <button className="btn-primary" onClick={save} data-testid="visitor-save">Log Visitor</button>
+              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="visitor-save">{saving ? "Saving…" : "Log Visitor"}</button>
             </div>
           </div>
         </div>

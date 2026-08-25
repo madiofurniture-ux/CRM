@@ -18,6 +18,7 @@ export default function StockLedger() {
   const [inventory, setInventory] = useState([]);
   const [show, setShow] = useState(false);
   const [tab, setTab] = useState("onhand");
+  const [saving, setSaving] = useState(false);
 
   const empty = {
     date: new Date().toISOString().slice(0, 10), type: "Receipt", product_id: "",
@@ -38,9 +39,12 @@ export default function StockLedger() {
   const invBySku = useMemo(() => Object.fromEntries(inventory.map((i) => [i.sku, i.name])), [inventory]);
 
   const save = async () => {
+    if (saving) return;
     if (!form.product_id) { toast.error("Pick a product"); return; }
+    setSaving(true);
     try { await api.post("/stock-movements", form); toast.success("Movement recorded"); setShow(false); setForm(empty); load(); }
     catch { toast.error("Save failed"); }
+    finally { setSaving(false); }
   };
   const remove = async (id) => { if (!window.confirm("Delete this movement?")) return; await api.delete(`/stock-movements/${id}`); load(); };
 
@@ -144,7 +148,7 @@ export default function StockLedger() {
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-              <button className="btn-primary" onClick={save}>Record</button>
+              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving}>{saving ? "Saving…" : "Record"}</button>
             </div>
           </div>
         </div>

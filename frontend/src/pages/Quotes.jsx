@@ -17,6 +17,7 @@ export default function Quotes() {
   const [fStage, setFStage] = useState("All");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
 
   const emptyItem = { sku: "", name: "", division: "Furniture", qty: 1, unit_price: 0, discount_pct: 0, gst_pct: 18, total_amount: 0 };
 
@@ -126,10 +127,12 @@ export default function Quotes() {
   };
 
   const save = async () => {
+    if (saving) return;
     if (!form.customer || !form.quote_no) {
       toast.error("Customer name and Quote # are required");
       return;
     }
+    setSaving(true);
     try {
       if (editing) {
         await api.put(`/quotes/${editing.id}`, form);
@@ -142,6 +145,8 @@ export default function Quotes() {
       loadData();
     } catch {
       toast.error("Save failed");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -456,9 +461,10 @@ export default function Quotes() {
                 <button
                   type="button"
                   onClick={save}
-                  className="px-5 py-2 text-xs font-semibold rounded-xl bg-[var(--brand)] text-white hover:opacity-90 transition shadow-sm"
+                  disabled={saving}
+                  className="px-5 py-2 text-xs font-semibold rounded-xl bg-[var(--brand)] text-white hover:opacity-90 transition shadow-sm disabled:opacity-60"
                 >
-                  Save Quotation
+                  {saving ? "Saving…" : "Save Quotation"}
                 </button>
               </div>
             </div>

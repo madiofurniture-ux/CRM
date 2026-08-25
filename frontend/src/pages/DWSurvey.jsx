@@ -21,6 +21,8 @@ export default function DWSurvey() {
   const [openId, setOpenId] = useState(null);   // survey.id being edited, null = list
   const [openings, setOpenings] = useState([]);
   const [busyPhoto, setBusyPhoto] = useState(false);
+  const [creatingSurvey, setCreatingSurvey] = useState(false);
+  const [addingOpening, setAddingOpening] = useState(false);
 
   const loadList = () => api.get("/dw-surveys").then((r) => setSurveys(r.data));
   useEffect(() => { loadList(); }, []);
@@ -31,11 +33,14 @@ export default function DWSurvey() {
   const openSurvey = (sid) => { setOpenId(sid); loadOpenings(sid); };
 
   const newSurvey = async () => {
+    if (creatingSurvey) return;
+    setCreatingSurvey(true);
     try {
       const { data } = await api.post("/dw-surveys", { customer: "", phone: "", site_address: "" });
       await loadList();
       openSurvey(data.id);
     } catch { toast.error("Could not create survey"); }
+    finally { setCreatingSurvey(false); }
   };
 
   const patchSurvey = async (changes) => {
@@ -86,10 +91,13 @@ export default function DWSurvey() {
   };
 
   const addOpening = async () => {
+    if (addingOpening) return;
+    setAddingOpening(true);
     try {
       const { data } = await api.post("/dw-openings", { survey_id: openId, room: "", type: "Window", w: 0, h: 0, qty: 1, frame: "uPVC", glass: "Single", mesh: false });
       setOpenings((p) => [...p, data]);
     } catch { toast.error("Could not add opening"); }
+    finally { setAddingOpening(false); }
   };
   const patchOpening = async (o, changes) => {
     const merged = { ...o, ...changes };
@@ -207,7 +215,7 @@ export default function DWSurvey() {
           <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
             <div className="p-4 border-b border-[var(--border-light)] flex items-center justify-between">
               <div className="font-heading font-semibold">Openings</div>
-              <button onClick={addOpening} className="btn-ghost"><Plus size={14} /> Add opening</button>
+              <button onClick={addOpening} disabled={addingOpening} className="btn-ghost disabled:opacity-60"><Plus size={14} /> {addingOpening ? "Adding…" : "Add opening"}</button>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

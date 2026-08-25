@@ -13,6 +13,7 @@ export default function PettyCash() {
   const [rows, setRows] = useState([]);
   const [show, setShow] = useState(false);
   const [fKind, setFKind] = useState("All");
+  const [saving, setSaving] = useState(false);
   const empty = { date: new Date().toISOString().slice(0, 10), kind: "Out", category: "Misc", party: "", description: "", amount: 0, mode: "Cash", by_user: "", ref: "" };
   const [form, setForm] = useState(empty);
 
@@ -32,8 +33,11 @@ export default function PettyCash() {
   const closing = totalIn - totalOut;
 
   const save = async () => {
+    if (saving) return;
+    setSaving(true);
     try { await api.post("/petty-cash", form); toast.success("Entry added"); setShow(false); setForm(empty); load(); }
     catch { toast.error("Save failed"); }
+    finally { setSaving(false); }
   };
   const remove = async (id) => { if (!window.confirm("Delete entry?")) return; await api.delete(`/petty-cash/${id}`); load(); };
 
@@ -122,7 +126,7 @@ export default function PettyCash() {
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-              <button className="btn-primary" onClick={save} data-testid="petty-save">Save</button>
+              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="petty-save">{saving ? "Saving…" : "Save"}</button>
             </div>
           </div>
         </div>

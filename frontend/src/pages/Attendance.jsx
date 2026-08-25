@@ -28,6 +28,7 @@ export default function Attendance() {
   const [photoUrl, setPhotoUrl] = useState("");
   const [note, setNote] = useState("");
   const [gpsStatus, setGpsStatus] = useState("Fetching GPS...");
+  const [punching, setPunching] = useState(false);
 
   const getGPS = () => {
     setGpsStatus("Locating device...");
@@ -77,6 +78,8 @@ export default function Attendance() {
   }, []);
 
   const handleCheckIn = async () => {
+    if (punching) return;
+    setPunching(true);
     try {
       const payload = {
         lat: loc.lat,
@@ -91,10 +94,14 @@ export default function Attendance() {
       loadLogs();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Check-in failed");
+    } finally {
+      setPunching(false);
     }
   };
 
   const handleCheckOut = async () => {
+    if (punching) return;
+    setPunching(true);
     try {
       const payload = {
         lat: loc.lat,
@@ -109,6 +116,8 @@ export default function Attendance() {
       loadLogs();
     } catch (err) {
       toast.error(err.response?.data?.detail || "Check-out failed");
+    } finally {
+      setPunching(false);
     }
   };
 
@@ -202,28 +211,28 @@ export default function Attendance() {
               <div className="flex items-center gap-3">
                 <button
                   onClick={handleCheckIn}
-                  disabled={!!todayRec?.check_in_at}
+                  disabled={!!todayRec?.check_in_at || punching}
                   className={`flex-1 py-2.5 rounded-xl font-semibold text-xs transition flex items-center justify-center gap-2 ${
-                    todayRec?.check_in_at
+                    todayRec?.check_in_at || punching
                       ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200"
                       : "bg-[var(--brand)] text-white hover:opacity-90 shadow-sm"
                   }`}
                 >
                   <UserCheck size={16} />
-                  {todayRec?.check_in_at ? `Checked In at ${todayRec.check_in_at.slice(11, 16)}` : "Punch Check-In"}
+                  {todayRec?.check_in_at ? `Checked In at ${todayRec.check_in_at.slice(11, 16)}` : punching ? "Punching…" : "Punch Check-In"}
                 </button>
 
                 <button
                   onClick={handleCheckOut}
-                  disabled={!todayRec?.check_in_at || !!todayRec?.check_out_at}
+                  disabled={!todayRec?.check_in_at || !!todayRec?.check_out_at || punching}
                   className={`flex-1 py-2.5 rounded-xl font-semibold text-xs transition flex items-center justify-center gap-2 ${
-                    !todayRec?.check_in_at || todayRec?.check_out_at
+                    !todayRec?.check_in_at || todayRec?.check_out_at || punching
                       ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200"
                       : "bg-[var(--ink)] text-white hover:bg-black shadow-sm"
                   }`}
                 >
                   <Clock size={16} />
-                  {todayRec?.check_out_at ? `Checked Out at ${todayRec.check_out_at.slice(11, 16)}` : "Punch Check-Out"}
+                  {todayRec?.check_out_at ? `Checked Out at ${todayRec.check_out_at.slice(11, 16)}` : punching ? "Punching…" : "Punch Check-Out"}
                 </button>
               </div>
             </div>
