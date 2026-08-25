@@ -56,17 +56,33 @@ class LoginResponse(BaseModel):
 
 
 # ------- Visitors -------
+class VisitorRemark(BaseModel):
+    """One dated remark entry. Visitors carry a list of these instead of one
+    flat string, so a follow-up note never overwrites the one before it."""
+    model_config = ConfigDict(extra="ignore")
+    id: Optional[str] = None
+    text: str
+    at: Optional[str] = None  # ISO timestamp, stamped server-side if missing
+
+
 class VisitorBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     date: str
     name: str
+    # "Male" / "Female" / "Company" — "" means legacy/unset, kept for records
+    # created before this field existed.
+    customer_type: Optional[str] = ""
     location: Optional[str] = ""
-    reference: Optional[str] = ""
+    reference: Optional[str] = ""       # display name, kept for legacy rows / CSV export
+    reference_id: Optional[str] = ""    # Architect.id when linked via the picker
     phone: Optional[str] = ""
     requirement: Optional[str] = ""
-    attend_person: Optional[str] = ""
+    attend_person: Optional[str] = ""     # display name, kept for legacy rows / CSV export
+    attend_person_id: Optional[str] = ""  # Staff (users) id when linked via the picker
     site_visit: Optional[str] = ""
-    remarks: Optional[str] = ""
+    # Accepts either the new list-of-entries shape or a legacy plain string;
+    # normalize_visitor() upgrades a legacy string to a single entry on write.
+    remarks: Optional[Any] = Field(default_factory=list)
     status: Optional[str] = "New"  # New / Quoted / Negotiation / Delivered / Lost
     stage: Optional[str] = "New"
     ticket_value: Optional[float] = 0

@@ -82,6 +82,21 @@ def phone_key(value: Any) -> str:
     return digits[-10:] if len(digits) >= 10 else digits
 
 
+def latest_remark_text(remarks: Any) -> str:
+    """Visitors' `remarks` is either a legacy plain string or the newer list of
+    dated entries ([{"text": ..., "at": ...}, ...]). Either way, return the
+    most recent note as plain text for callers (like the journey timeline)
+    that just want one line, not the whole history."""
+    if isinstance(remarks, str):
+        return remarks
+    if isinstance(remarks, list) and remarks:
+        latest = max(remarks, key=lambda r: (r.get("at") or "") if isinstance(r, dict) else "")
+        if isinstance(latest, dict):
+            return latest.get("text") or ""
+        return str(latest)
+    return ""
+
+
 _ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
 _DMY_RE = re.compile(r"(\d{1,2})[\/\-.]+(\d{1,2})[\/\-.]+(\d{2,4})")
 
@@ -560,7 +575,7 @@ def build_journey(phone: Any, *, visitors, leads, quotes, sales, payments, activ
         if matches(v.get("phone")):
             events.append({"date": v.get("date"), "icon": "🚶", "kind": "Walk-in visit",
                            "title": f"{v.get('requirement') or 'Visit'} · attended by {v.get('attend_person') or '—'}",
-                           "detail": v.get("remarks") or "", "link": "/visitors"})
+                           "detail": latest_remark_text(v.get("remarks")), "link": "/visitors"})
     for l in leads:
         if matches(l.get("phone")):
             events.append({"date": l.get("intake_date") or l.get("date"), "icon": "⚇",

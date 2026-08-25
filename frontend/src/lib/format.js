@@ -22,3 +22,17 @@ export const fmtDate = (s) => {
     return s;
   }
 };
+
+// e.g. "25 Aug 2026, 10:30 AM" — used for dated entries like visitor remarks.
+export const fmtDateTime = (s) => {
+  if (!s) return "—";
+  try {
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    const date = d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    const time = d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+    return `${date}, ${time}`;
+  } catch {
+    return s;
+  }
+};

@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
+import re
 import logging
 import time
 import asyncio
@@ -230,6 +231,22 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
     return out
 
 
+@api.get("/staff")
+async def list_staff(user: dict = Depends(get_current_user)):
+    """
+    The Staff directory for pickers like Visitors' "Attended by" — deliberately
+    thinner than /auth/users (which is admin-only and includes role/pages).
+    Any signed-in user can see who their colleagues are; only an admin can see
+    what those colleagues are allowed to access. Backed by the same `users`
+    collection so there is exactly one list of people, not two.
+    """
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    users = await db.users.find(
+        {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1, "username": 1, "icon": 1, "color": 1}
+    ).sort("name", 1).to_list(500)
+    return users
+
+
 @api.delete("/auth/users/{user_id}")
 async def delete_user(user_id: str, current: dict = Depends(require_admin)):
     if current["id"] == user_id:
@@ -365,7 +382,13 @@ async def fy_query(collection: str, base: dict = None, user: dict = None) -> dic
 
 
 # ---------- Generic CRUD helper (per-collection) ----------
-def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model):
+def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model, normalize=None):
+    """`normalize(doc, existing=None)` — optional hook run on the payload dict
+    before it's written, for validation/normalization shared by create AND
+    update (e.g. Indian phone format). It mutates `doc` in place and may raise
+    HTTPException. `existing` is the current DB document on update, None on
+    create, so a normalizer can choose to leave an untouched legacy field
+    alone rather than reject it."""
     @router.get(f"/{base}")
     async def _list(user: dict = Depends(get_current_user)):
         q = await fy_query(collection, user=user)
@@ -377,6 +400,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         doc = payload.model_dump()
         doc["id"] = new_id()
         doc["created_at"] = now_iso()
+        if normalize:
+            normalize(doc)
         await validate_stage(collection, doc, user)
         stamp_fy(doc, collection)
         stamp_closure(doc, collection)
@@ -396,6 +421,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         existing = await db[collection].find_one(owned)
         if not existing:
             raise HTTPException(status_code=404, detail="Not found")
+        if normalize:
+            normalize(payload, existing)
         await validate_stage(collection, payload, user)
         stamp_fy(payload, collection)
         stamp_closure(payload, collection, existing)
@@ -804,7 +831,67 @@ async def fy_settings_update(payload: dict, _: dict = Depends(require_admin)):
     return {"ok": True, "hidden_fys": hide}
 
 
-make_crud(api, "visitors", "visitors", VisitorCreate, Visitor)
+# ---------- Visitors: Indian phone validation + remarks/customer-type shaping ----------
+# 10-digit Indian mobile numbers start with 6/7/8/9. Accepts a bare 10-digit
+# number, +91-prefixed, or 91-prefixed (no plus) — normalizes all three to the
+# bare 10-digit form, matching lifecycle.norm_phone/phone_key's join-key
+# convention so search/journey matching keeps working.
+_PHONE_ALLOWED = re.compile(r"^\+?[0-9][0-9\s-]*$")
+_PHONE_VALID = re.compile(r"^[6-9]\d{9}$")
+
+
+def normalize_indian_phone(raw: str) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if not _PHONE_ALLOWED.match(s):
+        raise HTTPException(status_code=400, detail=(
+            "Enter a valid 10-digit Indian mobile number, e.g. 9876543210 or +919876543210."))
+    digits = re.sub(r"[\s-]", "", s).lstrip("+")
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    if not _PHONE_VALID.match(digits):
+        raise HTTPException(status_code=400, detail=(
+            "Enter a valid 10-digit Indian mobile number starting with 6, 7, 8 or 9 "
+            "(e.g. 9876543210 or +919876543210)."))
+    return digits
+
+
+_CUSTOMER_TYPES = {"Male", "Female", "Company", ""}
+
+
+def normalize_visitor(doc: dict, existing: dict | None = None) -> None:
+    if "phone" in doc:
+        raw = doc.get("phone")
+        # An untouched legacy value (edit didn't change the phone field) is left
+        # as-is even if it predates this validation — e.g. a stage-only update
+        # on an old row with a blank/junk phone must keep working.
+        if existing is not None and raw == existing.get("phone"):
+            pass
+        else:
+            doc["phone"] = normalize_indian_phone(raw)
+    if "customer_type" in doc and doc["customer_type"] not in _CUSTOMER_TYPES:
+        raise HTTPException(status_code=400, detail="customer_type must be Male, Female or Company")
+    if "remarks" in doc:
+        remarks = doc["remarks"]
+        if isinstance(remarks, str):
+            remarks = [{"text": remarks}] if remarks.strip() else []
+        if isinstance(remarks, list):
+            shaped = []
+            for r in remarks:
+                if isinstance(r, str):
+                    r = {"text": r}
+                if not isinstance(r, dict) or not str(r.get("text", "")).strip():
+                    continue
+                shaped.append({
+                    "id": r.get("id") or new_id(),
+                    "text": str(r["text"]).strip(),
+                    "at": r.get("at") or now_iso(),
+                })
+            doc["remarks"] = shaped
+
+
+make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, normalize=normalize_visitor)
 make_crud(api, "leads", "leads", LeadCreate, Lead)
 make_crud(api, "architects", "architects", ArchitectCreate, Architect)
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
