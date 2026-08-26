@@ -916,9 +916,33 @@ async def normalize_lead(doc: dict, existing: dict | None, user: dict) -> None:
         doc["remarks"] = _shape_remarks(doc["remarks"])
 
 
+async def normalize_architect(doc: dict, existing: dict | None, user: dict) -> None:
+    if "phone" in doc:
+        raw = doc.get("phone")
+        if existing is not None and raw == existing.get("phone"):
+            pass
+        else:
+            doc["phone"] = _phone_or_400(raw)
+    if "alternate_contacts" in doc:
+        contacts = doc["alternate_contacts"]
+        if isinstance(contacts, list):
+            shaped = []
+            for c in contacts:
+                if not isinstance(c, dict):
+                    continue
+                name = str(c.get("name") or "").strip()
+                phone = str(c.get("phone") or "").strip()
+                if not name and not phone:
+                    continue
+                shaped.append({"name": name, "phone": _phone_or_400(phone)})
+            doc["alternate_contacts"] = shaped
+        else:
+            doc["alternate_contacts"] = []
+
+
 make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, normalize=normalize_visitor)
 make_crud(api, "leads", "leads", LeadCreate, Lead, normalize=normalize_lead)
-make_crud(api, "architects", "architects", ArchitectCreate, Architect)
+make_crud(api, "architects", "architects", ArchitectCreate, Architect, normalize=normalize_architect)
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
 make_crud(api, "sales", "sales", SaleCreate, Sale)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem)

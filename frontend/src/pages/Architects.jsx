@@ -1,24 +1,37 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
-import api from "@/lib/api";
+import SearchSelect from "@/components/SearchSelect";
+import api, { formatApiError } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
-import { Phone, MapPin, Building, X, Pencil, Trash2 } from "lucide-react";
+import { validateIndianPhone } from "@/lib/phone";
+import { Phone, MapPin, Building, X, Pencil, Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 const TYPES = ["Architect", "Designer", "Builder", "Vendor"];
 
 export default function Architects() {
   const [rows, setRows] = useState([]);
+  const [staff, setStaff] = useState([]);
   const [search, setSearch] = useState("");
   const [fType, setFType] = useState("All");
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const empty = { name: "", firm: "", type: "Architect", location: "", phone: "", last_contact: new Date().toISOString().slice(0, 10), visited: false, assigned_to: "", remarks: "" };
+  const empty = { name: "", firm: "", type: "Architect", location: "", phone: "", alternate_contacts: [], last_contact: new Date().toISOString().slice(0, 10), visited: false, assigned_to: "", assigned_to_id: "", remarks: "" };
   const [form, setForm] = useState(empty);
 
   const load = async () => { const { data } = await api.get("/architects"); setRows(data); };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get("/staff").then(({ data }) => setStaff(data));
+  }, []);
+
+  const staffOptions = useMemo(() => staff.map((s) => ({
+    id: s.id,
+    name: s.name || s.username,
+    label: s.name || s.username,
+    sub: s.username && s.username !== s.name ? `@${s.username}` : "",
+  })), [staff]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -28,25 +41,48 @@ export default function Architects() {
     );
   }, [rows, search, fType]);
 
+  const phoneCheck = useMemo(() => validateIndianPhone(form.phone), [form.phone]);
+  const altContacts = useMemo(() => form.alternate_contacts || [], [form.alternate_contacts]);
+  const altChecks = useMemo(() => altContacts.map((c) => validateIndianPhone(c.phone)), [altContacts]);
+  const altAllValid = altChecks.every((c) => c.valid);
+
+  const setAltContact = (i, patch) => {
+    setForm((f) => ({
+      ...f,
+      alternate_contacts: (f.alternate_contacts || []).map((c, idx) => (idx === i ? { ...c, ...patch } : c)),
+    }));
+  };
+  const addAltContact = () => setForm((f) => ({ ...f, alternate_contacts: [...(f.alternate_contacts || []), { name: "", phone: "" }] }));
+  const removeAltContact = (i) => setForm((f) => ({ ...f, alternate_contacts: (f.alternate_contacts || []).filter((_, idx) => idx !== i) }));
+
   const openNew = () => { setEditing(null); setForm(empty); setShow(true); };
-  const openEdit = (a) => { setEditing(a); setForm({ ...empty, ...a }); setShow(true); };
+  const openEdit = (a) => { setEditing(a); setForm({ ...empty, ...a, alternate_contacts: a.alternate_contacts || [] }); setShow(true); };
 
   const save = async () => {
     if (saving) return;
     if (!form.name.trim()) { toast.error("Name is required"); return; }
+    if (!phoneCheck.valid) { toast.error(phoneCheck.message); return; }
+    if (!altAllValid) { toast.error("Fix the invalid alternate phone number(s)"); return; }
     setSaving(true);
+    const payload = {
+      ...form,
+      phone: phoneCheck.normalized,
+      alternate_contacts: altContacts
+        .map((c, i) => ({ name: (c.name || "").trim(), phone: altChecks[i].normalized }))
+        .filter((c) => c.name || c.phone),
+    };
     try {
       if (editing) {
-        await api.put(`/architects/${editing.id}`, form);
+        await api.put(`/architects/${editing.id}`, payload);
         toast.success("Contact updated");
       } else {
-        await api.post("/architects", form);
+        await api.post("/architects", payload);
         toast.success("Contact added");
       }
       setShow(false);
       load();
-    } catch {
-      toast.error("Save failed");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Save failed");
     } finally {
       setSaving(false);
     }
@@ -132,13 +168,70 @@ export default function Architects() {
                 <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">{TYPES.map((t) => <option key={t}>{t}</option>)}</select>
               </div>
               <F l="Location" v={form.location} oc={(v) => setForm({ ...form, location: v })} />
-              <F l="Phone" v={form.phone} oc={(v) => setForm({ ...form, phone: v })} />
-              <F l="Assigned to" v={form.assigned_to} oc={(v) => setForm({ ...form, assigned_to: v })} />
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Phone</label>
+                <input
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  placeholder="9876543210 or +919876543210"
+                  className={`w-full px-3 py-2 rounded-lg border bg-white text-sm outline-none ${phoneCheck.valid ? "border-[var(--border)] focus:border-[var(--brand)]" : "border-[var(--danger)] focus:border-[var(--danger)]"}`}
+                  data-testid="af-phone"
+                />
+                {!phoneCheck.valid && <div className="text-[11px] text-[var(--danger)] mt-1" data-testid="af-phone-error">{phoneCheck.message}</div>}
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Assigned to (Staff)</label>
+                <SearchSelect
+                  options={staffOptions}
+                  value={form.assigned_to_id}
+                  onChange={(id, opt) => setForm({ ...form, assigned_to_id: id, assigned_to: opt ? opt.name : "" })}
+                  placeholder="Search staff by name…"
+                  emptyLabel="No staff found"
+                  testId="af-assigned"
+                />
+                {!form.assigned_to_id && form.assigned_to && (
+                  <div className="text-[11px] text-[var(--ink-3)] mt-1">Currently: {form.assigned_to} (unlinked — pick from the list to link)</div>
+                )}
+              </div>
+
+              <div className="col-span-2">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Alternate Contacts (optional)</label>
+                <div className="space-y-2" data-testid="af-alt-list">
+                  {altContacts.map((c, i) => (
+                    <div key={i} className="flex gap-2 items-start">
+                      <div className="flex-1">
+                        <input
+                          value={c.name}
+                          onChange={(e) => setAltContact(i, { name: e.target.value })}
+                          placeholder="Name"
+                          className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]"
+                          data-testid={`af-alt-name-${i}`}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <input
+                          value={c.phone}
+                          onChange={(e) => setAltContact(i, { phone: e.target.value })}
+                          placeholder="9876543210 or +919876543210"
+                          className={`w-full px-3 py-2 rounded-lg border bg-white text-sm outline-none ${altChecks[i]?.valid ? "border-[var(--border)] focus:border-[var(--brand)]" : "border-[var(--danger)] focus:border-[var(--danger)]"}`}
+                          data-testid={`af-alt-phone-${i}`}
+                        />
+                        {!altChecks[i]?.valid && <div className="text-[11px] text-[var(--danger)] mt-1">{altChecks[i]?.message}</div>}
+                      </div>
+                      <button type="button" onClick={() => removeAltContact(i)} className="p-2 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)] shrink-0" title="Remove" data-testid={`af-alt-remove-${i}`}><Trash2 size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" onClick={addAltContact} className="btn-ghost mt-2" data-testid="af-alt-add">
+                  <Plus size={14} /> Add Alternate Contact
+                </button>
+              </div>
+
               <F l="Remarks" v={form.remarks} oc={(v) => setForm({ ...form, remarks: v })} cls="col-span-2" />
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
-              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="arch-save">
+              <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving || !phoneCheck.valid || !altAllValid} data-testid="arch-save">
                 {saving ? "Saving…" : editing ? "Save Changes" : "Save"}
               </button>
             </div>

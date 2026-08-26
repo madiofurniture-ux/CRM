@@ -134,9 +134,12 @@ class ArchitectBase(BaseModel):
     type: Optional[str] = "Architect"  # Architect / Builder / Designer / Vendor
     location: Optional[str] = ""
     phone: Optional[str] = ""
+    # Optional extra contacts, e.g. a site PM or second number — [{name, phone}].
+    alternate_contacts: Optional[Any] = Field(default_factory=list)
     last_contact: Optional[str] = ""
     visited: bool = False
-    assigned_to: Optional[str] = ""
+    assigned_to: Optional[str] = ""     # display name, kept for legacy rows / CSV export
+    assigned_to_id: Optional[str] = ""  # Staff (users) id when linked via the picker
     remarks: Optional[str] = ""
 
 
