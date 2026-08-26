@@ -13,6 +13,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import lifecycle as lc
 
 
+# --------------------------------------------------------- phone validation
+def test_indian_phone_accepts_valid_forms():
+    assert lc.normalize_indian_phone("9876543210") == "9876543210"
+    assert lc.normalize_indian_phone("+919876543210") == "9876543210"
+    assert lc.normalize_indian_phone("919876543210") == "9876543210"
+    assert lc.normalize_indian_phone("98765 43210") == "9876543210"
+    assert lc.normalize_indian_phone("") == ""
+    assert lc.normalize_indian_phone(None) == ""
+
+
+def test_indian_phone_rejects_invalid_forms():
+    import pytest
+    for bad in ["1234567890", "98765", "987654321", "98765abcde", "5876543210"]:
+        with pytest.raises(ValueError):
+            lc.normalize_indian_phone(bad)
+
+
 # -------------------------------------------------------------- date parsing
 def test_parse_iso_and_dmy():
     assert lc.parse_date("2026-03-22") == date(2026, 3, 22)

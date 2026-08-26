@@ -82,6 +82,31 @@ def phone_key(value: Any) -> str:
     return digits[-10:] if len(digits) >= 10 else digits
 
 
+_PHONE_ALLOWED = re.compile(r"^\+?[0-9][0-9\s-]*$")
+_PHONE_VALID = re.compile(r"^[6-9]\d{9}$")
+
+
+def normalize_indian_phone(raw: Any) -> str:
+    """Validate + normalize to bare 10 digits. '' passes through (field is
+    optional); anything else must be a real Indian mobile number, with or
+    without a +91/91 country code. Raises ValueError with a caller-facing
+    message on anything invalid — the caller decides how to surface it
+    (HTTPException on the backend, inline error on the frontend)."""
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if not _PHONE_ALLOWED.match(s):
+        raise ValueError("Enter a valid 10-digit Indian mobile number, e.g. 9876543210 or +919876543210.")
+    digits = re.sub(r"[\s-]", "", s).lstrip("+")
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    if not _PHONE_VALID.match(digits):
+        raise ValueError(
+            "Enter a valid 10-digit Indian mobile number starting with 6, 7, 8 or 9 "
+            "(e.g. 9876543210 or +919876543210).")
+    return digits
+
+
 def latest_remark_text(remarks: Any) -> str:
     """Visitors' `remarks` is either a legacy plain string or the newer list of
     dated entries ([{"text": ..., "at": ...}, ...]). Either way, return the

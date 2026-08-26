@@ -6,7 +6,6 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
-import re
 import logging
 import time
 import asyncio
@@ -18,6 +17,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 
 import tenancy
+import lifecycle as lc
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -383,12 +383,13 @@ async def fy_query(collection: str, base: dict = None, user: dict = None) -> dic
 
 # ---------- Generic CRUD helper (per-collection) ----------
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model, normalize=None):
-    """`normalize(doc, existing=None)` — optional hook run on the payload dict
-    before it's written, for validation/normalization shared by create AND
-    update (e.g. Indian phone format). It mutates `doc` in place and may raise
-    HTTPException. `existing` is the current DB document on update, None on
-    create, so a normalizer can choose to leave an untouched legacy field
-    alone rather than reject it."""
+    """`normalize(doc, existing, user)` — optional async hook run on the payload
+    dict before it's written, for validation/normalization shared by create AND
+    update (e.g. Indian phone format + uniqueness). It mutates `doc` in place and
+    may raise HTTPException. `existing` is the current DB document on update,
+    None on create, so a normalizer can choose to leave an untouched legacy
+    field alone rather than reject it. `user` lets it run tenant-scoped queries
+    (e.g. a duplicate-phone check)."""
     @router.get(f"/{base}")
     async def _list(user: dict = Depends(get_current_user)):
         q = await fy_query(collection, user=user)
@@ -401,7 +402,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         doc["id"] = new_id()
         doc["created_at"] = now_iso()
         if normalize:
-            normalize(doc)
+            await normalize(doc, None, user)
         await validate_stage(collection, doc, user)
         stamp_fy(doc, collection)
         stamp_closure(doc, collection)
@@ -422,7 +423,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         if not existing:
             raise HTTPException(status_code=404, detail="Not found")
         if normalize:
-            normalize(payload, existing)
+            await normalize(payload, existing, user)
         await validate_stage(collection, payload, user)
         stamp_fy(payload, collection)
         stamp_closure(payload, collection, existing)
@@ -831,36 +832,55 @@ async def fy_settings_update(payload: dict, _: dict = Depends(require_admin)):
     return {"ok": True, "hidden_fys": hide}
 
 
-# ---------- Visitors: Indian phone validation + remarks/customer-type shaping ----------
-# 10-digit Indian mobile numbers start with 6/7/8/9. Accepts a bare 10-digit
-# number, +91-prefixed, or 91-prefixed (no plus) — normalizes all three to the
-# bare 10-digit form, matching lifecycle.norm_phone/phone_key's join-key
-# convention so search/journey matching keeps working.
-_PHONE_ALLOWED = re.compile(r"^\+?[0-9][0-9\s-]*$")
-_PHONE_VALID = re.compile(r"^[6-9]\d{9}$")
+# ---------- Phone validation shared by Visitors + Leads ----------
+def _phone_or_400(raw: str) -> str:
+    try:
+        return lc.normalize_indian_phone(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-def normalize_indian_phone(raw: str) -> str:
-    s = str(raw or "").strip()
-    if not s:
-        return ""
-    if not _PHONE_ALLOWED.match(s):
+async def _reject_duplicate_phone(collection: str, phone: str, existing: dict | None, user: dict) -> None:
+    """A phone left unchanged is never re-checked (see the callers), so this only
+    runs on a genuinely new/changed number — no retroactive rejection of legacy
+    duplicate data already in the DB."""
+    if not phone:
+        return
+    q = tenancy.scope({"phone": phone}, collection, user)
+    if existing:
+        q["id"] = {"$ne": existing["id"]}
+    dup = await db[collection].find_one(q, {"_id": 0, "id": 1, "name": 1})
+    if dup:
         raise HTTPException(status_code=400, detail=(
-            "Enter a valid 10-digit Indian mobile number, e.g. 9876543210 or +919876543210."))
-    digits = re.sub(r"[\s-]", "", s).lstrip("+")
-    if len(digits) == 12 and digits.startswith("91"):
-        digits = digits[2:]
-    if not _PHONE_VALID.match(digits):
-        raise HTTPException(status_code=400, detail=(
-            "Enter a valid 10-digit Indian mobile number starting with 6, 7, 8 or 9 "
-            "(e.g. 9876543210 or +919876543210)."))
-    return digits
+            f"A {collection[:-1]} with this phone number already exists ({dup.get('name') or 'unnamed'})."))
 
 
 _CUSTOMER_TYPES = {"Male", "Female", "Company", ""}
 
 
-def normalize_visitor(doc: dict, existing: dict | None = None) -> None:
+def _shape_remarks(remarks) -> list:
+    """Accepts a legacy plain string or the newer list-of-dated-entries shape
+    (used by both Visitors and Leads) and returns the shaped list, dropping
+    empty/malformed entries and stamping id/at where missing."""
+    if isinstance(remarks, str):
+        remarks = [{"text": remarks}] if remarks.strip() else []
+    if not isinstance(remarks, list):
+        return []
+    shaped = []
+    for r in remarks:
+        if isinstance(r, str):
+            r = {"text": r}
+        if not isinstance(r, dict) or not str(r.get("text", "")).strip():
+            continue
+        shaped.append({
+            "id": r.get("id") or new_id(),
+            "text": str(r["text"]).strip(),
+            "at": r.get("at") or now_iso(),
+        })
+    return shaped
+
+
+async def normalize_visitor(doc: dict, existing: dict | None, user: dict) -> None:
     if "phone" in doc:
         raw = doc.get("phone")
         # An untouched legacy value (edit didn't change the phone field) is left
@@ -869,30 +889,35 @@ def normalize_visitor(doc: dict, existing: dict | None = None) -> None:
         if existing is not None and raw == existing.get("phone"):
             pass
         else:
-            doc["phone"] = normalize_indian_phone(raw)
+            doc["phone"] = _phone_or_400(raw)
     if "customer_type" in doc and doc["customer_type"] not in _CUSTOMER_TYPES:
         raise HTTPException(status_code=400, detail="customer_type must be Male, Female or Company")
     if "remarks" in doc:
-        remarks = doc["remarks"]
-        if isinstance(remarks, str):
-            remarks = [{"text": remarks}] if remarks.strip() else []
-        if isinstance(remarks, list):
-            shaped = []
-            for r in remarks:
-                if isinstance(r, str):
-                    r = {"text": r}
-                if not isinstance(r, dict) or not str(r.get("text", "")).strip():
-                    continue
-                shaped.append({
-                    "id": r.get("id") or new_id(),
-                    "text": str(r["text"]).strip(),
-                    "at": r.get("at") or now_iso(),
-                })
-            doc["remarks"] = shaped
+        doc["remarks"] = _shape_remarks(doc["remarks"])
+
+
+async def normalize_lead(doc: dict, existing: dict | None, user: dict) -> None:
+    """Leads are this app's customer-intake record, so this is where phone
+    uniqueness is enforced (see _reject_duplicate_phone)."""
+    if "phone" in doc:
+        raw = doc.get("phone")
+        if existing is not None and raw == existing.get("phone"):
+            pass
+        else:
+            doc["phone"] = _phone_or_400(raw)
+            await _reject_duplicate_phone("leads", doc["phone"], existing, user)
+    # Source moved from free text to a fixed dropdown on the frontend. Only act
+    # when source is actually part of this write (PUT payloads are partial) —
+    # if it's present and not Architect, the picker fields clear too.
+    if "source" in doc and doc.get("source") != "Architect":
+        doc["architect_id"] = ""
+        doc["architect_name"] = ""
+    if "remarks" in doc:
+        doc["remarks"] = _shape_remarks(doc["remarks"])
 
 
 make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, normalize=normalize_visitor)
-make_crud(api, "leads", "leads", LeadCreate, Lead)
+make_crud(api, "leads", "leads", LeadCreate, Lead, normalize=normalize_lead)
 make_crud(api, "architects", "architects", ArchitectCreate, Architect)
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
 make_crud(api, "sales", "sales", SaleCreate, Sale)
@@ -1256,7 +1281,6 @@ async def delete_project(project_id: str, user=Depends(get_current_user)):
 # payments, stock ledger, data centre, conversions.
 # Purely ADDITIVE — no existing route was modified.
 # ══════════════════════════════════════════════════════════════════
-import lifecycle as lc
 from models import (
     DWSurveyCreate, DWSurvey, PaymentCreate, Payment,
     StockMovementCreate, StockMovement,

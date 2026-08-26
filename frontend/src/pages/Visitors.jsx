@@ -1,34 +1,16 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import SearchSelect from "@/components/SearchSelect";
+import RemarksEditor, { toRemarksArray } from "@/components/RemarksEditor";
 import api, { formatApiError } from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
-import { Trash2, X, Phone, Pencil, Plus } from "lucide-react";
+import { Trash2, X, Phone, Pencil } from "lucide-react";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost", "Delivered"];
 const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 const CUSTOMER_TYPES = ["Male", "Female", "Company"];
-
-// Visitors' `remarks` is either the legacy plain string or the newer list of
-// dated entries. Always normalize to a list for editing/display so both
-// shapes work without the caller needing to know which one it got.
-function toRemarksArray(remarks) {
-  if (Array.isArray(remarks)) {
-    return remarks
-      .map((r) => (typeof r === "string" ? { id: r, text: r, at: null } : r))
-      .filter((r) => r && String(r.text || "").trim());
-  }
-  if (typeof remarks === "string" && remarks.trim()) {
-    return [{ id: "legacy", text: remarks.trim(), at: null }];
-  }
-  return [];
-}
-
-function newRemarkId() {
-  return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `r-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
 
 export default function Visitors() {
   const [rows, setRows] = useState([]);
@@ -39,9 +21,6 @@ export default function Visitors() {
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [remarkDraft, setRemarkDraft] = useState("");
-  const [editingRemarkId, setEditingRemarkId] = useState(null);
-  const [editingRemarkText, setEditingRemarkText] = useState("");
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", customer_type: "Male", location: "",
     reference: "", reference_id: "", phone: "", requirement: "",
@@ -81,41 +60,11 @@ export default function Visitors() {
   }, [rows, search, fStage]);
 
   const phoneCheck = useMemo(() => validateIndianPhone(form.phone), [form.phone]);
-  const sortedRemarks = useMemo(() => {
-    return [...toRemarksArray(form.remarks)].sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
-  }, [form.remarks]);
 
-  const addRemark = () => {
-    const text = remarkDraft.trim();
-    if (!text) return;
-    const entry = { id: newRemarkId(), text, at: new Date().toISOString() };
-    setForm((f) => ({ ...f, remarks: [entry, ...toRemarksArray(f.remarks)] }));
-    setRemarkDraft("");
-  };
-
-  const startEditRemark = (r) => { setEditingRemarkId(r.id); setEditingRemarkText(r.text); };
-  const cancelEditRemark = () => { setEditingRemarkId(null); setEditingRemarkText(""); };
-  const saveEditRemark = () => {
-    const text = editingRemarkText.trim();
-    if (!text) return;
-    setForm((f) => ({
-      ...f,
-      remarks: toRemarksArray(f.remarks).map((r) => (r.id === editingRemarkId ? { ...r, text } : r)),
-    }));
-    cancelEditRemark();
-  };
-  const deleteRemark = (id) => {
-    if (!window.confirm("Delete this remark?")) return;
-    setForm((f) => ({ ...f, remarks: toRemarksArray(f.remarks).filter((r) => r.id !== id) }));
-    if (editingRemarkId === id) cancelEditRemark();
-  };
-
-  const openNew = () => { setEditing(null); setForm(empty); setRemarkDraft(""); cancelEditRemark(); setShow(true); };
+  const openNew = () => { setEditing(null); setForm(empty); setShow(true); };
   const openEdit = (v) => {
     setEditing(v);
-    setForm({ ...empty, ...v, customer_type: v.customer_type || "Male", remarks: toRemarksArray(v.remarks) });
-    setRemarkDraft("");
-    cancelEditRemark();
+    setForm({ ...empty, ...v, customer_type: v.customer_type || "Male" });
     setShow(true);
   };
 
@@ -290,51 +239,7 @@ export default function Visitors() {
 
               <div className="col-span-2">
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Remarks</label>
-                <div className="flex gap-2 mb-2">
-                  <input
-                    value={remarkDraft}
-                    onChange={(e) => setRemarkDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addRemark(); } }}
-                    placeholder="Add a remark…"
-                    className="flex-1 px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]"
-                    data-testid="vf-remark-draft"
-                  />
-                  <button type="button" onClick={addRemark} className="btn-ghost shrink-0" data-testid="vf-remark-add">
-                    <Plus size={14} /> Add Remark
-                  </button>
-                </div>
-                <div className="max-h-52 overflow-y-auto space-y-2 border border-[var(--border-light)] rounded-lg p-2 bg-[var(--surface-2)]" data-testid="vf-remark-list">
-                  {sortedRemarks.length === 0 && <div className="text-xs text-[var(--ink-3)] px-1 py-2">No remarks yet</div>}
-                  {sortedRemarks.map((r, i) => (
-                    <div key={r.id || i} className="bg-white border border-[var(--border-light)] rounded-md px-3 py-2">
-                      {editingRemarkId === r.id ? (
-                        <div className="flex gap-2">
-                          <input
-                            autoFocus
-                            value={editingRemarkText}
-                            onChange={(e) => setEditingRemarkText(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveEditRemark(); } if (e.key === "Escape") cancelEditRemark(); }}
-                            className="flex-1 px-2 py-1 rounded-md border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]"
-                            data-testid={`vf-remark-edit-input-${r.id}`}
-                          />
-                          <button type="button" onClick={saveEditRemark} className="btn-primary px-2 py-1 text-xs" data-testid={`vf-remark-save-${r.id}`}>Save</button>
-                          <button type="button" onClick={cancelEditRemark} className="btn-ghost px-2 py-1 text-xs">Cancel</button>
-                        </div>
-                      ) : (
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-[11px] text-[var(--ink-3)]">{r.at ? fmtDate(r.at) : "Earlier"}</div>
-                            <div className="text-sm text-[var(--ink)] break-words">{r.text}</div>
-                          </div>
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button type="button" onClick={() => startEditRemark(r)} className="p-1 rounded hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Edit remark" data-testid={`vf-remark-edit-${r.id}`}><Pencil size={12} /></button>
-                            <button type="button" onClick={() => deleteRemark(r.id)} className="p-1 rounded hover:bg-[var(--danger-soft)] text-[var(--danger)]" title="Delete remark" data-testid={`vf-remark-delete-${r.id}`}><Trash2 size={12} /></button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <RemarksEditor remarks={form.remarks} onChange={(remarks) => setForm({ ...form, remarks })} testPrefix="vf-remark" />
               </div>
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2 sticky bottom-0 bg-white">

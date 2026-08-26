@@ -104,10 +104,16 @@ class LeadBase(BaseModel):
     name: str
     phone: Optional[str] = ""
     source: Optional[str] = ""
+    architect_id: Optional[str] = ""    # Architect.id, set when source == "Architect"
+    architect_name: Optional[str] = ""  # display name, prepopulated from the picker
     stage: str = "New"  # New, Contacted, Qualified, Quoted, Won, Lost
     follow_up_date: Optional[str] = ""
-    remarks: Optional[str] = ""
-    assigned_to: Optional[str] = ""
+    # Accepts either the new list-of-entries shape or a legacy plain string;
+    # normalize_lead() upgrades a legacy string to a single entry on write —
+    # same convention as VisitorBase.remarks.
+    remarks: Optional[Any] = Field(default_factory=list)
+    assigned_to: Optional[str] = ""     # display name, kept for legacy rows / CSV export
+    assigned_to_id: Optional[str] = ""  # Staff (users) id when linked via the picker
     value: Optional[float] = 0
 
 

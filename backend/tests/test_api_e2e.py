@@ -242,6 +242,51 @@ def main():
         _skip += 1
         print("  SKIP  manual-hide round trip (could not create probe record)")
 
+    # ── Leads: Indian phone validation/uniqueness + architect source ───
+    section("Leads — phone validation, uniqueness, architect source")
+    s, archs = call("GET", "/api/architects", token=admin_tok)
+    arch = (archs or [None])[0]
+    if s == 200 and arch:
+        s, bad = call("POST", "/api/leads",
+                      {"date": "2026-08-26", "name": "ZZ Bad Phone", "phone": "1234567890", "source": "Website"},
+                      token=admin_tok)
+        check("invalid phone is rejected on create", s == 400, f"got {s} {bad}")
+
+        s, l1 = call("POST", "/api/leads",
+                     {"date": "2026-08-26", "name": "ZZ Phone A", "phone": "9876500011", "source": "Website"},
+                     token=admin_tok)
+        check("valid 10-digit phone accepted", s == 200 and l1, f"got {s} {l1}")
+        try:
+            if l1:
+                check("phone normalized to bare 10 digits", l1.get("phone") == "9876500011", f"got {l1.get('phone')}")
+                s, dup = call("POST", "/api/leads",
+                              {"date": "2026-08-26", "name": "ZZ Phone B", "phone": "+919876500011", "source": "Referral"},
+                              token=admin_tok)
+                check("+91-prefixed duplicate of an existing phone is rejected", s == 400, f"got {s} {dup}")
+
+                s, l2 = call("PUT", f"/api/leads/{l1['id']}", {"stage": "Contacted"}, token=admin_tok)
+                check("editing without touching phone doesn't re-reject it", s == 200, f"got {s} {l2}")
+
+                s, arch_lead = call("POST", "/api/leads",
+                                     {"date": "2026-08-26", "name": "ZZ Architect Lead", "phone": "9876500022",
+                                      "source": "Architect", "architect_id": arch["id"], "architect_name": arch["name"]},
+                                     token=admin_tok)
+                check("architect source keeps the linked architect", s == 200 and arch_lead
+                      and arch_lead.get("architect_id") == arch["id"], f"got {s} {arch_lead}")
+                try:
+                    s, cleared = call("PUT", f"/api/leads/{arch_lead['id']}", {"source": "Website"}, token=admin_tok)
+                    check("switching source away from Architect clears the link",
+                          s == 200 and cleared and not cleared.get("architect_id") and not cleared.get("architect_name"),
+                          f"got {s} {cleared}")
+                finally:
+                    call("DELETE", f"/api/leads/{arch_lead['id']}", token=admin_tok)
+        finally:
+            if l1:
+                call("DELETE", f"/api/leads/{l1['id']}", token=admin_tok)
+    else:
+        _skip += 1
+        print("  SKIP  leads phone/architect checks (no architects seeded)")
+
     # ── FY auto-stamp on write ─────────────────────────────────────────
     section("FY stamping on write")
     s, q = call("POST", "/api/quotes",
