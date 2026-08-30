@@ -510,6 +510,25 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
 DEFAULT_TENANT = os.environ.get("DEFAULT_TENANT", "madio")
 DEFAULT_TENANT_NAME = os.environ.get("DEFAULT_TENANT_NAME", "MADIO Furniture")
 
+# Every sidebar/permission page id that exists today — the set enabled_modules
+# is validated against and defaults to (so an un-configured tenant behaves
+# exactly as before: every module on).
+ALL_MODULE_IDS = [
+    "dashboard", "alerts", "reports", "pipeline", "quotes", "quote-followups",
+    "sales", "visitors", "leads", "requirements", "configurator", "architects",
+    "inventory", "stock-ledger", "inv-analytics", "projects", "dwsurvey",
+    "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
+    "outstanding", "data-centre", "financial-year", "workflows", "business", "roles",
+]
+
+# Entity/branding config layered onto a tenant doc — additive fields, not a
+# new collection, so an existing tenant with none of these set just falls
+# back to these defaults (the current MADIO look), unchanged.
+TENANT_CONFIG_DEFAULTS = {
+    "display_name": "MADIO CRM", "short_name": "MADIO", "logo_url": "",
+    "primary_color": "", "secondary_color": "", "enabled_modules": ALL_MODULE_IDS,
+}
+
 
 async def backfill_tenant() -> int:
     """
@@ -562,10 +581,37 @@ async def backfill_fy() -> int:
 # ══════════════════════════════════════════════════════════════════
 @api.get("/tenants/me")
 async def tenant_me(user: dict = Depends(get_current_user)):
-    """Which business the caller belongs to — drives branding and limits."""
+    """Which business the caller belongs to — drives branding and which
+    modules its sidebar/permission grid shows."""
     tid = tenancy.tenant_of(user)
     t = await db.tenants.find_one({"id": tid}, {"_id": 0}) if tid else None
-    return t or {"id": tid, "name": tid or "(no tenant)", "status": "unknown"}
+    t = t or {"id": tid, "name": tid or "(no tenant)", "status": "unknown"}
+    for k, v in TENANT_CONFIG_DEFAULTS.items():
+        t.setdefault(k, v)
+    return t
+
+
+@api.put("/tenants/me/config")
+async def tenant_update_config(payload: dict, user: dict = Depends(require_admin)):
+    """Business admin edits their own tenant's branding/enabled modules —
+    unlike POST /tenants (platform onboarding), any tenant's admin may call
+    this for themselves."""
+    tid = tenancy.tenant_of(user)
+    if not tid:
+        raise HTTPException(status_code=400, detail="No tenant on this account")
+    update = {}
+    for k in ("display_name", "short_name", "logo_url", "primary_color", "secondary_color"):
+        if k in payload:
+            update[k] = str(payload[k] or "")
+    if "enabled_modules" in payload:
+        mods = payload["enabled_modules"]
+        if not isinstance(mods, list) or not all(m in ALL_MODULE_IDS for m in mods):
+            raise HTTPException(status_code=400, detail="enabled_modules must be a subset of the known module ids")
+        update["enabled_modules"] = mods
+    if not update:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    await db.tenants.update_one({"id": tid}, {"$set": update})
+    return await tenant_me(user)
 
 
 @api.get("/tenants")

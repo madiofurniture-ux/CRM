@@ -21,10 +21,14 @@ const ALL_PAGES = [
 const COLORS = ["#C85A32", "#4A5D4E", "#D48B30", "#B24040", "#1A1D1A", "#5C7AA1"];
 
 export default function RoleManager() {
-  const { user: me } = useAuth();
+  const { user: me, tenant } = useAuth();
   const [users, setUsers] = useState([]);
   const [show, setShow] = useState(false);
-  const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: ALL_PAGES.map((p) => p.id) };
+  // A disabled module can't be granted to anyone — no point offering it here.
+  const pages = tenant?.enabled_modules
+    ? ALL_PAGES.filter((p) => tenant.enabled_modules.includes(p.id))
+    : ALL_PAGES;
+  const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: pages.map((p) => p.id) };
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -35,7 +39,7 @@ export default function RoleManager() {
   const openNew = () => { setEditing(null); setForm(empty); setShow(true); };
   const openEdit = (u) => {
     setEditing(u);
-    setForm({ username: u.username, name: u.name, pin: "", role: u.role, icon: u.icon, color: u.color, pages: u.pages ?? ALL_PAGES.map((p) => p.id) });
+    setForm({ username: u.username, name: u.name, pin: "", role: u.role, icon: u.icon, color: u.color, pages: u.pages ?? pages.map((p) => p.id) });
     setShow(true);
   };
 
@@ -145,7 +149,7 @@ export default function RoleManager() {
                 <div className="col-span-2">
                   <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-2">Page access</label>
                   <div className="grid grid-cols-2 gap-2">
-                    {ALL_PAGES.map((p) => (
+                    {pages.map((p) => (
                       <label key={p.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--surface-2)] text-sm">
                         <input type="checkbox" checked={form.pages.includes(p.id)} onChange={() => togglePage(p.id)} className="accent-[var(--brand)]" />
                         {p.label}

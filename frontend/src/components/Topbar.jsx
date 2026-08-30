@@ -23,7 +23,10 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
     if (v.trim().length < 2) { setResults([]); setOpen2(false); return; }
     timer.current = setTimeout(async () => {
       try {
-        const { data } = await api.get("/search", { params: { q: v.trim() } });
+        // Query string inlined into the URL, not passed as axios `params` —
+        // lib/api.js's GET cache keys on the literal url string only, so
+        // `params` alone would make every search collide on one cache entry.
+        const { data } = await api.get(`/search?q=${encodeURIComponent(v.trim())}`);
         setResults(data); setOpen2(true);
       } catch { setResults([]); }
     }, 300);

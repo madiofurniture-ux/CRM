@@ -5,7 +5,7 @@
 @tailwind utilities;
 
 :root {
-  /* MADIO palette — earthy, terracotta, deep moss */
+  /* Brand palette — earthy, terracotta, deep moss */
   --bg: #f8f7f4;
   --surface: #fdfdfd;
   --surface-2: #f4f3ee;
@@ -93,7 +93,7 @@ body {
 }
 
 /* Subtle gradient blob for login */
-.madio-blob {
+.brand-blob {
   position: absolute;
   inset: auto;
   border-radius: 50%;

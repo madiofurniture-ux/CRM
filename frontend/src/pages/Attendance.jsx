@@ -5,7 +5,10 @@ import { fmtDate } from "@/lib/format";
 import { MapPin, Navigation, Camera, CheckCircle2, AlertCircle, Clock, ShieldCheck, UserCheck, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
-const HQ = { lat: 17.4065, lng: 78.4772, name: "MADIO Head Office, Hyderabad", radius: 200 };
+// Placeholder only — overwritten from GET /settings/office on mount below,
+// the same admin-configurable office record invoices/office settings use.
+// This used to be a second, hardcoded copy of the office geofence.
+const HQ_FALLBACK = { lat: 17.4065, lng: 78.4772, name: "Head Office", radius: 200 };
 
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000; // meters
@@ -22,7 +25,8 @@ export default function Attendance() {
   const [logs, setLogs] = useState([]);
   const [todayRec, setTodayRec] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [loc, setLoc] = useState({ lat: HQ.lat, lng: HQ.lng });
+  const [hq, setHq] = useState(HQ_FALLBACK);
+  const [loc, setLoc] = useState({ lat: HQ_FALLBACK.lat, lng: HQ_FALLBACK.lng });
   const [dist, setDist] = useState(0);
   const [withinGeofence, setWithinGeofence] = useState(true);
   const [photoUrl, setPhotoUrl] = useState("");
@@ -38,15 +42,15 @@ export default function Attendance() {
           const latitude = pos.coords.latitude;
           const longitude = pos.coords.longitude;
           setLoc({ lat: latitude, lng: longitude });
-          const d = haversineMeters(latitude, longitude, HQ.lat, HQ.lng);
+          const d = haversineMeters(latitude, longitude, hq.lat, hq.lng);
           setDist(d);
-          setWithinGeofence(d <= HQ.radius);
+          setWithinGeofence(d <= hq.radius);
           setGpsStatus("GPS Acquired");
           toast.success("Location updated");
         },
         () => {
           // Fallback to HQ simulated location for demo
-          setLoc({ lat: HQ.lat, lng: HQ.lng });
+          setLoc({ lat: hq.lat, lng: hq.lng });
           setDist(45);
           setWithinGeofence(true);
           setGpsStatus("GPS Standard Mode (HQ Office)");
@@ -73,9 +77,10 @@ export default function Attendance() {
   };
 
   useEffect(() => {
-    getGPS();
-    loadLogs();
-  }, []);
+    api.get("/settings/office").then(({ data }) => {
+      if (data?.lat && data?.lng) setHq({ lat: data.lat, lng: data.lng, name: data.name || HQ_FALLBACK.name, radius: data.radius_m || HQ_FALLBACK.radius });
+    }).catch(() => {}).finally(() => { getGPS(); loadLogs(); });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCheckIn = async () => {
     if (punching) return;
@@ -137,7 +142,7 @@ export default function Attendance() {
                   </div>
                   <div>
                     <h3 className="font-heading font-bold text-base text-[var(--ink)]">Geo-Fencing Radar</h3>
-                    <p className="text-xs text-[var(--ink-3)]">{HQ.name}</p>
+                    <p className="text-xs text-[var(--ink-3)]">{hq.name}</p>
                   </div>
                 </div>
                 <button
@@ -166,7 +171,7 @@ export default function Attendance() {
                       {withinGeofence ? "INSIDE OFFICE GEOFENCE" : "OUTSIDE GEOFENCE RANGE"}
                     </div>
                     <div className="text-xs text-[var(--ink-2)]">
-                      Distance to office: <span className="font-mono font-semibold">{dist.toFixed(1)} meters</span> (Limit: {HQ.radius}m)
+                      Distance to office: <span className="font-mono font-semibold">{dist.toFixed(1)} meters</span> (Limit: {hq.radius}m)
                     </div>
                   </div>
                 </div>

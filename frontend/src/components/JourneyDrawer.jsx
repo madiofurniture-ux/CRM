@@ -3,6 +3,7 @@ import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { X, MessageCircle, Phone } from "lucide-react";
 import StageProgressBar from "@/components/StageProgressBar";
+import { useAuth } from "@/context/AuthContext";
 
 /**
  * Customer-360 slide-over. Give it a phone number and it pulls the whole journey
@@ -25,11 +26,13 @@ export default function JourneyDrawer({ phone, name, onClose }) {
       .finally(() => setLoading(false));
   }, [phone]);
 
+  const { tenant } = useAuth();
   if (!phone) return null;
 
   const t = data?.totals || {};
   const first = String(name || data?.name || "").split(" ")[0];
-  const waHref = `https://wa.me/91${String(phone).replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(`Hi ${first}, this is MADIO. `)}`;
+  const brand = tenant?.short_name || "CRM";
+  const waHref = `https://wa.me/91${String(phone).replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(`Hi ${first}, this is ${brand}. `)}`;
 
   return (
     <div className="fixed inset-0 z-[60] flex justify-end" data-testid="journey-drawer">

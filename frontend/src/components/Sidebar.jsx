@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Columns3, FileText, Receipt, UserPlus,
   Sparkles, Building2, Package, BarChart3, ListTodo, Users, LogOut, HardHat, MapPin,
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
-  CalendarRange, Workflow, X
+  CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -21,10 +21,14 @@ const SECTIONS = [
     title: "Sales CRM",
     items: [
       { id: "pipeline", to: "/pipeline", label: "Pipeline", icon: Columns3 },
+      { id: "requirements", to: "/requirements", label: "Requirements", icon: ClipboardList },
+      { id: "configurator", to: "/configurator", label: "Configurator", icon: Wand2 },
       { id: "quotes", to: "/quotes", label: "Quotations", icon: FileText },
+      { id: "quote-followups", to: "/quotes/followups", label: "Follow-ups", icon: PhoneCall },
       { id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
       { id: "visitors", to: "/visitors", label: "Visitors", icon: UserPlus },
       { id: "leads", to: "/leads", label: "Leads", icon: Sparkles },
+      { id: "customers", to: "/customers", label: "Customers", icon: Contact },
       { id: "architects", to: "/architects", label: "Architects", icon: Building2 },
     ],
   },
@@ -60,15 +64,17 @@ const SECTIONS = [
       { id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database, adminOnly: true },
       { id: "financial-year", to: "/admin/financial-year", label: "Financial Year", icon: CalendarRange, adminOnly: true },
       { id: "workflows", to: "/admin/workflows", label: "Workflows", icon: Workflow, adminOnly: true },
+      { id: "business", to: "/admin/business", label: "Business Settings", icon: Settings, adminOnly: true },
       { id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
     ],
   },
 ];
 
 export default function Sidebar() {
-  const { user, canAccess, logout } = useAuth();
+  const { user, tenant, canAccess, logout } = useAuth();
   const { open, setOpen } = useSidebar();
   if (!user) return null;
+  const shortName = tenant?.short_name || "CRM";
 
   return (
     <>
@@ -90,9 +96,13 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-5 pt-6 pb-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-lg bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold text-sm">M</div>
+          {tenant?.logo_url ? (
+            <img src={tenant.logo_url} alt="" className="w-9 h-9 rounded-lg object-cover" />
+          ) : (
+            <div className="w-9 h-9 rounded-lg bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold text-sm">{shortName[0]}</div>
+          )}
           <div>
-            <div className="font-heading font-bold text-[15px] tracking-tight text-[var(--ink)] leading-tight">MADIO</div>
+            <div className="font-heading font-bold text-[15px] tracking-tight text-[var(--ink)] leading-tight">{shortName}</div>
             <div className="text-[10px] uppercase tracking-[0.18em] text-[var(--ink-3)]">CRM Suite</div>
           </div>
         </div>

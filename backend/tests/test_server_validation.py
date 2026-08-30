@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 from fastapi import HTTPException
 
-from server import validate_partial_update, DC_COLLECTIONS
+from server import validate_partial_update, DC_COLLECTIONS, ALL_MODULE_IDS, TENANT_CONFIG_DEFAULTS
 from models import LeadCreate, CustomerCreate, InventoryCreate
 
 
@@ -105,3 +105,14 @@ def test_dc_projects_and_payments_id_fields_are_real_fields():
         coll, id_field, fields = DC_COLLECTIONS[name]
         assert id_field in fields
         assert set(fields) <= real_fields
+
+
+# ------------------------------------------------------- entity config (P1)
+def test_tenant_config_defaults_enable_every_known_module():
+    # An un-configured tenant must behave exactly as before this feature —
+    # every module on.
+    assert set(TENANT_CONFIG_DEFAULTS["enabled_modules"]) == set(ALL_MODULE_IDS)
+
+
+def test_all_module_ids_has_no_duplicates():
+    assert len(ALL_MODULE_IDS) == len(set(ALL_MODULE_IDS))

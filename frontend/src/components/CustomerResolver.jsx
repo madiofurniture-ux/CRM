@@ -21,7 +21,10 @@ export default function CustomerResolver({ onSelect, placeholder = "Search phone
     if (v.trim().length < 2) { setResults([]); setOpen(false); return; }
     timer.current = setTimeout(async () => {
       try {
-        const { data } = await api.get("/customers/search", { params: { q: v.trim() } });
+        // The literal query string is part of the cache key in lib/api.js's
+        // GET cache — using axios's `params` instead would make every
+        // search collide on the same cache entry ("/customers/search").
+        const { data } = await api.get(`/customers/search?q=${encodeURIComponent(v.trim())}`);
         setResults(data);
         setOpen(true);
       } catch { setResults([]); }
