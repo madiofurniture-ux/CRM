@@ -180,6 +180,68 @@ def next_sale_no(sales: Iterable[dict]) -> str:
     return f"MF {top + 1:03d}"
 
 
+def next_project_no(projects: Iterable[dict]) -> str:
+    """PRJ-YYMM-NNN — same monthly-series convention as next_quote_no."""
+    prefix = f"PRJ-{yymm()}-"
+    return f"{prefix}{_max_suffix(projects, 'project_no', prefix) + 1:03d}"
+
+
+DEFAULT_PROJECT_MILESTONES = ["Production", "Delivery", "Installation"]
+# Projects created before this rename carry "Assembly" — same physical work as
+# "Installation" under the old name. Alias it on read so old rows still match
+# the 11-stage progress bar instead of silently showing as un-started.
+MILESTONE_ALIASES = {"Assembly": "Installation"}
+
+
+def default_milestones() -> list:
+    return [{"name": name, "status": "Pending", "completed_at": ""}
+            for name in DEFAULT_PROJECT_MILESTONES]
+
+
+def canonical_milestone_name(name: str) -> str:
+    return MILESTONE_ALIASES.get(str(name or ""), str(name or ""))
+
+
+# Permissive on purpose: real seeded customer names carry locality/unit info
+# ("Uma - Villa 64, Kollur", "Ar Manoj - Hi-Tech City"), so a letters-only
+# rule would reject live production data. Blocks only junk (empty, or no
+# letters at all e.g. pure symbols/digits).
+_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9\s,.\-'&()/]*$")
+
+
+def validate_customer_name(name: str) -> str:
+    name = str(name or "").strip()
+    if not name or not _NAME_RE.match(name):
+        raise ValueError(
+            "Name must start with a letter and contain only letters, numbers, "
+            "spaces, and , . - ' & ( ) /")
+    return name
+
+
+# Same rule, used for Lead.name too — one shared definition of "a valid
+# person name" so Lead and Customer can never drift apart on this.
+validate_person_name = validate_customer_name
+
+
+_FLOOR_RE = re.compile(r"(ground|\d+)\s*(st|nd|rd|th)?\s*floor", re.I)
+
+
+def normalize_location(value: str) -> str:
+    """Collapse dirty free-text floor locations ('1 st floor', 'GROUND FLOOR')
+    into a canonical 'Ground Floor' / '1st Floor' label. Non-floor locations
+    (e.g. 'Warehouse') pass through unchanged."""
+    raw = str(value or "").strip()
+    m = _FLOOR_RE.search(raw)
+    if not m:
+        return raw
+    token = m.group(1).lower()
+    if token == "ground":
+        return "Ground Floor"
+    n = int(token)
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix} Floor"
+
+
 def _next_dated_id(items: Iterable[dict], field: str, tag: str) -> str:
     prefix = f"{tag}-{yymm()}-"
     return f"{prefix}{_max_suffix(items, field, prefix) + 1:03d}"
@@ -622,6 +684,98 @@ def build_journey(phone: Any, *, visitors, leads, quotes, sales, payments, activ
     }
 
 
+# ---------------------------------------------------- 11-stage pipeline bar
+PIPELINE_STAGES = ["lead", "project", "requirement", "configurator", "quote",
+                    "follow_up", "order", "production", "installation",
+                    "payment", "customer"]
+PIPELINE_LABELS = {
+    "lead": "Lead", "project": "Project", "requirement": "Requirement",
+    "configurator": "Configurator", "quote": "Quote", "follow_up": "Follow-up",
+    "order": "Order", "production": "Production", "installation": "Installation",
+    "payment": "Payment", "customer": "Customer",
+}
+
+
+def build_pipeline(phone: Any, *, leads, requirements, product_configs, quotes,
+                    tasks, sales, projects, payments, customers) -> list:
+    """
+    Where the deal for `phone` sits across the 11 operational stages, for the
+    progress bar on Quote/Journey detail views. Read-only — derived from
+    records that already exist (same phone/lead_id/quote_id/sale_id lineage
+    the rest of lifecycle.py uses), never written back.
+    """
+    key = phone_key(phone)
+    at = {s: None for s in PIPELINE_STAGES}
+
+    def earliest(cur, candidate):
+        if not candidate:
+            return cur
+        cd = parse_date(candidate)
+        if cur is None:
+            return candidate if cd else cur
+        kd = parse_date(cur)
+        return candidate if (cd and kd and cd < kd) else cur
+
+    linked_leads = [l for l in leads if phone_key(l.get("phone")) == key]
+    lead_ids = {l.get("id") for l in linked_leads}
+    for l in linked_leads:
+        at["lead"] = earliest(at["lead"], l.get("date"))
+
+    linked_reqs = [r for r in requirements
+                   if phone_key(r.get("phone")) == key or r.get("lead_id") in lead_ids]
+    req_ids = {r.get("id") for r in linked_reqs}
+    for r in linked_reqs:
+        at["requirement"] = earliest(at["requirement"], r.get("created_at"))
+
+    linked_configs = [c for c in product_configs if c.get("requirement_id") in req_ids]
+    config_ids = {c.get("id") for c in linked_configs}
+    for c in linked_configs:
+        at["configurator"] = earliest(at["configurator"], c.get("created_at"))
+
+    linked_quotes = [q for q in quotes if phone_key(q.get("phone")) == key
+                      or q.get("lead_id") in lead_ids or q.get("config_id") in config_ids]
+    quote_ids = {q.get("id") for q in linked_quotes}
+    quote_nos = {q.get("quote_no") for q in linked_quotes}
+    for q in linked_quotes:
+        at["quote"] = earliest(at["quote"], q.get("date"))
+
+    for t in tasks:
+        ref_hit = ((t.get("ref_type") == "quote" and t.get("ref") in quote_ids)
+                   or (t.get("ref_type") == "lead" and t.get("ref") in lead_ids))
+        if ref_hit and str(t.get("category") or "").lower() == "follow-up":
+            at["follow_up"] = earliest(at["follow_up"], t.get("created_at"))
+
+    linked_sales = [s for s in sales if phone_key(s.get("phone")) == key
+                     or s.get("quote_ref") in quote_nos or s.get("lead_id") in lead_ids]
+    sale_ids = {s.get("id") for s in linked_sales}
+    for s in linked_sales:
+        at["order"] = earliest(at["order"], s.get("date"))
+
+    linked_projects = [p for p in projects if phone_key(p.get("phone")) == key
+                        or p.get("sale_id") in sale_ids or p.get("lead_id") in lead_ids]
+    for p in linked_projects:
+        at["project"] = earliest(at["project"], p.get("start_date") or p.get("created_at"))
+        for m in p.get("milestones") or []:
+            name = canonical_milestone_name(m.get("name"))
+            if m.get("status") != "Done":
+                continue
+            if name == "Production":
+                at["production"] = earliest(at["production"], m.get("completed_at"))
+            elif name == "Installation":
+                at["installation"] = earliest(at["installation"], m.get("completed_at"))
+
+    for pay in payments:
+        if phone_key(pay.get("phone")) == key or pay.get("against_sale_id") in sale_ids:
+            at["payment"] = earliest(at["payment"], pay.get("date"))
+
+    for c in customers:
+        if phone_key(c.get("phone")) == key and str(c.get("stage") or "") == "Active":
+            at["customer"] = earliest(at["customer"], c.get("customer_since") or c.get("created_at"))
+
+    return [{"key": s, "label": PIPELINE_LABELS[s], "done": at[s] is not None, "at": at[s] or ""}
+            for s in PIPELINE_STAGES]
+
+
 # ------------------------------------------------------------- stock ledger
 # Movement types and the sign each applies to on-hand quantity. A transfer is
 # modelled as two rows (an Issue from one warehouse + a Receipt into another) so
@@ -712,4 +866,41 @@ def from_csv(text: str) -> list[dict]:
                 val = val[1:]
             rec[key] = val
         out.append(rec)
+    return out
+
+
+# ------------------------------------------------ quote follow-up dashboard
+FOLLOWUP_BUCKETS = ["overdue", "today", "tomorrow", "this_week", "upcoming"]
+
+
+def bucket_followup(next_follow_up: str, today: Optional[date] = None) -> Optional[str]:
+    """Which dashboard section a quote's next_follow_up date falls into, or
+    None if there's nothing scheduled (such quotes don't appear on the
+    dashboard at all)."""
+    d = parse_date(next_follow_up)
+    if not d:
+        return None
+    today = today or date.today()
+    delta = (d - today).days
+    if delta < 0:
+        return "overdue"
+    if delta == 0:
+        return "today"
+    if delta == 1:
+        return "tomorrow"
+    if delta <= 7:
+        return "this_week"
+    return "upcoming"
+
+
+def bucket_followups(quotes: Iterable[dict], today: Optional[date] = None) -> dict:
+    """{bucket: [quote, ...]} for quotes that have a next_follow_up date, sorted
+    soonest-first within each bucket."""
+    out = {b: [] for b in FOLLOWUP_BUCKETS}
+    for q in quotes:
+        b = bucket_followup(q.get("next_follow_up"), today)
+        if b:
+            out[b].append(q)
+    for b in out:
+        out[b].sort(key=lambda q: q.get("next_follow_up") or "")
     return out

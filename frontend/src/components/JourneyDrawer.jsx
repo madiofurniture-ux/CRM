@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { X, MessageCircle, Phone } from "lucide-react";
+import StageProgressBar from "@/components/StageProgressBar";
 
 /**
  * Customer-360 slide-over. Give it a phone number and it pulls the whole journey
@@ -43,6 +44,7 @@ export default function JourneyDrawer({ phone, name, onClose }) {
         </div>
 
         <div className="p-5 space-y-5">
+          {data?.pipeline && <StageProgressBar stages={data.pipeline} />}
           <div className="grid grid-cols-2 gap-3">
             <Stat label="Quoted" value={inrFull(t.quoted)} />
             <Stat label="Sold" value={inrFull(t.sold)} accent="moss" />

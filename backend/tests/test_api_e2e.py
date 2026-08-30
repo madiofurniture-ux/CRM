@@ -396,7 +396,7 @@ def main():
 
         s, bad = call("POST", "/api/leads",
                       {"date": "2026-05-14", "name": "ZZ E2E Stage Probe", "phone": "9000000003",
-                       "stage": "ZZ Definitely Not A Stage"}, token=admin_tok)
+                       "source": "Walk-in", "reference": "E2E", "stage": "ZZ Definitely Not A Stage"}, token=admin_tok)
         check("enforced workflow rejects an unknown stage", s == 400, f"got {s}")
         check("rejection tells the user which stages are valid",
               isinstance(bad, dict) and bool((bad.get("detail") or {}).get("valid_stages")
@@ -407,7 +407,7 @@ def main():
             label = learned[0]["label"]
             s, ok = call("POST", "/api/leads",
                          {"date": "2026-05-14", "name": "ZZ E2E Stage Probe", "phone": "9000000003",
-                          "stage": label.lower()}, token=admin_tok)
+                          "source": "Walk-in", "reference": "E2E", "stage": label.lower()}, token=admin_tok)
             check("a valid stage is accepted whatever the casing", s == 200, f"got {s}")
             if s == 200 and ok and ok.get("id"):
                 check("stage is stored in its canonical spelling", ok.get("stage") == label,
@@ -440,7 +440,7 @@ def main():
               f"enforced={(after or {}).get('enforced')}")
         s, free = call("POST", "/api/leads",
                        {"date": "2026-05-14", "name": "ZZ E2E Stage Probe", "phone": "9000000003",
-                        "stage": "Anything Goes Now"}, token=admin_tok)
+                        "source": "Walk-in", "reference": "E2E", "stage": "Anything Goes Now"}, token=admin_tok)
         check("un-enforced workflow accepts any stage", s == 200, f"got {s}")
         if s == 200 and free and free.get("id"):
             call("DELETE", f"/api/leads/{free['id']}", token=admin_tok)

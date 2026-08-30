@@ -1,8 +1,10 @@
 """Pydantic models for MADIO CRM."""
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Any
 from datetime import datetime, timezone
 import uuid
+
+import lifecycle as lc
 
 
 def now_iso() -> str:
@@ -87,16 +89,56 @@ class LeadBase(BaseModel):
     date: str
     name: str
     phone: Optional[str] = ""
-    source: Optional[str] = ""
+    source: Optional[str] = ""    # channel the lead came through, e.g. "Referral" / "Instagram"
+    reference: Optional[str] = ""  # the specific person/campaign/handle, e.g. "Ramesh Kumar" / "@madiointeriors"
     stage: str = "New"  # New, Contacted, Qualified, Quoted, Won, Lost
     follow_up_date: Optional[str] = ""
     remarks: Optional[str] = ""
     assigned_to: Optional[str] = ""
+    attended_by: Optional[str] = ""       # who met the lead — linked to Team/Users by name
+    confidence_level: Optional[float] = None  # 0-100 — sales rep's read on close probability
+    visitor_id: Optional[str] = ""        # lineage when converted from a Visitor
     value: Optional[float] = 0
+    # Dated, multi-entry audit trail: [{at, by, by_id, text, confidence_level, kind}].
+    # `remarks` above stays a plain string (unmigrated) — old screens still read it.
+    log: List[dict] = Field(default_factory=list)
 
 
 class LeadCreate(LeadBase):
-    pass
+    # Redeclared as required (no default): Pydantic v2 doesn't run
+    # field_validators against a value that was never supplied and fell
+    # back to LeadBase's "" default, so a payload that omits the key
+    # entirely would otherwise sail through. Required + the validators
+    # below together close both gaps (missing key AND empty string).
+    phone: str
+    source: str
+    reference: str
+
+    @field_validator("phone")
+    @classmethod
+    def _phone_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Phone number is required")
+        return v
+
+    @field_validator("source")
+    @classmethod
+    def _source_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Source is required")
+        return v
+
+    @field_validator("reference")
+    @classmethod
+    def _reference_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Reference is required")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, v):
+        return lc.validate_person_name(v)
 
 
 class Lead(LeadBase):
@@ -138,6 +180,9 @@ class QuoteBase(BaseModel):
     division: str = "Furniture"  # Furniture / MAP / D&W
     by_user: Optional[str] = ""
     stage: str = "Quoted"
+    lead_id: Optional[str] = ""           # lineage back to the originating lead
+    requirement_id: Optional[str] = ""    # set when generated from a Requirement
+    config_id: Optional[str] = ""         # set when generated from a Configurator run
     value: float = 0
     cash: Optional[float] = 0
     bank: Optional[float] = 0
@@ -157,6 +202,10 @@ class QuoteBase(BaseModel):
     approval: Optional[str] = ""
     approved_by: Optional[str] = ""
     approved_at: Optional[str] = ""
+    # Dated, multi-entry follow-up ledger: [{at, by, by_id, text, confidence_level, kind}]
+    log: List[dict] = Field(default_factory=list)
+    confidence_level: Optional[float] = None   # 0-100 — latest read on close probability
+    next_follow_up: Optional[str] = ""         # denormalized from the latest log entry, for dashboard bucketing
 
 
 class QuoteCreate(QuoteBase):
@@ -168,7 +217,8 @@ class Quote(QuoteBase):
     created_at: str
 
 
-# ------- Sales -------
+# ------- Sales (a.k.a. Sales Orders — same collection, "balance" is the
+# order's balance_due) -------
 class SaleBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     sale_no: str
@@ -176,12 +226,16 @@ class SaleBase(BaseModel):
     customer: str
     division: str = "Furniture"
     quote_ref: Optional[str] = ""
+    quote_id: Optional[str] = ""          # links back to the source quote, for idempotent auto-conversion
+    lead_id: Optional[str] = ""           # lineage back to the originating lead
     by_user: Optional[str] = ""
     value: float = 0
     paid: float = 0
-    balance: float = 0
+    balance: float = 0                    # balance_due
+    status: str = "PENDING"               # PENDING / PARTIAL / PAID
     stage: str = "Delivered"
     remarks: Optional[str] = ""
+    line_items: Optional[List[dict]] = []  # snapshot of quote lines at conversion time
 
 
 class SaleCreate(SaleBase):
@@ -208,10 +262,21 @@ class InventoryBase(BaseModel):
     status: str = "In Stock"  # In Stock / Display / Sold / Missing / Reserved
     location: Optional[str] = "Warehouse"
     image_url: Optional[str] = ""
+    vendor_code: Optional[str] = ""
 
 
 class InventoryCreate(InventoryBase):
-    pass
+    # Required (no default) so a payload that omits the key entirely can't
+    # skip the validator below the way InventoryBase's "" default would let
+    # it — new items only, the ~2000 historical rows are not backfilled.
+    vendor_code: str
+
+    @field_validator("vendor_code")
+    @classmethod
+    def _vendor_code_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Vendor code is required")
+        return v
 
 
 class InventoryItem(InventoryBase):
@@ -228,6 +293,7 @@ class TaskBase(BaseModel):
     assigned_to: Optional[str] = ""
     category: Optional[str] = "General"
     ref: Optional[str] = ""
+    ref_type: Optional[str] = ""  # "" / lead / quote / sale / project — what `ref` points at
     notes: Optional[str] = ""
     done: bool = False
 
@@ -398,6 +464,11 @@ class ProjectBase(BaseModel):
     target_date: Optional[str] = ""
     remarks: Optional[str] = ""
     quote_ref: Optional[str] = ""
+    sale_id: Optional[str] = ""           # links back to the sales order it was generated from
+    lead_id: Optional[str] = ""           # lineage back to the originating lead
+    requirement_id: Optional[str] = ""    # set when started from a Requirement, before any quote exists
+    milestones: List[dict] = Field(default_factory=list)  # [{name, status, completed_at}]
+    log: List[dict] = Field(default_factory=list)  # [{at, by, by_id, text, confidence_level, kind}]
 
 
 class ProjectCreate(ProjectBase):
@@ -452,8 +523,17 @@ class DWOpeningBase(BaseModel):
     frame: str = "uPVC"
     glass: str = "Single"
     mesh: bool = False
+    handle_position: Optional[str] = ""  # "" (N/A) | "RHS" | "LHS"
     notes: Optional[str] = ""
     image_url: Optional[str] = ""
+
+    @field_validator("handle_position")
+    @classmethod
+    def _valid_handle_position(cls, v):
+        v = str(v or "")
+        if v not in ("", "RHS", "LHS"):
+            raise ValueError("handle_position must be RHS, LHS, or blank (N/A)")
+        return v
 
 
 # ── Recovered parity models (D&W surveys, payments, stock ledger, quote lines) ──
@@ -547,3 +627,124 @@ class DWOpeningCreate(DWOpeningBase):
 
 class QuoteLineCreate(QuoteLineBase):
     pass
+
+
+# ------- Commission rules (architect / sales-rep payout rates) -------
+class CommissionRuleBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    payee_type: str = "architect"       # architect / user
+    payee: Optional[str] = ""           # "" = applies to every payee of that type
+    rate_pct: float = 0
+    flat_amount: float = 0
+    division: Optional[str] = ""        # "" = all divisions
+    active: bool = True
+    remarks: Optional[str] = ""
+
+
+class CommissionRuleCreate(CommissionRuleBase):
+    pass
+
+
+class CommissionRule(CommissionRuleBase):
+    id: str
+    created_at: str
+
+
+# ------- Requirements (structured need captured before a quote) -------
+class RequirementBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    lead_id: str
+    project_id: Optional[str] = ""
+    customer: str
+    phone: Optional[str] = ""
+    division: str = "Furniture"
+    title: str = ""
+    items: List[dict] = []   # [{space, item, qty, w, h, notes, budget}]
+    budget: float = 0
+    priority: str = "Medium"  # Low / Medium / High
+    status: str = "Open"      # Open / Configured / Quoted
+    site_address: Optional[str] = ""
+    by_user: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class RequirementCreate(RequirementBase):
+    pass
+
+
+class Requirement(RequirementBase):
+    id: str
+    created_at: str
+
+
+# ------- Product Configurations (the "Configurator") -------
+class ProductConfigBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    requirement_id: str
+    quote_id: Optional[str] = ""
+    name: str = ""
+    division: str = "Furniture"
+    inputs: dict = {}              # raw configurator selections
+    line_items: List[dict] = []    # computed via lc.calc_line, same shape as quote lines
+    subtotal: float = 0
+    discount: float = 0
+    tax_pct: float = GST_DEFAULT
+    tax_total: float = 0
+    grand_total: float = 0
+    version: int = 1
+    status: str = "Draft"          # Draft / Quoted
+    by_user: Optional[str] = ""
+
+
+class ProductConfigCreate(ProductConfigBase):
+    pass
+
+
+class ProductConfig(ProductConfigBase):
+    id: str
+    created_at: str
+
+
+# ------- Customers (post-sale lifecycle record) -------
+class CustomerBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    phone: str
+    email: Optional[str] = ""
+    address: Optional[str] = ""
+    gstin: Optional[str] = ""
+    division: str = "Furniture"
+    stage: str = "Prospect"        # Prospect / Active / Dormant — see tenancy.DEFAULT_WORKFLOWS["customer"]
+    lead_id: Optional[str] = ""
+    first_sale_id: Optional[str] = ""
+    customer_since: Optional[str] = ""
+    lifetime_value: float = 0
+    balance: float = 0
+    remarks: Optional[str] = ""
+    confidence_level: Optional[float] = None  # 0-100
+    gender: Optional[str] = ""
+    maps_url: Optional[str] = ""     # Google Maps location link
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    alt_contact_name: Optional[str] = ""
+    alt_phone: Optional[str] = ""
+
+
+class CustomerCreate(CustomerBase):
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, v):
+        return lc.validate_person_name(v)
+
+    @field_validator("phone")
+    @classmethod
+    def _phone_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Phone number is required")
+        return v
+
+
+class Customer(CustomerBase):
+    id: str
+    created_at: str

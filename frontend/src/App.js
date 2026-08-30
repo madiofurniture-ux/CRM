@@ -42,6 +42,12 @@ const DataCentre = lazy(() => import("@/pages/DataCentre"));
 const FinancialYear = lazy(() => import("@/pages/FinancialYear"));
 const Workflows = lazy(() => import("@/pages/Workflows"));
 
+// 11-stage operational flow: Requirement + Configurator + Customer
+const Requirements = lazy(() => import("@/pages/Requirements"));
+const Configurator = lazy(() => import("@/pages/Configurator"));
+const Customers = lazy(() => import("@/pages/Customers"));
+const QuoteFollowups = lazy(() => import("@/pages/QuoteFollowups"));
+
 function PageLoader() {
   return (
     <div className="flex items-center justify-center min-h-screen text-sm text-[var(--ink-3)]">
@@ -94,6 +100,10 @@ function App() {
           <Route path="/data-centre" element={<ProtectedRoute page="data-centre"><Layout><DataCentre /></Layout></ProtectedRoute>} />
           <Route path="/admin/financial-year" element={<ProtectedRoute page="financial-year"><Layout><FinancialYear /></Layout></ProtectedRoute>} />
           <Route path="/admin/workflows" element={<ProtectedRoute page="workflows"><Layout><Workflows /></Layout></ProtectedRoute>} />
+          <Route path="/requirements" element={<ProtectedRoute page="requirements"><Layout><Requirements /></Layout></ProtectedRoute>} />
+          <Route path="/configurator" element={<ProtectedRoute page="configurator"><Layout><Configurator /></Layout></ProtectedRoute>} />
+          <Route path="/customers" element={<ProtectedRoute page="customers"><Layout><Customers /></Layout></ProtectedRoute>} />
+          <Route path="/quotes/followups" element={<ProtectedRoute page="quote-followups"><Layout><QuoteFollowups /></Layout></ProtectedRoute>} />
         </Routes>
         </Suspense>
       </BrowserRouter>

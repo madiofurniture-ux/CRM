@@ -4,7 +4,8 @@ import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { toast } from "sonner";
-import { Trash2, X, Phone } from "lucide-react";
+import { Trash2, X, Phone, UserPlus, CheckCircle2 } from "lucide-react";
+import CustomerResolver from "@/components/CustomerResolver";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost", "Delivered"];
 const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
@@ -15,14 +16,38 @@ export default function Visitors() {
   const [fStage, setFStage] = useState("All");
   const [show, setShow] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [leadByVisitor, setLeadByVisitor] = useState({});
+  const [leadsByPhone, setLeadsByPhone] = useState({});
+  const [converting, setConverting] = useState(null);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", location: "", reference: "",
     phone: "", requirement: "", attend_person: "", remarks: "", status: "New", stage: "New", ticket_value: 0,
   };
   const [form, setForm] = useState(empty);
 
-  const load = async () => { const { data } = await api.get("/visitors"); setRows(data); };
+  const load = async () => {
+    const { data } = await api.get("/visitors");
+    setRows(data);
+    const { data: leads } = await api.get("/leads");
+    setLeadByVisitor(Object.fromEntries(leads.filter((l) => l.visitor_id).map((l) => [l.visitor_id, l])));
+    const byPhone = {};
+    for (const l of leads) if (l.phone) byPhone[l.phone] = l;
+    setLeadsByPhone(byPhone);
+  };
   useEffect(() => { load(); }, []);
+
+  const convertToLead = async (v) => {
+    if (converting) return;
+    const dupe = v.phone && leadsByPhone[v.phone];
+    if (dupe && !window.confirm(`A lead with this phone already exists (${dupe.name}). Create another lead for this visitor anyway?`)) return;
+    setConverting(v.id);
+    try {
+      const { data: lead } = await api.post(`/convert/visitor-to-lead/${v.id}`);
+      toast.success(`Linked to Lead — ${lead.name}`);
+      await load();
+    } catch { toast.error("Couldn't convert visitor to lead"); }
+    finally { setConverting(null); }
+  };
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -71,6 +96,7 @@ export default function Visitors() {
                   <th className="text-left font-semibold px-4 py-2.5">Attended by</th>
                   <th className="text-left font-semibold px-4 py-2.5">Stage</th>
                   <th className="text-right font-semibold px-4 py-2.5">Ticket</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Lead</th>
                   <th className="w-12"></th>
                 </tr>
               </thead>
@@ -96,12 +122,25 @@ export default function Visitors() {
                       </select>
                     </td>
                     <td className="px-4 py-3 text-right font-mono">{inrFull(v.ticket_value)}</td>
+                    <td className="px-4 py-3">
+                      {leadByVisitor[v.id] ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-[var(--moss)] font-medium" title={leadByVisitor[v.id].id}>
+                          <CheckCircle2 size={12} /> Linked Lead: {leadByVisitor[v.id].name}
+                        </span>
+                      ) : (
+                        <button onClick={() => convertToLead(v)} disabled={converting === v.id}
+                          className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-[var(--border)] hover:bg-[var(--surface-hover)] text-[var(--ink-2)] disabled:opacity-60"
+                          data-testid={`visitor-to-lead-${v.id}`}>
+                          <UserPlus size={12} /> {converting === v.id ? "Converting…" : "Convert to Lead"}
+                        </button>
+                      )}
+                    </td>
                     <td className="px-2 py-3">
                       <button onClick={() => remove(v.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && <tr><td colSpan="9" className="text-center py-10 text-[var(--ink-3)]">No visitors</td></tr>}
+                {filtered.length === 0 && <tr><td colSpan="10" className="text-center py-10 text-[var(--ink-3)]">No visitors</td></tr>}
               </tbody>
             </table>
           </div>
@@ -114,6 +153,10 @@ export default function Visitors() {
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">Log Visitor</h3>
               <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+            </div>
+            <div className="px-5 pt-4">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Search Existing Customer</label>
+              <CustomerResolver onSelect={(c) => setForm({ ...form, name: c.name, phone: c.phone })} />
             </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <Fld l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} t2="vf-date" />

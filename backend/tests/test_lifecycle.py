@@ -10,6 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
+
 import lifecycle as lc
 
 
@@ -271,3 +273,89 @@ def test_csv_guards_formula_injection():
 
 def test_from_csv_skips_blank_lines():
     assert lc.from_csv("a,b\n1,2\n\n3,4\n") == [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
+
+
+# ---------------------------------------------------- 11-stage pipeline bar
+def test_build_pipeline_marks_stages_done_along_the_chain():
+    lead = {"id": "L1", "phone": "9990001111", "date": "2026-01-01"}
+    req = {"id": "R1", "lead_id": "L1", "phone": "9990001111", "created_at": "2026-01-02"}
+    config = {"id": "C1", "requirement_id": "R1", "created_at": "2026-01-03"}
+    quote = {"id": "Q1", "lead_id": "L1", "config_id": "C1", "quote_no": "AF-2601-001",
+              "phone": "9990001111", "date": "2026-01-04"}
+    followup_task = {"ref": "Q1", "ref_type": "quote", "category": "Follow-up",
+                      "created_at": "2026-01-05"}
+    sale = {"id": "S1", "lead_id": "L1", "quote_ref": "AF-2601-001",
+             "phone": "9990001111", "date": "2026-01-06"}
+    project = {"phone": "9990001111", "sale_id": "S1", "start_date": "2026-01-07",
+               "milestones": [
+                   {"name": "Production", "status": "Done", "completed_at": "2026-01-08"},
+                   {"name": "Assembly", "status": "Done", "completed_at": "2026-01-09"},
+               ]}
+    payment = {"phone": "9990001111", "against_sale_id": "S1", "date": "2026-01-10"}
+    customer = {"phone": "9990001111", "stage": "Active", "customer_since": "2026-01-10"}
+
+    pipeline = lc.build_pipeline(
+        "9990001111", leads=[lead], requirements=[req], product_configs=[config],
+        quotes=[quote], tasks=[followup_task], sales=[sale], projects=[project],
+        payments=[payment], customers=[customer])
+
+    done = {row["key"]: row["done"] for row in pipeline}
+    assert all(done.values()), done
+    # "Assembly" (the old milestone name) must still satisfy "Installation".
+    installation = next(r for r in pipeline if r["key"] == "installation")
+    assert installation["at"] == "2026-01-09"
+
+
+def test_build_pipeline_undone_stage_has_no_date():
+    pipeline = lc.build_pipeline(
+        "8880002222", leads=[{"id": "L2", "phone": "8880002222", "date": "2026-02-01"}],
+        requirements=[], product_configs=[], quotes=[], tasks=[], sales=[], projects=[],
+        payments=[], customers=[])
+    by_key = {r["key"]: r for r in pipeline}
+    assert by_key["lead"]["done"] is True
+    assert by_key["order"]["done"] is False
+    assert by_key["order"]["at"] == ""
+
+
+# ------------------------------------------- customer name / floor helpers
+def test_validate_customer_name_accepts_real_world_names():
+    assert lc.validate_customer_name("Uma - Villa 64, Kollur") == "Uma - Villa 64, Kollur"
+    assert lc.validate_customer_name("  Ar Manoj  ") == "Ar Manoj"
+
+
+def test_validate_customer_name_rejects_junk():
+    for bad in ["", "   ", "123", "@@@", "---"]:
+        with pytest.raises(ValueError):
+            lc.validate_customer_name(bad)
+
+
+def test_normalize_location_canonicalizes_floor_labels():
+    assert lc.normalize_location("1 st floor") == "1st Floor"
+    assert lc.normalize_location("GROUND FLOOR") == "Ground Floor"
+    assert lc.normalize_location("2nd floor") == "2nd Floor"
+    assert lc.normalize_location("Warehouse") == "Warehouse"
+
+
+# --------------------------------------------------- follow-up dashboard
+def test_bucket_followup_classifies_relative_to_today():
+    today = date(2026, 3, 10)
+    assert lc.bucket_followup("2026-03-05", today) == "overdue"
+    assert lc.bucket_followup("2026-03-10", today) == "today"
+    assert lc.bucket_followup("2026-03-11", today) == "tomorrow"
+    assert lc.bucket_followup("2026-03-15", today) == "this_week"
+    assert lc.bucket_followup("2026-04-01", today) == "upcoming"
+    assert lc.bucket_followup("", today) is None
+
+
+def test_bucket_followups_groups_and_sorts_quotes():
+    today = date(2026, 3, 10)
+    quotes = [
+        {"id": "Q1", "next_follow_up": "2026-03-15"},
+        {"id": "Q2", "next_follow_up": "2026-03-05"},
+        {"id": "Q3", "next_follow_up": ""},          # no follow-up scheduled — excluded
+        {"id": "Q4", "next_follow_up": "2026-03-12"},
+    ]
+    out = lc.bucket_followups(quotes, today)
+    assert [q["id"] for q in out["this_week"]] == ["Q4", "Q1"]
+    assert [q["id"] for q in out["overdue"]] == ["Q2"]
+    assert sum(len(v) for v in out.values()) == 3  # Q3 never appears anywhere

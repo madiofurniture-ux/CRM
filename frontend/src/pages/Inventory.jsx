@@ -8,6 +8,22 @@ import { toast } from "sonner";
 
 const STATUSES = ["In Stock", "Display", "Sold", "Missing", "Reserved"];
 
+// Location color legend — color is always paired with the name/code, never
+// the only identifier. Matches lc.normalize_location()'s canonical labels.
+const LOCATION_COLORS = [
+  { match: /ground floor/i, code: "GF", color: "#3B82F6" },
+  { match: /1st floor/i, code: "F1", color: "#10B981" },
+  { match: /2nd floor/i, code: "F2", color: "#EAB308" },
+  { match: /warehouse/i, code: "WH", color: "#EF4444" },
+  { match: /dispatch/i, code: "DSP", color: "#8B5CF6" },
+];
+function locationBadge(location) {
+  const loc = String(location || "");
+  const hit = LOCATION_COLORS.find((l) => l.match.test(loc));
+  if (!hit) return loc || null;
+  return <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full shrink-0" style={{ background: hit.color }} />{loc} <span className="text-[10px] text-[var(--ink-3)]">({hit.code})</span></span>;
+}
+
 export default function Inventory() {
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
@@ -17,14 +33,14 @@ export default function Inventory() {
   const [show, setShow] = useState(false);
   const [editingId, setEditingId] = useState(null); // null = creating, else the item id being edited
   const [saving, setSaving] = useState(false);
-  const empty = { sku: "", name: "", category: "", vendor: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "Warehouse A", image_url: "" };
+  const empty = { sku: "", name: "", category: "", vendor: "", vendor_code: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "Warehouse A", image_url: "" };
   const [form, setForm] = useState(empty);
 
   const openEdit = (item) => {
     // copy only the editable fields so stray keys (id/created_at) never round-trip into the form
     setForm({
       sku: item.sku || "", name: item.name || "", category: item.category || "",
-      vendor: item.vendor || "", model_no: item.model_no || "", qty: item.qty ?? 1,
+      vendor: item.vendor || "", vendor_code: item.vendor_code || "", model_no: item.model_no || "", qty: item.qty ?? 1,
       cost: item.cost ?? 0, mrp: item.mrp ?? 0, margin: item.margin ?? 0,
       status: item.status || "In Stock", location: item.location || "", image_url: item.image_url || "",
     });
@@ -42,7 +58,8 @@ export default function Inventory() {
     return rows.filter((r) =>
       (fStatus === "All" || r.status === fStatus) &&
       (fCat === "All" || r.category === fCat) &&
-      (!q || (r.name || "").toLowerCase().includes(q) || (r.sku || "").toLowerCase().includes(q) || (r.vendor || "").toLowerCase().includes(q))
+      (!q || (r.name || "").toLowerCase().includes(q) || (r.sku || "").toLowerCase().includes(q) ||
+        (r.vendor || "").toLowerCase().includes(q) || (r.vendor_code || "").toLowerCase().includes(q))
     );
   }, [rows, search, fStatus, fCat]);
 
@@ -52,6 +69,7 @@ export default function Inventory() {
   const save = async () => {
     if (saving) return;
     if (!form.sku.trim() || !form.name.trim()) { toast.error("SKU and Name are required"); return; }
+    if (!editingId && !form.vendor_code.trim()) { toast.error("Vendor code is required for new items"); return; }
     const margin = form.cost > 0 ? +(((form.mrp - form.cost) / form.cost) * 100).toFixed(2) : 0;
     setSaving(true);
     try {
@@ -63,7 +81,7 @@ export default function Inventory() {
         toast.success("Item added");
       }
       setShow(false); setForm(empty); setEditingId(null); load();
-    } catch { toast.error("Save failed"); }
+    } catch (e) { toast.error(e?.response?.data?.detail?.toString?.() || "Save failed"); }
     finally { setSaving(false); }
   };
 
@@ -93,7 +111,7 @@ export default function Inventory() {
       />
       <div className="p-6" data-testid="inventory-page">
         <div className="flex flex-wrap gap-2 mb-4">
-          <input placeholder="Search SKU, name, vendor…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="inv-search" />
+          <input placeholder="Search SKU, name, vendor, vendor code…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="inv-search" />
           <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             <option>All</option>
             {STATUSES.map((s) => <option key={s}>{s}</option>)}
@@ -132,8 +150,8 @@ export default function Inventory() {
                     </div>
                   </div>
                   <div className="mt-2 pt-2 border-t border-[var(--border-light)] flex items-center justify-between text-[11px] text-[var(--ink-3)]">
-                    <span className="truncate">{i.vendor}</span>
-                    <span>{i.location}</span>
+                    <span className="truncate">{i.vendor}{i.vendor_code ? ` · ${i.vendor_code}` : ""}</span>
+                    <span>{locationBadge(i.location)}</span>
                   </div>
                 </div>
               </div>
@@ -150,6 +168,7 @@ export default function Inventory() {
                     <th className="text-left font-semibold px-4 py-2.5">Name</th>
                     <th className="text-left font-semibold px-4 py-2.5">Category</th>
                     <th className="text-left font-semibold px-4 py-2.5">Vendor</th>
+                    <th className="text-left font-semibold px-4 py-2.5">Vendor Code</th>
                     <th className="text-right font-semibold px-4 py-2.5">Qty</th>
                     <th className="text-right font-semibold px-4 py-2.5">Cost</th>
                     <th className="text-right font-semibold px-4 py-2.5">MRP</th>
@@ -165,12 +184,13 @@ export default function Inventory() {
                       <td className="px-4 py-3 font-medium">{i.name}</td>
                       <td className="px-4 py-3 text-[var(--ink-2)]">{i.category}</td>
                       <td className="px-4 py-3 text-[var(--ink-2)]">{i.vendor}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-[var(--ink-2)]">{i.vendor_code || "—"}</td>
                       <td className="px-4 py-3 text-right font-mono">{i.qty}</td>
                       <td className="px-4 py-3 text-right font-mono text-[var(--ink-2)]">{inrFull(i.cost)}</td>
                       <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(i.mrp)}</td>
                       <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{i.margin?.toFixed(0)}%</td>
                       <td className="px-4 py-3"><StageBadge stage={i.status} /></td>
-                      <td className="px-4 py-3 text-[var(--ink-2)] text-xs">{i.location}</td>
+                      <td className="px-4 py-3 text-[var(--ink-2)] text-xs">{locationBadge(i.location)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -192,6 +212,7 @@ export default function Inventory() {
               <F l="Name" v={form.name} oc={(v) => setForm({ ...form, name: v })} t2="if-name" />
               <F l="Category" v={form.category} oc={(v) => setForm({ ...form, category: v })} />
               <F l="Vendor" v={form.vendor} oc={(v) => setForm({ ...form, vendor: v })} />
+              <F l={editingId ? "Vendor Code" : "Vendor Code *"} v={form.vendor_code} oc={(v) => setForm({ ...form, vendor_code: v })} />
               <F l="Model No" v={form.model_no} oc={(v) => setForm({ ...form, model_no: v })} />
               <F l="Qty" t="number" v={form.qty} oc={(v) => setForm({ ...form, qty: parseInt(v) || 0 })} />
               <F l="Cost" t="number" v={form.cost} oc={(v) => setForm({ ...form, cost: parseFloat(v) || 0 })} />

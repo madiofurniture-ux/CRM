@@ -1,9 +1,10 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
+import LogTimeline from "@/components/LogTimeline";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
-import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2 } from "lucide-react";
+import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 
 const STAGES = [
@@ -28,6 +29,7 @@ export default function Projects() {
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [logProject, setLogProject] = useState(null);
 
   const emptyForm = {
     project_no: `PRJ-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -222,6 +224,14 @@ export default function Projects() {
                         data-testid={`project-edit-${p.id}`}
                       >
                         <Pencil size={13} />
+                      </button>
+                      <button
+                        onClick={() => setLogProject(p)}
+                        className="p-1 rounded hover:bg-[var(--surface-2)] text-[var(--ink-2)]"
+                        title="Follow-up timeline"
+                        data-testid={`project-log-${p.id}`}
+                      >
+                        <MessageSquare size={13} />
                       </button>
                       <button
                         onClick={() => remove(p)}
@@ -445,6 +455,26 @@ export default function Projects() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {logProject && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setLogProject(null)}>
+          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h3 className="font-heading font-semibold text-lg">Follow-ups — {logProject.project_no}</h3>
+              <button onClick={() => setLogProject(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+            </div>
+            <div className="p-5">
+              <LogTimeline
+                entity="project" itemId={logProject.id} entries={logProject.log || []}
+                onAppended={(log) => {
+                  setLogProject((p) => ({ ...p, log }));
+                  setRows((p) => p.map((x) => x.id === logProject.id ? { ...x, log } : x));
+                }}
+              />
+            </div>
           </div>
         </div>
       )}

@@ -1,10 +1,12 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
+import LogTimeline from "@/components/LogTimeline";
+import CustomerResolver from "@/components/CustomerResolver";
 import api from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { toast } from "sonner";
-import { Phone, Calendar, X, Trash2 } from "lucide-react";
+import { Phone, Calendar, X, Trash2, MessageSquare } from "lucide-react";
 
 const STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
@@ -15,14 +17,21 @@ export default function Leads() {
   const [fStage, setFStage] = useState("All");
   const [show, setShow] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [logLead, setLogLead] = useState(null);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", phone: "", source: "Walk-in",
+    reference: "", attended_by: "", confidence_level: "",
     stage: "New", follow_up_date: "", remarks: "", assigned_to: "", value: 0,
   };
   const [form, setForm] = useState(empty);
 
   const load = async () => { const { data } = await api.get("/leads"); setRows(data); };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get("/users/directory").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
+  }, []);
+  const userName = (id) => users.find((u) => u.id === id)?.name || "";
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -37,9 +46,12 @@ export default function Leads() {
 
   const save = async () => {
     if (saving) return;
+    if (!form.phone.trim()) return toast.error("Phone number is required");
+    if (!form.source.trim()) return toast.error("Source is required");
+    if (!form.reference.trim()) return toast.error("Reference is required");
     setSaving(true);
     try { await api.post("/leads", form); toast.success("Lead added"); setShow(false); setForm(empty); load(); }
-    catch { toast.error("Save failed"); }
+    catch (e) { toast.error(e?.response?.data?.detail?.toString?.() || "Save failed — check the required fields"); }
     finally { setSaving(false); }
   };
   const updateStage = async (l, stage) => {
@@ -69,9 +81,10 @@ export default function Leads() {
                   <th className="text-left font-semibold px-4 py-2.5">Name</th>
                   <th className="text-left font-semibold px-4 py-2.5">Phone</th>
                   <th className="text-left font-semibold px-4 py-2.5">Source</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Reference</th>
                   <th className="text-left font-semibold px-4 py-2.5">Stage</th>
                   <th className="text-left font-semibold px-4 py-2.5">Follow up</th>
-                  <th className="text-left font-semibold px-4 py-2.5">Assigned</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Attended by</th>
                   <th className="text-right font-semibold px-4 py-2.5">Value</th>
                   <th></th>
                 </tr>
@@ -87,6 +100,7 @@ export default function Leads() {
                         {l.phone && <span className="inline-flex items-center gap-1"><Phone size={11} className="text-[var(--ink-3)]" />{l.phone}</span>}
                       </td>
                       <td className="px-4 py-3 text-[var(--ink-2)]">{l.source}</td>
+                      <td className="px-4 py-3 text-[var(--ink-2)]">{l.reference}</td>
                       <td className="px-4 py-3">
                         <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs" title={!isKnownStage(l.stage) ? "Legacy/imported value — pick a stage to normalize it" : undefined}>
                           {l.stage && !isKnownStage(l.stage) && <option value={l.stage}>{l.stage} (unrecognized)</option>}
@@ -96,13 +110,16 @@ export default function Leads() {
                       <td className={`px-4 py-3 whitespace-nowrap ${overdue ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-2)]"}`}>
                         <span className="inline-flex items-center gap-1"><Calendar size={11} />{fmtDate(l.follow_up_date)}</span>
                       </td>
-                      <td className="px-4 py-3 text-[var(--ink-2)]">{l.assigned_to}</td>
+                      <td className="px-4 py-3 text-[var(--ink-2)]">{userName(l.attended_by) || l.assigned_to}</td>
                       <td className="px-4 py-3 text-right font-mono">{inrFull(l.value)}</td>
-                      <td className="px-2 py-3"><button onClick={() => remove(l.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button></td>
+                      <td className="px-2 py-3 flex items-center gap-1">
+                        <button onClick={() => setLogLead(l)} title="Follow-up timeline" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-log-${l.id}`}><MessageSquare size={13} /></button>
+                        <button onClick={() => remove(l.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
+                      </td>
                     </tr>
                   );
                 })}
-                {filtered.length === 0 && <tr><td colSpan="9" className="text-center py-10 text-[var(--ink-3)]">No leads</td></tr>}
+                {filtered.length === 0 && <tr><td colSpan="10" className="text-center py-10 text-[var(--ink-3)]">No leads</td></tr>}
               </tbody>
             </table>
           </div>
@@ -116,11 +133,23 @@ export default function Leads() {
               <h3 className="font-heading font-semibold text-lg">New Lead</h3>
               <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
+            <div className="px-5 pt-4">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Search Existing Customer</label>
+              <CustomerResolver onSelect={(c) => setForm({ ...form, name: c.name, phone: c.phone })} />
+            </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <Fld l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />
               <Fld l="Name" v={form.name} oc={(v) => setForm({ ...form, name: v })} t2="lf-name" />
-              <Fld l="Phone" v={form.phone} oc={(v) => setForm({ ...form, phone: v })} />
-              <Fld l="Source" v={form.source} oc={(v) => setForm({ ...form, source: v })} />
+              <Fld l="Phone *" v={form.phone} oc={(v) => setForm({ ...form, phone: v })} />
+              <Fld l="Source *" v={form.source} oc={(v) => setForm({ ...form, source: v })} />
+              <Fld l="Reference *" v={form.reference} oc={(v) => setForm({ ...form, reference: v })} />
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Attended by</label>
+                <select value={form.attended_by} onChange={(e) => setForm({ ...form, attended_by: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                  <option value="">— Select —</option>
+                  {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+              </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Stage</label>
                 <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
@@ -128,13 +157,33 @@ export default function Leads() {
                 </select>
               </div>
               <Fld l="Follow up" t="date" v={form.follow_up_date} oc={(v) => setForm({ ...form, follow_up_date: v })} />
-              <Fld l="Assigned to" v={form.assigned_to} oc={(v) => setForm({ ...form, assigned_to: v })} />
+              <Fld l="Confidence %" t="number" v={form.confidence_level} oc={(v) => setForm({ ...form, confidence_level: v === "" ? "" : parseFloat(v) || 0 })} />
               <Fld l="Value" t="number" v={form.value} oc={(v) => setForm({ ...form, value: parseFloat(v) || 0 })} />
               <Fld l="Remarks" v={form.remarks} oc={(v) => setForm({ ...form, remarks: v })} cls="col-span-2" />
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
               <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving} data-testid="lead-save">{saving ? "Saving…" : "Add Lead"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {logLead && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setLogLead(null)}>
+          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h3 className="font-heading font-semibold text-lg">Follow-ups — {logLead.name}</h3>
+              <button onClick={() => setLogLead(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+            </div>
+            <div className="p-5">
+              <LogTimeline
+                entity="lead" itemId={logLead.id} entries={logLead.log || []}
+                onAppended={(log) => {
+                  setLogLead((p) => ({ ...p, log }));
+                  setRows((p) => p.map((x) => x.id === logLead.id ? { ...x, log } : x));
+                }}
+              />
             </div>
           </div>
         </div>
