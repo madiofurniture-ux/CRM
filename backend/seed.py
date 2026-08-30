@@ -2,6 +2,7 @@
 import json
 import os
 import random
+import re
 import secrets
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -39,7 +40,7 @@ SEED_ROLES = [
     ("mdw",        "MDW",        "DW", "#4A5D4E", _SALES_PAGES + ["dwsurvey"]),
     ("accounting", "Accounting", "AC", "#2F5D7C",
      ["dashboard", "alerts", "sales", "outstanding", "invoice-gen", "petty",
-      "reports", "tasks", "data-centre"]),
+      "reports", "tasks", "data-centre", "inventory", "inv-analytics"]),
     ("reception",  "Reception",  "RC", "#7C5D9C",
      ["dashboard", "visitors", "leads", "meetplan", "tasks", "attendance"]),
 ]
@@ -71,8 +72,18 @@ def _seed_pins() -> dict:
     return out
 
 
+def _seed_role(username: str, pages) -> str:
+    # "accountant" is a distinct role (not just "user") so it can be granted
+    # access to vendor names — see server.py's _can_see_vendor_names.
+    if pages is None:
+        return "admin"
+    if username == "accounting":
+        return "accountant"
+    return "user"
+
+
 SEED_USERS = [
-    {"username": u, "name": name, "pin": "", "role": ("admin" if pages is None else "user"),
+    {"username": u, "name": name, "pin": "", "role": _seed_role(u, pages),
      "icon": icon, "color": colour, "pages": pages}
     for (u, name, icon, colour, pages) in SEED_ROLES
 ]
@@ -276,6 +287,66 @@ async def seed_inventory(db):
         })
     if docs:
         await db.inventory.insert_many(docs)
+
+
+async def seed_vendors(db):
+    """Vendor codes are assigned once and never reassigned — safe to call every
+    startup (only adds names not already present). Names come from two
+    sources: data/vendors.json (seeded first, so its order sets the low
+    codes), then any distinct `vendor` string already sitting on an inventory
+    item that isn't covered yet — the curated JSON list turned out to be a
+    stale subset of what the real seeded inventory actually uses. Also
+    backfills vendor_id/vendor_code onto any inventory item whose free-text
+    `vendor` name matches a vendor here but has no link yet — additive only,
+    the item's own `vendor` text is never touched or removed.
+    """
+    path = DATA_DIR / "vendors.json"
+    names = []
+    if path.exists():
+        try:
+            names = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            names = []
+
+    existing = await db.vendors.find({}, {"_id": 0}).to_list(5000)
+    covered = {str(n or "").strip().lower() for n in names} | {
+        (v.get("name") or "").strip().lower() for v in existing
+    }
+    inventory_vendors = await db.inventory.distinct("vendor")
+    for v in sorted(str(n or "").strip() for n in inventory_vendors):
+        if v and v.lower() not in covered:
+            names.append(v)
+            covered.add(v.lower())
+
+    by_name = {(v.get("name") or "").strip().lower(): v for v in existing}
+    top = 0
+    for v in existing:
+        m = re.search(r"(\d+)\s*$", str(v.get("code") or ""))
+        if m:
+            top = max(top, int(m.group(1)))
+
+    added = []
+    for raw in names:
+        name = str(raw or "").strip()
+        if not name or name.lower() in by_name:
+            continue
+        top += 1
+        doc = {"id": new_id(), "name": name, "code": f"VEN-{top:03d}", "created_at": now_iso()}
+        added.append(doc)
+        by_name[name.lower()] = doc
+    if added:
+        await db.vendors.insert_many(added)
+
+    unlinked = db.inventory.find(
+        {"vendor": {"$nin": ["", None]},
+         "$or": [{"vendor_id": {"$exists": False}}, {"vendor_id": ""}]},
+        {"_id": 0, "id": 1, "vendor": 1},
+    )
+    async for item in unlinked:
+        v = by_name.get(str(item.get("vendor") or "").strip().lower())
+        if v:
+            await db.inventory.update_one(
+                {"id": item["id"]}, {"$set": {"vendor_id": v["id"], "vendor_code": v["code"]}})
 
 
 async def seed_sales(db):
@@ -490,6 +561,7 @@ async def seed_all(db):
     await seed_users(db)
     await seed_visitors(db)
     await seed_inventory(db)
+    await seed_vendors(db)
     await seed_sales(db)
     await seed_leads(db)
     await seed_architects(db)

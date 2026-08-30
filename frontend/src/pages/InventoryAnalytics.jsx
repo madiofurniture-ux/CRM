@@ -76,7 +76,7 @@ export default function InventoryAnalytics() {
                   <tr key={i.id} className="border-t border-[var(--border-light)]">
                     <td className="px-4 py-3 font-mono text-xs">{i.sku}</td>
                     <td className="px-4 py-3 font-medium">{i.name}</td>
-                    <td className="px-4 py-3 text-[var(--ink-2)]">{i.vendor}</td>
+                    <td className="px-4 py-3 text-[var(--ink-2)]">{[i.vendor_code, i.vendor].filter(Boolean).join(" · ")}</td>
                     <td className="px-4 py-3 text-right font-mono">{i.qty}</td>
                     <td className="px-4 py-3 text-right font-mono">{inrFull(i.mrp)}</td>
                     <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull((i.mrp || 0) * (i.qty || 0))}</td>

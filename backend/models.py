@@ -218,13 +218,31 @@ class Sale(SaleBase):
     created_at: str
 
 
+# ------- Vendors -------
+class VendorBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    code: Optional[str] = ""  # VEN-NNN, assigned server-side (see lifecycle.next_vendor_code)
+
+
+class VendorCreate(VendorBase):
+    pass
+
+
+class Vendor(VendorBase):
+    id: str
+    created_at: str
+
+
 # ------- Inventory -------
 class InventoryBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     sku: str
     name: str
     category: Optional[str] = ""
-    vendor: Optional[str] = ""
+    vendor: Optional[str] = ""       # vendor name — derived server-side from vendor_id, admin/accountant only on read
+    vendor_id: Optional[str] = ""    # Vendor.id, set via the picker
+    vendor_code: Optional[str] = ""  # vendor's serial code — derived server-side, visible to everyone
     model_no: Optional[str] = ""
     qty: int = 1
     cost: float = 0

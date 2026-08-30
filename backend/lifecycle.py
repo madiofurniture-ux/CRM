@@ -220,6 +220,16 @@ def next_sale_no(sales: Iterable[dict]) -> str:
     return f"MF {top + 1:03d}"
 
 
+def next_vendor_code(vendors: Iterable[dict]) -> str:
+    """VEN-NNN — one running series, never restarted or reused after a delete."""
+    top = 0
+    for v in vendors:
+        m = re.search(r"(\d+)\s*$", str(v.get("code") or ""))
+        if m:
+            top = max(top, int(m.group(1)))
+    return f"VEN-{top + 1:03d}"
+
+
 def _next_dated_id(items: Iterable[dict], field: str, tag: str) -> str:
     prefix = f"{tag}-{yymm()}-"
     return f"{prefix}{_max_suffix(items, field, prefix) + 1:03d}"
@@ -483,7 +493,7 @@ def balance_is_meaningful(sale: dict) -> bool:
 
 
 # ------------------------------------------------------------------ alerts
-def build_alerts(leads, navaki, sales, quotes, inventory, max_no_date: int = 25) -> list[dict]:
+def build_alerts(leads, sales, quotes, inventory, max_no_date: int = 25) -> list[dict]:
     """Grouped follow-up + money + stock alerts, ordered overdue → today → week → money → nodate."""
     alerts: list[dict] = []
     follow_ups = []
@@ -495,12 +505,6 @@ def build_alerts(leads, navaki, sales, quotes, inventory, max_no_date: int = 25)
             "name": l.get("name"), "phone": l.get("phone"),
             "date": l.get("next_action_date"), "stage": l.get("stage"),
             "src": f"Lead ({l.get('source') or ''})", "coll": "leads", "id": l.get("id"),
-        })
-    for n in navaki:
-        follow_ups.append({
-            "name": n.get("name"), "phone": n.get("phone"),
-            "date": n.get("follow_up_date") or n.get("fu_date"), "stage": n.get("stage"),
-            "src": "Navaki", "coll": "navaki", "id": n.get("id"),
         })
 
     no_date = 0

@@ -6,7 +6,7 @@ import api, { formatApiError } from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
-import { Trash2, X, Phone, Pencil } from "lucide-react";
+import { Trash2, X, Phone, Pencil, Sparkles } from "lucide-react";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost", "Delivered"];
 const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
@@ -93,6 +93,17 @@ export default function Visitors() {
     setRows((p) => p.map((x) => x.id === v.id ? { ...x, stage } : x));
   };
   const remove = async (id) => { if (!window.confirm("Delete?")) return; await api.delete(`/visitors/${id}`); load(); };
+  const convertToLead = async (v) => {
+    if (v.converted_lead_id) return;
+    if (!window.confirm(`Convert "${v.name}" to a Lead?`)) return;
+    try {
+      await api.post(`/convert/visitor-to-lead/${v.id}`);
+      toast.success("Converted to Lead");
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Conversion failed");
+    }
+  };
 
   return (
     <>
@@ -119,7 +130,7 @@ export default function Visitors() {
                   <th className="text-left font-semibold px-4 py-2.5">Attended by</th>
                   <th className="text-left font-semibold px-4 py-2.5">Stage</th>
                   <th className="text-right font-semibold px-4 py-2.5">Ticket</th>
-                  <th className="w-20"></th>
+                  <th className="w-28"></th>
                 </tr>
               </thead>
               <tbody>
@@ -146,6 +157,11 @@ export default function Visitors() {
                     <td className="px-4 py-3 text-right font-mono">{inrFull(v.ticket_value)}</td>
                     <td className="px-2 py-3">
                       <div className="flex items-center justify-end gap-1">
+                        {v.converted_lead_id ? (
+                          <span className="text-[10px] px-2 py-1 rounded-full bg-[var(--moss-soft)] text-[var(--moss)] font-semibold uppercase tracking-wider">Lead</span>
+                        ) : (
+                          <button onClick={() => convertToLead(v)} className="p-1.5 rounded-md hover:bg-[var(--brand-soft)] text-[var(--brand)]" title="Convert to Lead" data-testid={`visitor-convert-${v.id}`}><Sparkles size={13} /></button>
+                        )}
                         <button onClick={() => openEdit(v)} className="p-1.5 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Edit visitor" data-testid={`visitor-edit-${v.id}`}><Pencil size={13} /></button>
                         <button onClick={() => remove(v.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]" title="Delete visitor"><Trash2 size={13} /></button>
                       </div>

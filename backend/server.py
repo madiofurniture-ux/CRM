@@ -28,6 +28,7 @@ from models import (
     QuoteCreate, Quote,
     SaleCreate, Sale,
     InventoryCreate, InventoryItem,
+    VendorCreate, Vendor,
     TaskCreate, Task,
     InvoiceCreate, Invoice,
     MeetCreate, Meet,
@@ -382,19 +383,24 @@ async def fy_query(collection: str, base: dict = None, user: dict = None) -> dic
 
 
 # ---------- Generic CRUD helper (per-collection) ----------
-def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model, normalize=None):
+def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model, normalize=None, redact=None):
     """`normalize(doc, existing, user)` — optional async hook run on the payload
     dict before it's written, for validation/normalization shared by create AND
     update (e.g. Indian phone format + uniqueness). It mutates `doc` in place and
     may raise HTTPException. `existing` is the current DB document on update,
     None on create, so a normalizer can choose to leave an untouched legacy
     field alone rather than reject it. `user` lets it run tenant-scoped queries
-    (e.g. a duplicate-phone check)."""
+    (e.g. a duplicate-phone check).
+
+    `redact(item, user) -> dict` — optional sync hook applied to every item this
+    collection sends back (list/create/update), for role-gated fields like a
+    vendor's name. Must return a new dict, not mutate in place — the caller
+    doesn't control aliasing between list entries."""
     @router.get(f"/{base}")
     async def _list(user: dict = Depends(get_current_user)):
         q = await fy_query(collection, user=user)
         items = await db[collection].find(q, {"_id": 0}).sort("created_at", -1).to_list(3000)
-        return items
+        return [redact(i, user) for i in items] if redact else items
 
     @router.post(f"/{base}")
     async def _create(payload: create_model, user: dict = Depends(get_current_user)):
@@ -409,7 +415,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         tenancy.stamp(doc, collection, user)
         await db[collection].insert_one(doc)
         doc.pop("_id", None)
-        return doc
+        return redact(doc, user) if redact else doc
 
     @router.put(f"/{base}/{{item_id}}")
     async def _update(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
@@ -429,7 +435,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         stamp_closure(payload, collection, existing)
         await db[collection].update_one(owned, {"$set": payload})
         out = await db[collection].find_one(owned, {"_id": 0})
-        return out
+        return redact(out, user) if redact else out
 
     @router.delete(f"/{base}/{{item_id}}")
     async def _delete(item_id: str, user: dict = Depends(get_current_user)):
@@ -940,12 +946,64 @@ async def normalize_architect(doc: dict, existing: dict | None, user: dict) -> N
             doc["alternate_contacts"] = []
 
 
+# ---------- Vendors: serial codes + name visible to admin/accountant only ----------
+def _can_see_vendor_names(user: dict) -> bool:
+    return (user or {}).get("role") in ("admin", "accountant")
+
+
+def redact_vendor(item: dict, user: dict) -> dict:
+    """Vendor list/create/update responses — code always shown, name only to
+    admin/accountant. This is the only place a vendor's name is dropped from a
+    /vendors response; inventory's own redaction is separate (see below)."""
+    if _can_see_vendor_names(user):
+        return item
+    item = dict(item)
+    item.pop("name", None)
+    return item
+
+
+def redact_vendor_field(item: dict, user: dict) -> dict:
+    """Inventory list/create/update responses — vendor_code always shown,
+    the resolved vendor name only to admin/accountant."""
+    if _can_see_vendor_names(user):
+        return item
+    item = dict(item)
+    item.pop("vendor", None)
+    return item
+
+
+async def normalize_vendor(doc: dict, existing: dict | None, user: dict) -> None:
+    if existing is None and not str(doc.get("code") or "").strip():
+        current = await db.vendors.find(
+            tenancy.scope({}, "vendors", user), {"code": 1, "_id": 0}).to_list(5000)
+        doc["code"] = lc.next_vendor_code(current)
+
+
+async def normalize_inventory(doc: dict, existing: dict | None, user: dict) -> None:
+    """vendor/vendor_code are always derived from vendor_id server-side — never
+    trust client-supplied text for them, or a redacted user could write a
+    vendor name into inventory that they can't even see themselves."""
+    if "vendor_id" not in doc:
+        return
+    vid = doc.get("vendor_id")
+    if not vid:
+        doc["vendor"] = ""
+        doc["vendor_code"] = ""
+        return
+    v = await db.vendors.find_one(tenancy.scope({"id": vid}, "vendors", user), {"_id": 0})
+    if not v:
+        raise HTTPException(status_code=400, detail="Selected vendor not found")
+    doc["vendor"] = v.get("name", "")
+    doc["vendor_code"] = v.get("code", "")
+
+
 make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, normalize=normalize_visitor)
 make_crud(api, "leads", "leads", LeadCreate, Lead, normalize=normalize_lead)
 make_crud(api, "architects", "architects", ArchitectCreate, Architect, normalize=normalize_architect)
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
 make_crud(api, "sales", "sales", SaleCreate, Sale)
-make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem)
+make_crud(api, "vendors", "vendors", VendorCreate, Vendor, normalize=normalize_vendor, redact=redact_vendor)
+make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, normalize=normalize_inventory, redact=redact_vendor_field)
 make_crud(api, "tasks", "tasks", TaskCreate, Task)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice)
 make_crud(api, "meets", "meets", MeetCreate, Meet)
@@ -1206,13 +1264,16 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
 @api.get("/analytics/inventory")
 async def inventory_analytics(user: dict = Depends(get_current_user)):
     items = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)
+    see_names = _can_see_vendor_names(user)
     by_category = {}
     by_vendor = {}
     by_location = {}
     by_status = {}
     for item in items:
         cat = item.get("category") or "Other"
-        vendor = item.get("vendor") or "Unknown"
+        # Same gate as the inventory list itself — a vendor breakdown by name
+        # would otherwise leak names this user can't see anywhere else.
+        vendor = (item.get("vendor") if see_names else item.get("vendor_code")) or "Unknown"
         loc = item.get("location") or "Unknown"
         status = item.get("status") or "Unknown"
         value = (item.get("mrp") or 0) * (item.get("qty") or 0)
@@ -1225,6 +1286,8 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
         return sorted([{"name": k, "value": v} for k, v in d.items()], key=lambda x: -x["value"])[:n]
 
     top_items = sorted(items, key=lambda item: -((item.get("mrp") or 0) * (item.get("qty") or 0)))[:10]
+    if not see_names:
+        top_items = [redact_vendor_field(i, user) for i in top_items]
     return {
         "total_items": len(items),
         "total_qty": sum((item.get("qty") or 0) for item in items),
@@ -1730,12 +1793,10 @@ async def reports(period: str = "thisweek", user: dict = Depends(get_current_use
 @api.get("/alerts")
 async def alerts(user: dict = Depends(get_current_user)):
     leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
-    navaki = await db.visitors.find(
-        tenancy.scope({"source": "Navaki"}, "visitors", user), {"_id": 0}).to_list(5000)
     sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
     quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
     inventory = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)
-    items = lc.build_alerts(leads, navaki, sales, quotes, inventory)
+    items = lc.build_alerts(leads, sales, quotes, inventory)
     counts: dict = {}
     for a in items:
         counts[a["group"]] = counts.get(a["group"], 0) + 1
@@ -1754,6 +1815,51 @@ async def journey(phone: str, user: dict = Depends(get_current_user)):
         payments=await db.payments.find(tenancy.scope({}, "payments", user), {"_id": 0}).to_list(5000),
         activities=await db.activities.find(tenancy.scope({}, "activities", user), {"_id": 0}).to_list(5000),
     )
+
+
+@api.post("/convert/visitor-to-lead/{visitor_id}")
+async def visitor_to_lead(visitor_id: str, user: dict = Depends(get_current_user)):
+    visitor = await db.visitors.find_one(tenancy.scope({"id": visitor_id}, "visitors", user), {"_id": 0})
+    if not visitor:
+        raise HTTPException(status_code=404, detail="Visitor not found")
+    phone = visitor.get("phone", "")
+    # A lead with this phone can already exist independently of this visitor
+    # (walked in AND enquired some other way, or messy pre-existing data) —
+    # converting should link to it rather than fail on the uniqueness rule
+    # that same phone number is enforcing correctly elsewhere.
+    if phone:
+        existing_lead = await db.leads.find_one(
+            tenancy.scope({"phone": phone}, "leads", user), {"_id": 0})
+        if existing_lead:
+            await db.visitors.update_one(
+                tenancy.scope({"id": visitor_id}, "visitors", user),
+                {"$set": {"stage": "Qualified", "converted_lead_id": existing_lead["id"]}})
+            return existing_lead
+    has_architect = bool(visitor.get("reference_id"))
+    remarks = _shape_remarks(visitor.get("remarks"))
+    remarks.append({
+        "id": new_id(), "at": now_iso(),
+        "text": f"Converted from visitor record (visit on {visitor.get('date') or 'unknown date'}).",
+    })
+    lead = {
+        "id": new_id(), "created_at": now_iso(),
+        "date": lc.today_iso(), "name": visitor.get("name", ""), "phone": phone,
+        "source": "Architect" if has_architect else "Walk-in",
+        "architect_id": visitor.get("reference_id", "") if has_architect else "",
+        "architect_name": visitor.get("reference", "") if has_architect else "",
+        "stage": "New", "follow_up_date": "", "remarks": remarks,
+        "assigned_to": visitor.get("attend_person", ""),
+        "assigned_to_id": visitor.get("attend_person_id", ""),
+        "value": 0,
+    }
+    stamp_fy(lead, "leads")
+    tenancy.stamp(lead, "leads", user)
+    await db.leads.insert_one(dict(lead))
+    lead.pop("_id", None)
+    await db.visitors.update_one(
+        tenancy.scope({"id": visitor_id}, "visitors", user),
+        {"$set": {"stage": "Qualified", "converted_lead_id": lead["id"]}})
+    return lead
 
 
 @api.post("/convert/lead-to-quote/{lead_id}")

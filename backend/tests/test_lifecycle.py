@@ -211,7 +211,7 @@ def test_build_alerts_orders_and_groups():
     quotes = [{"id": "q1", "customer": "Fat Quote", "quote_no": "AF-2603-009", "phone": "9100000004",
                "value": 300000, "stage": "Quoted", "by_user": "Raghu"}]
     inventory = [{"status": "Available", "date_added": (today - timedelta(days=120)).isoformat(), "mrp": 50000}]
-    alerts = lc.build_alerts(leads, [], sales, quotes, inventory)
+    alerts = lc.build_alerts(leads, sales, quotes, inventory)
     groups = [a["group"] for a in alerts]
     assert groups[0] == "overdue"          # ordering
     assert "money" in groups

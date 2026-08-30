@@ -2,21 +2,9 @@ import { useEffect, useState } from "react";
 import Topbar from "@/components/Topbar";
 import api from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { ALL_PAGES } from "@/lib/nav";
 import { toast } from "sonner";
 import { Shield, Trash2, X, Plus } from "lucide-react";
-
-const ALL_PAGES = [
-  { id: "dashboard", label: "Dashboard" },
-  { id: "pipeline", label: "Pipeline" },
-  { id: "quotes", label: "Quotations" },
-  { id: "sales", label: "Sales" },
-  { id: "visitors", label: "Visitors" },
-  { id: "leads", label: "Leads" },
-  { id: "architects", label: "Architects" },
-  { id: "inventory", label: "Inventory" },
-  { id: "inv-analytics", label: "Inventory Analytics" },
-  { id: "tasks", label: "Tasks" },
-];
 
 const COLORS = ["#C85A32", "#4A5D4E", "#D48B30", "#B24040", "#1A1D1A", "#5C7AA1"];
 
@@ -94,6 +82,11 @@ export default function RoleManager() {
                     <Shield size={11} /> Admin
                   </span>
                 )}
+                {u.role === "accountant" && (
+                  <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-[var(--moss)]">
+                    <Shield size={11} /> Accountant
+                  </span>
+                )}
               </div>
               <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Pages</div>
               <div className="flex flex-wrap gap-1">
@@ -130,6 +123,7 @@ export default function RoleManager() {
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Role</label>
                 <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
                   <option value="user">User</option>
+                  <option value="accountant">Accountant</option>
                   <option value="admin">Admin</option>
                 </select>
               </div>

@@ -15,6 +15,7 @@ flips is restored in a finally block — so it is safe to point at production.
 import argparse
 import os
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -286,6 +287,104 @@ def main():
     else:
         _skip += 1
         print("  SKIP  leads phone/architect checks (no architects seeded)")
+
+    # ── Convert Visitor to Lead ─────────────────────────────────────────
+    section("Convert Visitor to Lead")
+    s, visitor = call("POST", "/api/visitors",
+                       {"date": "2026-08-26", "name": "ZZ Convert Visitor", "phone": "9876522001",
+                        "requirement": "Sofa", "remarks": [{"text": "Wants a quote"}]},
+                       token=admin_tok)
+    check("probe visitor created", s == 200 and visitor, f"got {s} {visitor}")
+    try:
+        if visitor:
+            s, lead = call("POST", f"/api/convert/visitor-to-lead/{visitor['id']}", token=admin_tok)
+            check("conversion creates a lead with the visitor's phone",
+                  s == 200 and lead and lead.get("phone") == "9876522001", f"got {s} {lead}")
+            check("conversion carries the visitor's remarks forward plus a note",
+                  bool(lead) and len(lead.get("remarks") or []) == 2, f"got {lead and lead.get('remarks')}")
+            try:
+                s, v2 = call("GET", "/api/visitors", token=admin_tok)
+                mine = next((x for x in (v2 or []) if x.get("id") == visitor["id"]), None)
+                check("visitor is marked converted and stage moves to Qualified",
+                      bool(mine) and mine.get("stage") == "Qualified" and mine.get("converted_lead_id") == lead["id"],
+                      f"got {mine}")
+
+                s, dup = call("POST", "/api/leads",
+                              {"date": "2026-08-26", "name": "ZZ Dup", "phone": "9876522001", "source": "Walk-in"},
+                              token=admin_tok)
+                check("the converted phone still can't be duplicated as a second lead", s == 400, f"got {s} {dup}")
+            finally:
+                if lead:
+                    call("DELETE", f"/api/leads/{lead['id']}", token=admin_tok)
+    finally:
+        if visitor:
+            call("DELETE", f"/api/visitors/{visitor['id']}", token=admin_tok)
+
+    # A visitor whose phone already belongs to an unrelated pre-existing lead
+    # (same customer reached the business through two channels — common in
+    # the seed data) should link to that lead, not fail with a 400.
+    s, pre_lead = call("POST", "/api/leads",
+                        {"date": "2026-08-26", "name": "ZZ Pre-existing Lead", "phone": "9876522002",
+                         "source": "Website"}, token=admin_tok)
+    s2, visitor2 = call("POST", "/api/visitors",
+                         {"date": "2026-08-26", "name": "ZZ Same Customer", "phone": "9876522002"},
+                         token=admin_tok)
+    check("probe lead + visitor sharing a phone created", s == 200 and s2 == 200 and pre_lead and visitor2,
+          f"got {s}/{s2}")
+    try:
+        if pre_lead and visitor2:
+            s, linked = call("POST", f"/api/convert/visitor-to-lead/{visitor2['id']}", token=admin_tok)
+            check("converting links to the existing lead instead of erroring",
+                  s == 200 and linked and linked.get("id") == pre_lead["id"], f"got {s} {linked}")
+    finally:
+        if visitor2:
+            call("DELETE", f"/api/visitors/{visitor2['id']}", token=admin_tok)
+        if pre_lead:
+            call("DELETE", f"/api/leads/{pre_lead['id']}", token=admin_tok)
+
+    # ── Vendors: serial codes + name visible to admin/accountant only ──
+    section("Vendors — serial code, and name redacted for a regular user")
+    s, v1 = call("POST", "/api/vendors", {"name": "ZZ Vendor One"}, token=admin_tok)
+    check("vendor gets a VEN-NNN code", s == 200 and v1 and re.match(r"^VEN-\d+$", v1.get("code", "")),
+          f"got {s} {v1}")
+    try:
+        if v1:
+            s, v2 = call("POST", "/api/vendors", {"name": "ZZ Vendor Two"}, token=admin_tok)
+            check("codes increment", s == 200 and v2 and v2.get("code") != v1.get("code"), f"got {s} {v2}")
+            try:
+                s, listed = call("GET", "/api/vendors", token=admin_tok)
+                mine = next((x for x in (listed or []) if x.get("id") == v1["id"]), None)
+                check("admin sees the vendor name", s == 200 and mine and mine.get("name") == "ZZ Vendor One",
+                      f"got {mine}")
+                if user_tok:
+                    s, listed_u = call("GET", "/api/vendors", token=user_tok)
+                    mine_u = next((x for x in (listed_u or []) if x.get("id") == v1["id"]), None)
+                    check("regular user sees the code but not the name",
+                          s == 200 and mine_u and mine_u.get("code") == v1.get("code") and "name" not in mine_u,
+                          f"got {mine_u}")
+
+                # An inventory item linked to this vendor should carry the same gate.
+                s, item = call("POST", "/api/inventory",
+                               {"sku": "ZZ-VEN-TEST", "name": "ZZ Test Item", "vendor_id": v1["id"]},
+                               token=admin_tok)
+                check("inventory item resolves vendor + vendor_code from vendor_id",
+                      s == 200 and item and item.get("vendor") == "ZZ Vendor One"
+                      and item.get("vendor_code") == v1.get("code"), f"got {s} {item}")
+                try:
+                    if item and user_tok:
+                        s, inv_u = call("GET", "/api/inventory", token=user_tok)
+                        mine_item = next((x for x in (inv_u or []) if x.get("id") == item["id"]), None)
+                        check("regular user's inventory view has vendor_code but no vendor name",
+                              s == 200 and mine_item and mine_item.get("vendor_code") == v1.get("code")
+                              and "vendor" not in mine_item, f"got {mine_item}")
+                finally:
+                    if item:
+                        call("DELETE", f"/api/inventory/{item['id']}", token=admin_tok)
+            finally:
+                call("DELETE", f"/api/vendors/{v2['id']}", token=admin_tok) if v2 else None
+    finally:
+        if v1:
+            call("DELETE", f"/api/vendors/{v1['id']}", token=admin_tok)
 
     # ── FY auto-stamp on write ─────────────────────────────────────────
     section("FY stamping on write")

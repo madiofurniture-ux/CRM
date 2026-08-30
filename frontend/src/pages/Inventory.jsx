@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
+import SearchSelect from "@/components/SearchSelect";
 import api from "@/lib/api";
 import { inrFull } from "@/lib/format";
 import { Package, Grid3x3, List, X } from "lucide-react";
@@ -8,8 +9,14 @@ import { toast } from "sonner";
 
 const STATUSES = ["In Stock", "Display", "Sold", "Missing", "Reserved"];
 
+// A row's `vendor` (name) key is only present at all when the API decided this
+// viewer may see it (admin/accountant) — see server.py's redact_vendor_field.
+// So display logic never needs its own role check; it just shows what's there.
+const vendorLabel = (r) => [r.vendor_code, r.vendor].filter(Boolean).join(" · ");
+
 export default function Inventory() {
   const [rows, setRows] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [search, setSearch] = useState("");
   const [fStatus, setFStatus] = useState("All");
   const [fCat, setFCat] = useState("All");
@@ -17,14 +24,20 @@ export default function Inventory() {
   const [show, setShow] = useState(false);
   const [editingId, setEditingId] = useState(null); // null = creating, else the item id being edited
   const [saving, setSaving] = useState(false);
-  const empty = { sku: "", name: "", category: "", vendor: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "Warehouse A", image_url: "" };
+  const empty = { sku: "", name: "", category: "", vendor_id: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "Warehouse A", image_url: "" };
   const [form, setForm] = useState(empty);
+
+  const vendorOptions = useMemo(() => vendors.map((v) => ({
+    id: v.id,
+    name: v.name || v.code,
+    label: v.name ? `${v.code} — ${v.name}` : v.code,
+  })), [vendors]);
 
   const openEdit = (item) => {
     // copy only the editable fields so stray keys (id/created_at) never round-trip into the form
     setForm({
       sku: item.sku || "", name: item.name || "", category: item.category || "",
-      vendor: item.vendor || "", model_no: item.model_no || "", qty: item.qty ?? 1,
+      vendor_id: item.vendor_id || "", model_no: item.model_no || "", qty: item.qty ?? 1,
       cost: item.cost ?? 0, mrp: item.mrp ?? 0, margin: item.margin ?? 0,
       status: item.status || "In Stock", location: item.location || "", image_url: item.image_url || "",
     });
@@ -33,7 +46,10 @@ export default function Inventory() {
   };
 
   const load = async () => { const { data } = await api.get("/inventory"); setRows(data); };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get("/vendors").then(({ data }) => setVendors(data));
+  }, []);
 
   const categories = useMemo(() => Array.from(new Set(rows.map((r) => r.category).filter(Boolean))).sort(), [rows]);
 
@@ -42,7 +58,7 @@ export default function Inventory() {
     return rows.filter((r) =>
       (fStatus === "All" || r.status === fStatus) &&
       (fCat === "All" || r.category === fCat) &&
-      (!q || (r.name || "").toLowerCase().includes(q) || (r.sku || "").toLowerCase().includes(q) || (r.vendor || "").toLowerCase().includes(q))
+      (!q || (r.name || "").toLowerCase().includes(q) || (r.sku || "").toLowerCase().includes(q) || vendorLabel(r).toLowerCase().includes(q))
     );
   }, [rows, search, fStatus, fCat]);
 
@@ -109,8 +125,8 @@ export default function Inventory() {
             {filtered.map((i) => (
               <div key={i.id} onClick={() => openEdit(i)} role="button" tabIndex={0}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openEdit(i); } }}
-                className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden hover:shadow-md hover:border-[var(--brand)] transition cursor-pointer" data-testid={`item-${i.id}`}>
-                <div className="aspect-[4/3] bg-[var(--surface-2)] flex items-center justify-center relative">
+                className="flex flex-col bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden hover:shadow-md hover:border-[var(--brand)] transition cursor-pointer" data-testid={`item-${i.id}`}>
+                <div className="aspect-[4/3] bg-[var(--surface-2)] flex items-center justify-center relative shrink-0">
                   {i.image_url ? (
                     <img src={i.image_url} alt="" className="w-full h-full object-cover" />
                   ) : (
@@ -118,9 +134,9 @@ export default function Inventory() {
                   )}
                   <span className="absolute top-2 right-2"><StageBadge stage={i.status} /></span>
                 </div>
-                <div className="p-4">
+                <div className="p-4 flex flex-col flex-1">
                   <div className="font-mono text-[10px] text-[var(--ink-3)] mb-1">{i.sku}</div>
-                  <div className="font-semibold text-[var(--ink)] text-sm leading-tight mb-2 line-clamp-2">{i.name}</div>
+                  <div className="font-semibold text-[var(--ink)] text-sm leading-tight mb-2 line-clamp-2 min-h-[2.5rem]">{i.name}</div>
                   <div className="flex items-center justify-between text-xs">
                     <div>
                       <div className="text-[10px] uppercase tracking-wider text-[var(--ink-3)]">MRP</div>
@@ -131,9 +147,9 @@ export default function Inventory() {
                       <div className="font-mono font-semibold">{i.qty}</div>
                     </div>
                   </div>
-                  <div className="mt-2 pt-2 border-t border-[var(--border-light)] flex items-center justify-between text-[11px] text-[var(--ink-3)]">
-                    <span className="truncate">{i.vendor}</span>
-                    <span>{i.location}</span>
+                  <div className="mt-auto pt-2 border-t border-[var(--border-light)] flex items-center justify-between gap-2 text-[11px] text-[var(--ink-3)]">
+                    <span className="truncate">{vendorLabel(i)}</span>
+                    <span className="shrink-0">{i.location}</span>
                   </div>
                 </div>
               </div>
@@ -164,7 +180,7 @@ export default function Inventory() {
                       <td className="px-4 py-3 font-mono text-xs">{i.sku}</td>
                       <td className="px-4 py-3 font-medium">{i.name}</td>
                       <td className="px-4 py-3 text-[var(--ink-2)]">{i.category}</td>
-                      <td className="px-4 py-3 text-[var(--ink-2)]">{i.vendor}</td>
+                      <td className="px-4 py-3 text-[var(--ink-2)]">{vendorLabel(i)}</td>
                       <td className="px-4 py-3 text-right font-mono">{i.qty}</td>
                       <td className="px-4 py-3 text-right font-mono text-[var(--ink-2)]">{inrFull(i.cost)}</td>
                       <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(i.mrp)}</td>
@@ -191,7 +207,17 @@ export default function Inventory() {
               <F l="SKU" v={form.sku} oc={(v) => setForm({ ...form, sku: v })} t2="if-sku" />
               <F l="Name" v={form.name} oc={(v) => setForm({ ...form, name: v })} t2="if-name" />
               <F l="Category" v={form.category} oc={(v) => setForm({ ...form, category: v })} />
-              <F l="Vendor" v={form.vendor} oc={(v) => setForm({ ...form, vendor: v })} />
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Vendor</label>
+                <SearchSelect
+                  options={vendorOptions}
+                  value={form.vendor_id}
+                  onChange={(id) => setForm({ ...form, vendor_id: id })}
+                  placeholder="Search vendor…"
+                  emptyLabel="No vendors found"
+                  testId="if-vendor"
+                />
+              </div>
               <F l="Model No" v={form.model_no} oc={(v) => setForm({ ...form, model_no: v })} />
               <F l="Qty" t="number" v={form.qty} oc={(v) => setForm({ ...form, qty: parseInt(v) || 0 })} />
               <F l="Cost" t="number" v={form.cost} oc={(v) => setForm({ ...form, cost: parseFloat(v) || 0 })} />
