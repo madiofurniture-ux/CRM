@@ -63,6 +63,20 @@ export default function Login() {
     else if (pin.length < 4) setPin((p) => p + k);
   };
 
+  // The PIN pad is on-screen buttons, not a text input, so a physical keyboard
+  // did nothing unless a button happened to have mouse focus. Digits and
+  // Backspace/Delete now drive the same press() a click would.
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e) => {
+      if (e.key >= "0" && e.key <= "9") press(e.key);
+      else if (e.key === "Backspace" || e.key === "Delete") press("del");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line
+  }, [selected, submitting, pin]);
+
   return (
     <div className="min-h-screen flex bg-[var(--bg)] relative overflow-hidden">
       <Toaster position="top-right" />
