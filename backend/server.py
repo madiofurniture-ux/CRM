@@ -19,6 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 
 import tenancy
+import permissions as perm
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -34,7 +35,8 @@ from models import (
     MeetCreate, Meet,
     PettyCashCreate, PettyCash,
     AttendanceCheckIn, OfficeSettings,
-    ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project
+    ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
+    TeamCreate, Team, RoleCreate, Role,
 )
 from seed import seed_all
 
@@ -258,8 +260,23 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
     update = {k: v for k, v in payload.model_dump(exclude_none=True).items() if k != "pin"}
     if payload.pin:
         update["pin_hash"] = hash_pin(payload.pin)
+    demoting = "role" in update and update["role"] != "admin" and existing.get("role") == "admin"
+    deactivating = update.get("active") is False and existing.get("role") == "admin"
+    if demoting or deactivating:
+        all_users = await db.users.find({"tenant_id": tid}, {"_id": 0, "id": 1, "role": 1, "active": 1}).to_list(500)
+        if perm.is_last_active_admin(user_id, all_users):
+            raise HTTPException(status_code=400,
+                detail="Cannot remove the last administrator — the entity would be unmanageable")
     if update:
         await db.users.update_one({"id": user_id, "tenant_id": tid}, {"$set": update})
+        if "role_id" in update:
+            await _audit("user_role_assigned", user, f"{existing.get('name')} -> role {update['role_id'] or '(none)'}")
+        if "team_id" in update:
+            await _audit("user_team_assigned", user, f"{existing.get('name')} -> team {update['team_id'] or '(none)'}")
+        if update.get("active") is False:
+            await _audit("user_deactivated", user, existing.get("name", ""))
+        elif update.get("active") is True:
+            await _audit("user_activated", user, existing.get("name", ""))
     out = await db.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0, "pin_hash": 0})
     return out
 
@@ -269,6 +286,12 @@ async def delete_user(user_id: str, current: dict = Depends(require_admin)):
     if current["id"] == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     tid = tenancy.tenant_of(current) or "__no_tenant__"
+    target = await db.users.find_one({"id": user_id, "tenant_id": tid}, {"role": 1})
+    if target and target.get("role") == "admin":
+        all_users = await db.users.find({"tenant_id": tid}, {"_id": 0, "id": 1, "role": 1, "active": 1}).to_list(500)
+        if perm.is_last_active_admin(user_id, all_users):
+            raise HTTPException(status_code=400,
+                detail="Cannot delete the last administrator — the entity would be unmanageable")
     res = await db.users.delete_one({"id": user_id, "tenant_id": tid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
@@ -441,7 +464,41 @@ async def _raise_duplicate(collection: str, doc: dict, user: dict):
     raise HTTPException(status_code=409, detail="A record with this value already exists.")
 
 
-def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model, after_write=None):
+async def _roles_for(user: dict) -> list:
+    return await db.roles.find(tenancy.scope({}, "roles", user), {"_id": 0}).to_list(200)
+
+
+async def _team_member_names(user: dict) -> list:
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    team_id = user.get("team_id")
+    if not team_id:
+        return [user.get("name", "")]
+    rows = await db.users.find({"tenant_id": tid, "team_id": team_id}, {"_id": 0, "name": 1}).to_list(500)
+    return [r["name"] for r in rows] or [user.get("name", "")]
+
+
+async def _require_permission(module: str, action: str, user: dict) -> list:
+    """Raises 403 if `user` can't `action` on `module`; returns the tenant's
+    roles (so a caller that also needs scope doesn't re-fetch them)."""
+    roles = await _roles_for(user)
+    if not perm.can(user, roles, module, action):
+        raise HTTPException(status_code=403, detail=f"Not permitted: {action} {module}")
+    return roles
+
+
+async def _scope_owners(user: dict, roles: list, module: str) -> Optional[list]:
+    """None = no scope restriction ("all"). Otherwise the list of owner-field
+    values ("own" -> just this user's name, "team" -> the whole team's)."""
+    scope = perm.scope_for(user, roles, module)
+    if scope == "all":
+        return None
+    if scope == "team":
+        return await _team_member_names(user)
+    return [user.get("name", "")]
+
+
+def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
+              after_write=None, module: str = None, owner_field: str = None):
     """
     `after_write`, when given, runs after a successful create/update with the
     saved document and the acting user — for side effects that must stay in
@@ -449,15 +506,30 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     Follow-up Task from follow_up_date). It never runs on delete or on a
     failed/no-op write, and its errors are not caught here — a hook that
     can't be trusted to succeed shouldn't be wired in as one.
+
+    `module`/`owner_field` (P2), when given, gate every route through
+    permissions.py's Role matrix on top of the tenant boundary above it:
+    view/create/edit/delete must be explicitly granted (admins and legacy
+    accounts without a role_id are unaffected — see permissions.py), and a
+    non-"all" scope filters `_list` and blocks `_update`/`_delete` on
+    records outside it (as a 404, not a 403 — a record outside your scope
+    should look exactly like a record that doesn't exist).
     """
     @router.get(f"/{base}")
     async def _list(user: dict = Depends(get_current_user)):
         q = await fy_query(collection, user=user)
+        if module:
+            roles = await _require_permission(module, "view", user)
+            owners = await _scope_owners(user, roles, module)
+            if owners is not None and owner_field:
+                q[owner_field] = {"$in": owners}
         items = await db[collection].find(q, {"_id": 0}).sort("created_at", -1).to_list(3000)
         return items
 
     @router.post(f"/{base}")
     async def _create(payload: create_model, user: dict = Depends(get_current_user)):
+        if module:
+            await _require_permission(module, "create", user)
         doc = payload.model_dump()
         doc["id"] = new_id()
         doc["created_at"] = now_iso()
@@ -485,6 +557,11 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         existing = await db[collection].find_one(owned)
         if not existing:
             raise HTTPException(status_code=404, detail="Not found")
+        if module:
+            roles = await _require_permission(module, "edit", user)
+            owners = await _scope_owners(user, roles, module)
+            if owners is not None and owner_field and existing.get(owner_field) not in owners:
+                raise HTTPException(status_code=404, detail="Not found")
         payload = validate_partial_update(create_model, existing, payload)
         await validate_stage(collection, payload, user)
         stamp_fy(payload, collection)
@@ -501,7 +578,16 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     @router.delete(f"/{base}/{{item_id}}")
     async def _delete(item_id: str, user: dict = Depends(get_current_user)):
         # Scoped so one tenant can never delete another's record by id.
-        res = await db[collection].delete_one(tenancy.scope({"id": item_id}, collection, user))
+        owned = tenancy.scope({"id": item_id}, collection, user)
+        if module:
+            existing = await db[collection].find_one(owned)
+            if not existing:
+                raise HTTPException(status_code=404, detail="Not found")
+            roles = await _require_permission(module, "delete", user)
+            owners = await _scope_owners(user, roles, module)
+            if owners is not None and owner_field and existing.get(owner_field) not in owners:
+                raise HTTPException(status_code=404, detail="Not found")
+        res = await db[collection].delete_one(owned)
         if res.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Not found")
         return {"ok": True}
@@ -518,7 +604,8 @@ ALL_MODULE_IDS = [
     "sales", "visitors", "leads", "requirements", "configurator", "architects",
     "inventory", "stock-ledger", "inv-analytics", "projects", "dwsurvey",
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
-    "outstanding", "data-centre", "financial-year", "workflows", "business", "roles",
+    "outstanding", "data-centre", "financial-year", "workflows", "business",
+    "roles", "teams", "roles-permissions",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -980,11 +1067,12 @@ async def _sync_lead_followup_task(lead: dict, user: dict):
 
 
 make_crud(api, "visitors", "visitors", VisitorCreate, Visitor)
-make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task)
+make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task,
+          module="leads", owner_field="assigned_to")
 make_crud(api, "architects", "architects", ArchitectCreate, Architect)
-make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
-make_crud(api, "sales", "sales", SaleCreate, Sale)
-make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem)
+make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user")
+make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user")
+make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory")
 make_crud(api, "tasks", "tasks", TaskCreate, Task)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice)
 make_crud(api, "meets", "meets", MeetCreate, Meet)
@@ -1402,7 +1490,83 @@ make_crud(api, "dw-openings", "dw_openings", DWOpeningCreate, DWOpening)
 make_crud(api, "commission-rules", "commission_rules", CommissionRuleCreate, CommissionRule)
 make_crud(api, "requirements", "requirements", RequirementCreate, Requirement)
 make_crud(api, "product-configs", "product_configs", ProductConfigCreate, ProductConfig)
-make_crud(api, "customers", "customers", CustomerCreate, Customer)
+make_crud(api, "customers", "customers", CustomerCreate, Customer, module="customers")
+# No owner-name field exists on Customer (it's a post-sale lifecycle record,
+# not something one salesperson "owns") — "own"/"team" scope on the
+# Customers module currently behaves like "all". Documented limitation, not
+# silently swept under; a real fix needs an owner concept on Customer first.
+make_crud(api, "teams", "teams", TeamCreate, Team)
+
+
+async def _audit(action: str, user: dict, detail: str = ""):
+    """Insert-only trail — role/permission/team/user changes. Never raises:
+    a logging failure must not block the action it's logging."""
+    try:
+        doc = {"id": new_id(), "created_at": now_iso(), "action": action,
+               "by_user": user.get("name", ""), "by_id": user.get("id", ""), "detail": detail}
+        tenancy.stamp(doc, "audit_log", user)
+        await db.audit_log.insert_one(doc)
+    except Exception as e:
+        logger.warning(f"Audit log write failed ({action}): {e}")
+
+
+# One entry per module named in the P2 spec's example matrix/role list.
+# Modules with no backend enforcement wired up yet (HR/Accounts/Marketing —
+# those features don't exist yet, see server.py's ALL_MODULE_IDS / P1) get
+# an empty or minimal permissions list; they exist as role *names* now so an
+# admin isn't limited to hardcoded choices, per "roles must be configurable."
+DEFAULT_ROLES = [
+    {"name": "Administrator", "permissions": [
+        {"module": m, "view": True, "create": True, "edit": True, "delete": True,
+         "approve": True, "export": True, "scope": "all"}
+        for m in ("leads", "customers", "quotes", "sales", "inventory")
+    ]},
+    {"name": "Management", "permissions": [
+        {"module": m, "view": True, "create": False, "edit": True, "delete": False,
+         "approve": True, "export": True, "scope": "all"}
+        for m in ("leads", "customers", "quotes", "sales", "inventory")
+    ]},
+    {"name": "Sales Manager", "permissions": [
+        {"module": m, "view": True, "create": True, "edit": True, "delete": False,
+         "approve": True, "export": False, "scope": "team"}
+        for m in ("leads", "customers", "quotes", "sales")
+    ]},
+    {"name": "Salesperson", "permissions": [
+        {"module": m, "view": True, "create": True, "edit": True, "delete": False,
+         "approve": False, "export": False, "scope": "own"}
+        for m in ("leads", "customers", "quotes", "sales")
+    ]},
+    {"name": "Inventory", "permissions": [
+        {"module": "inventory", "view": True, "create": True, "edit": True,
+         "delete": True, "approve": False, "export": True, "scope": "all"},
+    ]},
+    {"name": "HR", "permissions": []},
+    {"name": "Accounts", "permissions": []},
+    {"name": "Marketing", "permissions": []},
+]
+
+
+@api.get("/roles")
+async def list_roles(user: dict = Depends(get_current_user)):
+    q = tenancy.scope({}, "roles", user)
+    existing = await db.roles.find(q, {"_id": 0}).to_list(200)
+    if existing:
+        return existing
+    # Lazy-seed on first access, not at tenant creation — new tenants
+    # onboard through several different code paths (POST /tenants,
+    # backfill_tenant) and this way none of them need to remember to do it.
+    seeded = []
+    for r in DEFAULT_ROLES:
+        doc = {"id": new_id(), "created_at": now_iso(), "name": r["name"],
+               "permissions": r["permissions"], "active": True}
+        tenancy.stamp(doc, "roles", user)
+        await db.roles.insert_one(dict(doc))
+        doc.pop("_id", None)
+        seeded.append(doc)
+    return seeded
+
+
+make_crud(api, "roles", "roles", RoleCreate, Role, after_write=lambda doc, user: _audit("role_changed", user, doc.get("name", "")))
 
 
 @api.get("/customers/search")

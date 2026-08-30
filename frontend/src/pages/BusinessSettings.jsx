@@ -22,6 +22,7 @@ const MODULES = [
   { id: "petty", label: "Petty Cash" }, { id: "outstanding", label: "Outstanding" },
   { id: "data-centre", label: "Data Centre" }, { id: "financial-year", label: "Financial Year" },
   { id: "workflows", label: "Workflows" }, { id: "roles", label: "Role Manager" },
+  { id: "teams", label: "Teams" }, { id: "roles-permissions", label: "Roles & Permissions" },
 ];
 
 export default function BusinessSettings() {

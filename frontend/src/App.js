@@ -42,6 +42,8 @@ const DataCentre = lazy(() => import("@/pages/DataCentre"));
 const FinancialYear = lazy(() => import("@/pages/FinancialYear"));
 const Workflows = lazy(() => import("@/pages/Workflows"));
 const BusinessSettings = lazy(() => import("@/pages/BusinessSettings"));
+const Teams = lazy(() => import("@/pages/Teams"));
+const RolesPermissions = lazy(() => import("@/pages/RolesPermissions"));
 
 // 11-stage operational flow: Requirement + Configurator + Customer
 const Requirements = lazy(() => import("@/pages/Requirements"));
@@ -102,6 +104,8 @@ function App() {
           <Route path="/admin/financial-year" element={<ProtectedRoute page="financial-year"><Layout><FinancialYear /></Layout></ProtectedRoute>} />
           <Route path="/admin/workflows" element={<ProtectedRoute page="workflows"><Layout><Workflows /></Layout></ProtectedRoute>} />
           <Route path="/admin/business" element={<ProtectedRoute page="business"><Layout><BusinessSettings /></Layout></ProtectedRoute>} />
+          <Route path="/admin/teams" element={<ProtectedRoute page="teams"><Layout><Teams /></Layout></ProtectedRoute>} />
+          <Route path="/admin/roles-permissions" element={<ProtectedRoute page="roles-permissions"><Layout><RolesPermissions /></Layout></ProtectedRoute>} />
           <Route path="/requirements" element={<ProtectedRoute page="requirements"><Layout><Requirements /></Layout></ProtectedRoute>} />
           <Route path="/configurator" element={<ProtectedRoute page="configurator"><Layout><Configurator /></Layout></ProtectedRoute>} />
           <Route path="/customers" element={<ProtectedRoute page="customers"><Layout><Customers /></Layout></ProtectedRoute>} />

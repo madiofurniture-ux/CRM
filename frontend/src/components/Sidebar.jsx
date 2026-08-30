@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Columns3, FileText, Receipt, UserPlus,
   Sparkles, Building2, Package, BarChart3, ListTodo, Users, LogOut, HardHat, MapPin,
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
-  CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings,
+  CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -65,7 +65,9 @@ const SECTIONS = [
       { id: "financial-year", to: "/admin/financial-year", label: "Financial Year", icon: CalendarRange, adminOnly: true },
       { id: "workflows", to: "/admin/workflows", label: "Workflows", icon: Workflow, adminOnly: true },
       { id: "business", to: "/admin/business", label: "Business Settings", icon: Settings, adminOnly: true },
-      { id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
+      { id: "teams", to: "/admin/teams", label: "Teams", icon: UsersRound, adminOnly: true },
+      { id: "roles-permissions", to: "/admin/roles-permissions", label: "Roles & Permissions", icon: Lock, adminOnly: true },
+      { id: "roles", to: "/admin/roles", label: "Users", icon: Users, adminOnly: true },
     ],
   },
 ];

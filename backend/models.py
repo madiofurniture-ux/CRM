@@ -23,10 +23,15 @@ class UserBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     username: str
     name: str
-    role: str = "user"  # "admin" or "user"
+    role: str = "user"  # "admin" or "user" — the absolute superuser bypass; never governed by role_id
     icon: str = "U"  # short label or emoji
     color: str = "#C85A32"
-    pages: Optional[List[str]] = None  # None == all pages (admin)
+    pages: Optional[List[str]] = None  # None == all pages (admin) — legacy grant, still honored when role_id is unset
+    team_id: Optional[str] = ""
+    role_id: Optional[str] = ""   # "" = legacy role/pages behavior (every pre-P2 account)
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    active: bool = True
 
 
 class UserCreate(UserBase):
@@ -40,6 +45,11 @@ class UserUpdate(BaseModel):
     color: Optional[str] = None
     pages: Optional[List[str]] = None
     pin: Optional[str] = None
+    team_id: Optional[str] = None
+    role_id: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    active: Optional[bool] = None
 
 
 class UserPublic(UserBase):
@@ -746,5 +756,78 @@ class CustomerCreate(CustomerBase):
 
 
 class Customer(CustomerBase):
+    id: str
+    created_at: str
+
+
+# ------- Teams -------
+class TeamBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    description: Optional[str] = ""
+    active: bool = True
+
+
+class TeamCreate(TeamBase):
+    pass
+
+
+class Team(TeamBase):
+    id: str
+    created_at: str
+
+
+# ------- Roles & permissions (P2) -------
+# Deliberately flat: module x {view,create,edit,delete,approve,export} x a
+# single scope (own/team/all) — no field-level rules, no permission
+# hierarchies. `role == "admin"` on the user itself remains the absolute,
+# unconfigurable bypass (see permissions.py) so a role can never be
+# misconfigured into locking the tenant out of itself.
+class ModulePermission(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    module: str
+    view: bool = False
+    create: bool = False
+    edit: bool = False
+    delete: bool = False
+    approve: bool = False
+    export: bool = False
+    scope: str = "own"  # "own" | "team" | "all"
+
+    @field_validator("scope")
+    @classmethod
+    def _valid_scope(cls, v):
+        if v not in ("own", "team", "all"):
+            raise ValueError("scope must be own, team, or all")
+        return v
+
+
+class RoleBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    permissions: List[ModulePermission] = Field(default_factory=list)
+    active: bool = True
+
+
+class RoleCreate(RoleBase):
+    pass
+
+
+class Role(RoleBase):
+    id: str
+    created_at: str
+
+
+# ------- Audit log (P2) -------
+class AuditLogBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    action: str   # role_created | role_changed | permission_changed |
+                  # user_role_assigned | user_team_assigned | user_activated | user_deactivated
+    by_user: str
+    by_id: str
+    detail: str = ""
+
+
+class AuditLog(AuditLogBase):
     id: str
     created_at: str
