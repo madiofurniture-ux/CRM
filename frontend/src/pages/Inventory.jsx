@@ -17,6 +17,7 @@ const vendorLabel = (r) => [r.vendor_code, r.vendor].filter(Boolean).join(" · "
 export default function Inventory() {
   const [rows, setRows] = useState([]);
   const [vendors, setVendors] = useState([]);
+  const [floors, setFloors] = useState([]);
   const [search, setSearch] = useState("");
   const [fStatus, setFStatus] = useState("All");
   const [fCat, setFCat] = useState("All");
@@ -24,7 +25,7 @@ export default function Inventory() {
   const [show, setShow] = useState(false);
   const [editingId, setEditingId] = useState(null); // null = creating, else the item id being edited
   const [saving, setSaving] = useState(false);
-  const empty = { sku: "", name: "", category: "", vendor_id: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "Warehouse A", image_url: "" };
+  const empty = { sku: "", name: "", category: "", vendor_id: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "", image_url: "" };
   const [form, setForm] = useState(empty);
 
   const vendorOptions = useMemo(() => vendors.map((v) => ({
@@ -49,6 +50,7 @@ export default function Inventory() {
   useEffect(() => {
     load();
     api.get("/vendors").then(({ data }) => setVendors(data));
+    api.get("/floors").then(({ data }) => setFloors(data));
   }, []);
 
   const categories = useMemo(() => Array.from(new Set(rows.map((r) => r.category).filter(Boolean))).sort(), [rows]);
@@ -226,7 +228,19 @@ export default function Inventory() {
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Status</label>
                 <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">{STATUSES.map((s) => <option key={s}>{s}</option>)}</select>
               </div>
-              <F l="Location" v={form.location} oc={(v) => setForm({ ...form, location: v })} />
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Location</label>
+                <select value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                  <option value="">Select a floor…</option>
+                  {form.location && !floors.some((f) => f.name === form.location) && (
+                    <option value={form.location}>{form.location} (unrecognized)</option>
+                  )}
+                  {floors.map((f) => <option key={f.id} value={f.name}>{f.name}</option>)}
+                </select>
+                {floors.length === 0 && (
+                  <div className="text-[11px] text-[var(--ink-3)] mt-1">No floors yet — create one on the Stock Ledger page.</div>
+                )}
+              </div>
               <F l="Image URL (Product Picture)" v={form.image_url} oc={(v) => setForm({ ...form, image_url: v })} cls="col-span-2" placeholder="https://images.unsplash.com/..." />
             </div>
             <div className="px-5 py-4 border-t flex items-center gap-2">

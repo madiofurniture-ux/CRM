@@ -23,6 +23,7 @@ import urllib.request
 BASE = "http://127.0.0.1:8000"
 ADMIN = {"username": os.environ.get("E2E_ADMIN_USER","admin"), "pin": os.environ.get("E2E_ADMIN_PIN","1234")}
 USER = {"username": os.environ.get("E2E_USER_USER","mf"), "pin": os.environ.get("E2E_USER_PIN","2222")}
+PALETTE_KEYS = ["brand", "blue", "moss", "warn", "danger", "purple", "teal", "pink"]  # must match server.py
 
 _pass, _fail, _skip = 0, 0, 0
 _failures = []
@@ -341,6 +342,32 @@ def main():
             call("DELETE", f"/api/visitors/{visitor2['id']}", token=admin_tok)
         if pre_lead:
             call("DELETE", f"/api/leads/{pre_lead['id']}", token=admin_tok)
+
+    # ── Floors: Stock Ledger colour coding ──────────────────────────────
+    section("Floors — create with explicit/auto colour, unique name")
+    s, f1 = call("POST", "/api/floors", {"name": "ZZ Rooftop", "color": "teal"}, token=admin_tok)
+    check("floor keeps the explicitly chosen colour", s == 200 and f1 and f1.get("color") == "teal",
+          f"got {s} {f1}")
+    try:
+        s, f2 = call("POST", "/api/floors", {"name": "ZZ Basement"}, token=admin_tok)
+        check("floor with no colour gets one auto-assigned",
+              s == 200 and f2 and f2.get("color") in PALETTE_KEYS, f"got {s} {f2}")
+        try:
+            s, bad = call("POST", "/api/floors", {"name": "ZZ Bad", "color": "chartreuse"}, token=admin_tok)
+            check("an invalid colour is rejected", s == 400, f"got {s} {bad}")
+
+            s, dup = call("POST", "/api/floors", {"name": "zz rooftop", "color": "pink"}, token=admin_tok)
+            check("a duplicate name (any case, any colour) is rejected", s == 400, f"got {s} {dup}")
+
+            s, unchanged = call("PUT", f"/api/floors/{f1['id']}", {"color": "blue"}, token=admin_tok)
+            check("editing a floor without touching its name doesn't self-reject",
+                  s == 200 and unchanged and unchanged.get("color") == "blue", f"got {s} {unchanged}")
+        finally:
+            if f2:
+                call("DELETE", f"/api/floors/{f2['id']}", token=admin_tok)
+    finally:
+        if f1:
+            call("DELETE", f"/api/floors/{f1['id']}", token=admin_tok)
 
     # ── Vendors: serial codes + name visible to admin/accountant only ──
     section("Vendors — serial code, and name redacted for a regular user")

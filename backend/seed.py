@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 
 from auth import hash_pin
 from models import now_iso, new_id, GST_DEFAULT
+import lifecycle as lc
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -349,6 +350,39 @@ async def seed_vendors(db):
                 {"id": item["id"]}, {"$set": {"vendor_id": v["id"], "vendor_code": v["code"]}})
 
 
+async def seed_stock_movements(db):
+    """One opening 'Receipt' movement per existing inventory item, at that
+    item's own location — so the Stock Ledger isn't empty and On Hand
+    reconciles exactly with what Inventory already shows. Real day-to-day
+    Issues/Transfers/Adjustments get logged by staff from here on."""
+    if await db.stock_movements.count_documents({}) > 0:
+        return
+    items = await db.inventory.find({}, {"_id": 0}).to_list(5000)
+    prefix = f"MV-{lc.yymm()}-"
+    docs = []
+    for idx, it in enumerate(items, start=1):
+        qty = it.get("qty") or 0
+        if qty <= 0:
+            continue
+        docs.append({
+            "id": new_id(),
+            "movement_no": f"{prefix}{idx:03d}",
+            "date": (it.get("date_added") or now_iso())[:10],
+            "type": "Receipt",
+            "product_id": it.get("sku", ""),
+            "qty": qty,
+            "unit": "pc",
+            "warehouse": it.get("location") or "Main",
+            "to_warehouse": "",
+            "source_doc": "Opening Stock",
+            "reason": "Opening stock, seeded from existing inventory",
+            "by_user": "",
+            "created_at": now_iso(),
+        })
+    if docs:
+        await db.stock_movements.insert_many(docs)
+
+
 async def seed_sales(db):
     if await db.sales.count_documents({}) > 0:
         return
@@ -562,6 +596,7 @@ async def seed_all(db):
     await seed_visitors(db)
     await seed_inventory(db)
     await seed_vendors(db)
+    await seed_stock_movements(db)
     await seed_sales(db)
     await seed_leads(db)
     await seed_architects(db)

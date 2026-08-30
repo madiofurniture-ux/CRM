@@ -126,6 +126,22 @@ class Lead(LeadBase):
     created_at: str
 
 
+# ------- Floors (stock-ledger warehouse/floor color coding) -------
+class FloorBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    color: Optional[str] = ""  # one of PALETTE_KEYS (server.py) — assigned server-side if blank
+
+
+class FloorCreate(FloorBase):
+    pass
+
+
+class Floor(FloorBase):
+    id: str
+    created_at: str
+
+
 # ------- Architects / Contacts -------
 class ArchitectBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
+import re
 import logging
 import time
 import asyncio
@@ -29,6 +30,7 @@ from models import (
     SaleCreate, Sale,
     InventoryCreate, InventoryItem,
     VendorCreate, Vendor,
+    FloorCreate, Floor,
     TaskCreate, Task,
     InvoiceCreate, Invoice,
     MeetCreate, Meet,
@@ -979,6 +981,33 @@ async def normalize_vendor(doc: dict, existing: dict | None, user: dict) -> None
         doc["code"] = lc.next_vendor_code(current)
 
 
+# ---------- Floors: color coding for the Stock Ledger's warehouse field ----------
+# Frontend maps each key to a bg/text/dot class triple — this is the single
+# fixed order both the seed data and "create new floor" cycle through.
+PALETTE_KEYS = ["brand", "blue", "moss", "warn", "danger", "purple", "teal", "pink"]
+
+
+async def normalize_floor(doc: dict, existing: dict | None, user: dict) -> None:
+    if "name" in doc:
+        name = str(doc.get("name") or "").strip()
+        # A name left unchanged on edit is never re-checked against itself —
+        # same "untouched legacy value" rule as phone elsewhere.
+        if not (existing is not None and name.lower() == str(existing.get("name") or "").strip().lower()):
+            q = tenancy.scope({}, "floors", user)
+            q["name"] = {"$regex": f"^{re.escape(name)}$", "$options": "i"}
+            if existing:
+                q["id"] = {"$ne": existing["id"]}
+            dup = await db.floors.find_one(q, {"_id": 0, "id": 1})
+            if dup:
+                raise HTTPException(status_code=400, detail=f"A floor named \"{name}\" already exists.")
+        doc["name"] = name
+    if existing is None and not str(doc.get("color") or "").strip():
+        count = await db.floors.count_documents(tenancy.scope({}, "floors", user))
+        doc["color"] = PALETTE_KEYS[count % len(PALETTE_KEYS)]
+    elif doc.get("color") and doc["color"] not in PALETTE_KEYS:
+        raise HTTPException(status_code=400, detail=f"color must be one of {PALETTE_KEYS}")
+
+
 async def normalize_inventory(doc: dict, existing: dict | None, user: dict) -> None:
     """vendor/vendor_code are always derived from vendor_id server-side — never
     trust client-supplied text for them, or a redacted user could write a
@@ -1003,6 +1032,7 @@ make_crud(api, "architects", "architects", ArchitectCreate, Architect, normalize
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
 make_crud(api, "sales", "sales", SaleCreate, Sale)
 make_crud(api, "vendors", "vendors", VendorCreate, Vendor, normalize=normalize_vendor, redact=redact_vendor)
+make_crud(api, "floors", "floors", FloorCreate, Floor, normalize=normalize_floor)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, normalize=normalize_inventory, redact=redact_vendor_field)
 make_crud(api, "tasks", "tasks", TaskCreate, Task)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice)
