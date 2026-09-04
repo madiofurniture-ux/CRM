@@ -10,7 +10,7 @@ import { Compass, X, Pencil } from "lucide-react";
 const emptyForm = {
   name: "", phone: "", email: "", address: "", gstin: "", division: "Furniture",
   gender: "", confidence_level: "", maps_url: "", lat: "", lng: "",
-  alt_contact_name: "", alt_phone: "",
+  alt_contact_name: "", alt_phone: "", team_id: "",
 };
 
 export default function Customers() {
@@ -22,9 +22,13 @@ export default function Customers() {
   const [show, setShow] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [teams, setTeams] = useState([]);
 
   const load = async () => { const { data } = await api.get("/customers"); setRows(data); };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get("/teams").then(({ data }) => setTeams(data)).catch(() => setTeams([]));
+  }, []);
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setShow(true); };
   const openEdit = (c) => { setEditing(c); setForm({ ...emptyForm, ...c }); setShow(true); };
@@ -156,6 +160,13 @@ export default function Customers() {
                 </select>
               </div>
               <CFld l="Confidence %" t="number" v={form.confidence_level} oc={(v) => setForm({ ...form, confidence_level: v })} />
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Team</label>
+                <select value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                  <option value="">— None —</option>
+                  {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
               <CFld l="Address" v={form.address} oc={(v) => setForm({ ...form, address: v })} cls="col-span-2" />
               <CFld l="Google Maps Location URL" v={form.maps_url} oc={(v) => setForm({ ...form, maps_url: v })} cls="col-span-2" />
               <CFld l="Latitude" t="number" v={form.lat} oc={(v) => setForm({ ...form, lat: v })} />

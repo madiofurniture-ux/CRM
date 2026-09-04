@@ -18,10 +18,11 @@ export default function Leads() {
   const [show, setShow] = useState(false);
   const [saving, setSaving] = useState(false);
   const [users, setUsers] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [logLead, setLogLead] = useState(null);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", phone: "", source: "Walk-in",
-    reference: "", attended_by: "", confidence_level: "",
+    reference: "", attended_by: "", confidence_level: "", team_id: "",
     stage: "New", follow_up_date: "", remarks: "", assigned_to: "", value: 0,
   };
   const [form, setForm] = useState(empty);
@@ -30,6 +31,7 @@ export default function Leads() {
   useEffect(() => {
     load();
     api.get("/users/directory").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
+    api.get("/teams").then(({ data }) => setTeams(data)).catch(() => setTeams([]));
   }, []);
   const userName = (id) => users.find((u) => u.id === id)?.name || "";
 
@@ -158,6 +160,13 @@ export default function Leads() {
               </div>
               <Fld l="Follow up" t="date" v={form.follow_up_date} oc={(v) => setForm({ ...form, follow_up_date: v })} />
               <Fld l="Confidence %" t="number" v={form.confidence_level} oc={(v) => setForm({ ...form, confidence_level: v === "" ? "" : parseFloat(v) || 0 })} />
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Team</label>
+                <select value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                  <option value="">— None —</option>
+                  {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
               <Fld l="Value" t="number" v={form.value} oc={(v) => setForm({ ...form, value: parseFloat(v) || 0 })} />
               <Fld l="Remarks" v={form.remarks} oc={(v) => setForm({ ...form, remarks: v })} cls="col-span-2" />
             </div>

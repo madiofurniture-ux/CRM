@@ -107,6 +107,7 @@ class LeadBase(BaseModel):
     assigned_to: Optional[str] = ""
     attended_by: Optional[str] = ""       # who met the lead — linked to Team/Users by name
     confidence_level: Optional[float] = None  # 0-100 — sales rep's read on close probability
+    team_id: Optional[str] = ""           # direct team link for reporting; independent of assigned_to's own team_id
     visitor_id: Optional[str] = ""        # lineage when converted from a Visitor
     value: Optional[float] = 0
     # Dated, multi-entry audit trail: [{at, by, by_id, text, confidence_level, kind}].
@@ -287,6 +288,11 @@ class InventoryCreate(InventoryBase):
         if not str(v or "").strip():
             raise ValueError("Vendor code is required")
         return v
+
+    @field_validator("location")
+    @classmethod
+    def _canonical_floor(cls, v):
+        return lc.normalize_location(v)
 
 
 class InventoryItem(InventoryBase):
@@ -733,6 +739,7 @@ class CustomerBase(BaseModel):
     balance: float = 0
     remarks: Optional[str] = ""
     confidence_level: Optional[float] = None  # 0-100
+    team_id: Optional[str] = ""           # direct team link for reporting
     gender: Optional[str] = ""
     maps_url: Optional[str] = ""     # Google Maps location link
     lat: Optional[float] = None
