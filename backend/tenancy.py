@@ -44,7 +44,7 @@ TENANT_COLLECTIONS = {
     "invoices", "meets", "petty_cash", "quote_lines", "dw_openings", "dw_surveys",
     "projects", "payments", "stock_movements", "customers", "activities",
     "settings", "workflows", "attendance", "commission_rules", "commission_payouts",
-    "requirements", "product_configs", "teams", "roles", "audit_log",
+    "requirements", "product_configs", "teams", "roles", "audit_log", "notification_logs",
 }
 
 SYSTEM_TENANT = "system"          # reserved; never assigned to a business

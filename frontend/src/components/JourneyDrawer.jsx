@@ -16,14 +16,19 @@ import { useAuth } from "@/context/AuthContext";
 export default function JourneyDrawer({ phone, name, onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState("timeline");
+  const [notifs, setNotifs] = useState([]);
 
   useEffect(() => {
-    if (!phone) { setData(null); return; }
+    if (!phone) { setData(null); setNotifs([]); return; }
     setLoading(true);
     api.get(`/journey/${encodeURIComponent(phone)}`)
       .then((r) => setData(r.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false));
+    api.get(`/notifications?phone=${encodeURIComponent(phone)}`)
+      .then((r) => setNotifs(r.data))
+      .catch(() => setNotifs([]));
   }, [phone]);
 
   const { tenant } = useAuth();
@@ -68,27 +73,57 @@ export default function JourneyDrawer({ phone, name, onClose }) {
           </div>
 
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-2">Timeline</div>
-            {loading && <div className="text-sm text-[var(--ink-3)] py-4">Loading…</div>}
-            {!loading && (data?.events || []).length === 0 && <div className="text-sm text-[var(--ink-3)] py-4">No history yet.</div>}
-            <div className="space-y-0">
-              {(data?.events || []).map((e, i) => (
-                <div key={i} className="flex gap-3 pb-4 relative">
-                  <div className="flex flex-col items-center">
-                    <div className="w-7 h-7 rounded-full bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-center text-sm shrink-0">{e.icon}</div>
-                    {i < data.events.length - 1 && <div className="w-px flex-1 bg-[var(--border)] mt-1" />}
-                  </div>
-                  <div className="min-w-0 pt-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--ink-3)]">{e.kind}</span>
-                      <span className="text-[10px] text-[var(--ink-3)]">{fmtDate(e.date)}</span>
-                    </div>
-                    <div className="text-sm text-[var(--ink)] font-medium">{e.title}</div>
-                    {e.detail && <div className="text-xs text-[var(--ink-2)]">{e.detail}</div>}
-                  </div>
-                </div>
-              ))}
+            <div className="flex gap-4 border-b border-[var(--border-light)] mb-3">
+              <button onClick={() => setTab("timeline")}
+                className={`text-[11px] font-semibold uppercase tracking-wider pb-2 -mb-px border-b-2 ${tab === "timeline" ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-[var(--ink-3)]"}`}>
+                Timeline
+              </button>
+              <button onClick={() => setTab("notifications")} data-testid="journey-tab-notifications"
+                className={`text-[11px] font-semibold uppercase tracking-wider pb-2 -mb-px border-b-2 ${tab === "notifications" ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-[var(--ink-3)]"}`}>
+                Notification Log{notifs.length ? ` (${notifs.length})` : ""}
+              </button>
             </div>
+
+            {tab === "timeline" && (
+              <>
+                {loading && <div className="text-sm text-[var(--ink-3)] py-4">Loading…</div>}
+                {!loading && (data?.events || []).length === 0 && <div className="text-sm text-[var(--ink-3)] py-4">No history yet.</div>}
+                <div className="space-y-0">
+                  {(data?.events || []).map((e, i) => (
+                    <div key={i} className="flex gap-3 pb-4 relative">
+                      <div className="flex flex-col items-center">
+                        <div className="w-7 h-7 rounded-full bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-center text-sm shrink-0">{e.icon}</div>
+                        {i < data.events.length - 1 && <div className="w-px flex-1 bg-[var(--border)] mt-1" />}
+                      </div>
+                      <div className="min-w-0 pt-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--ink-3)]">{e.kind}</span>
+                          <span className="text-[10px] text-[var(--ink-3)]">{fmtDate(e.date)}</span>
+                        </div>
+                        <div className="text-sm text-[var(--ink)] font-medium">{e.title}</div>
+                        {e.detail && <div className="text-xs text-[var(--ink-2)]">{e.detail}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {tab === "notifications" && (
+              <div className="space-y-2" data-testid="journey-notification-log">
+                {notifs.length === 0 && <div className="text-sm text-[var(--ink-3)] py-4">No notifications sent yet.</div>}
+                {notifs.map((n) => (
+                  <div key={n.id} className="p-3 rounded-lg border border-[var(--border-light)] bg-[var(--surface-2)]">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--ink-3)]">{n.channel} · {n.event.replace(/_/g, " ")}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${n.status === "Sent" ? "bg-[var(--brand-soft)] text-[var(--brand)]" : "bg-[var(--danger-soft,#fee)] text-[var(--danger)]"}`}>{n.status}</span>
+                    </div>
+                    <div className="text-xs text-[var(--ink-2)]">{n.message}</div>
+                    <div className="text-[10px] text-[var(--ink-3)] mt-1">{fmtDate(n.created_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

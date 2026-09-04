@@ -24,23 +24,31 @@ export default function ExecutiveDashboard() {
   const [period, setPeriod] = useState(new Date().toISOString().slice(0, 7));
   const [commissions, setCommissions] = useState([]);
   const [approving, setApproving] = useState(null); // key of the row currently being approved
+  const [overrides, setOverrides] = useState({}); // key -> { rate_pct, commission_amount } a manager edited before approving
 
   const loadOverview = () => {
     api.get("/analytics/pipeline").then(({ data }) => setPipeline(data)).catch(() => setPipeline(null));
     api.get("/analytics/revenue").then(({ data }) => setRevenue(data)).catch(() => setRevenue(null));
   };
   const loadCommissions = () => {
-    api.get(`/analytics/commissions?period=${period}`).then(({ data }) => setCommissions(data)).catch(() => setCommissions([]));
+    api.get(`/analytics/commissions?period=${period}`).then(({ data }) => { setCommissions(data); setOverrides({}); }).catch(() => setCommissions([]));
   };
 
   useEffect(loadOverview, []);
   useEffect(loadCommissions, [period]); // eslint-disable-line
 
+  const rowKey = (row) => `${row.payee}|${row.division}`;
+  const editRate = (row, rate_pct) => {
+    const commission_amount = Math.round((row.base_amount * (parseFloat(rate_pct) || 0)) / 100 + (row.flat_amount || 0));
+    setOverrides((o) => ({ ...o, [rowKey(row)]: { rate_pct, commission_amount } }));
+  };
+
   const approve = async (row) => {
-    const key = `${row.payee}|${row.division}`;
+    const key = rowKey(row);
+    const final = { ...row, ...(overrides[key] || {}) };
     setApproving(key);
     try {
-      await api.post("/analytics/commissions/approve", { ...row, period });
+      await api.post("/analytics/commissions/approve", { ...final, period });
       toast.success(`Commission approved for ${row.payee}`);
       loadCommissions();
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
@@ -107,19 +115,29 @@ export default function ExecutiveDashboard() {
               </thead>
               <tbody>
                 {commissions.map((row) => {
-                  const key = `${row.payee}|${row.division}`;
+                  const key = rowKey(row);
+                  const editable = row.status === "Draft";
+                  const rate = overrides[key]?.rate_pct ?? row.rate_pct;
+                  const amount = overrides[key]?.commission_amount ?? row.commission_amount;
                   return (
                     <tr key={key} className="border-t border-[var(--border-light)]" data-testid={`commission-row-${key}`}>
                       <td className="py-2 pr-3 font-medium">{row.payee}</td>
                       <td className="py-2 px-2 text-[var(--ink-2)]">{row.division || "—"}</td>
                       <td className="py-2 px-2 text-right">{inrFull(row.base_amount)}</td>
-                      <td className="py-2 px-2 text-right">{row.rate_pct}% {row.flat_amount ? `+ ${inrFull(row.flat_amount)}` : ""}</td>
-                      <td className="py-2 px-2 text-right font-semibold">{inrFull(row.commission_amount)}</td>
+                      <td className="py-2 px-2 text-right">
+                        {editable ? (
+                          <input type="number" step="0.1" value={rate} onChange={(e) => editRate(row, e.target.value)}
+                            className="w-16 px-1.5 py-0.5 rounded border border-[var(--border)] text-right text-xs"
+                            data-testid={`rate-input-${key}`} />
+                        ) : `${rate}%`}
+                        {row.flat_amount ? ` + ${inrFull(row.flat_amount)}` : editable ? "%" : ""}
+                      </td>
+                      <td className="py-2 px-2 text-right font-semibold">{inrFull(amount)}</td>
                       <td className="py-2 px-2">
                         <span className={`text-[11px] px-2 py-0.5 rounded-full ${STATUS_BADGE[row.status] || STATUS_BADGE.Draft}`}>{row.status}</span>
                       </td>
                       <td className="py-2 pl-2 text-right">
-                        {row.status === "Draft" && (
+                        {editable && (
                           <button onClick={() => approve(row)} disabled={approving === key}
                             className="btn-primary !py-1 !px-2.5 text-xs disabled:opacity-60" data-testid={`approve-${key}`}>
                             {approving === key ? "Approving…" : "Approve"}

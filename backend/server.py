@@ -20,6 +20,7 @@ from pymongo import ReturnDocument
 
 import tenancy
 import permissions as perm
+import notifications as notif
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -498,7 +499,7 @@ async def _scope_owners(user: dict, roles: list, module: str) -> Optional[list]:
 
 
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
-              after_write=None, module: str = None, owner_field: str = None):
+              after_write=None, module: str = None, owner_field: str = None, on_create=None):
     """
     `after_write`, when given, runs after a successful create/update with the
     saved document and the acting user — for side effects that must stay in
@@ -506,6 +507,11 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     Follow-up Task from follow_up_date). It never runs on delete or on a
     failed/no-op write, and its errors are not caught here — a hook that
     can't be trusted to succeed shouldn't be wired in as one.
+
+    `on_create`, when given, runs only on a successful create (never on
+    update) — for side effects that must fire exactly once per record, like
+    a "your quote was created" customer notification that would otherwise
+    re-fire on every subsequent edit if it were wired through after_write.
 
     `module`/`owner_field` (P2), when given, gate every route through
     permissions.py's Role matrix on top of the tenant boundary above it:
@@ -544,6 +550,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         doc.pop("_id", None)
         if after_write:
             await after_write(doc, user)
+        if on_create:
+            await on_create(doc, user)
         return doc
 
     @router.put(f"/{base}/{{item_id}}")
@@ -1066,12 +1074,30 @@ async def _sync_lead_followup_task(lead: dict, user: dict):
     await db.tasks.insert_one(dict(task))
 
 
+async def _notify_quote_created(doc: dict, user: dict):
+    await notif.notify(db, user, "quote_created", to=doc.get("phone", ""),
+                        customer_name=doc.get("customer", ""), ref_type="quote", ref_id=doc.get("quote_no", ""))
+
+
+async def _notify_order_confirmed(doc: dict, user: dict):
+    # Sale has no phone field of its own (extra="ignore" drops it if a
+    # caller sends one) — the source Quote is the only place to look it up.
+    phone = ""
+    if doc.get("quote_id"):
+        q = await db.quotes.find_one(tenancy.scope({"id": doc["quote_id"]}, "quotes", user), {"_id": 0, "phone": 1})
+        phone = (q or {}).get("phone", "")
+    await notif.notify(db, user, "order_confirmed", to=phone,
+                        customer_name=doc.get("customer", ""), ref_type="sale", ref_id=doc.get("sale_no", ""))
+
+
 make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, module="visitors")
 make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task,
           module="leads", owner_field="assigned_to")
 make_crud(api, "architects", "architects", ArchitectCreate, Architect, module="architects")
-make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user")
-make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user")
+make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user",
+          on_create=_notify_quote_created)
+make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user",
+          on_create=_notify_order_confirmed)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory")
 make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to")
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user")
@@ -1395,6 +1421,29 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
         return sorted([{"name": k, "value": v} for k, v in d.items()], key=lambda x: -x["value"])[:n]
 
     top_items = sorted(items, key=lambda item: -((item.get("mrp") or 0) * (item.get("qty") or 0)))[:10]
+
+    # Aging: days since created_at for items still sitting In Stock — how
+    # long unsold stock has been on hand, not a lifecycle age for Sold/
+    # Display items where "how long ago" isn't the interesting question.
+    from datetime import date as _date
+    today = _date.today()
+
+    def _age_days(created_at: str) -> int:
+        try:
+            return (today - _date.fromisoformat((created_at or "")[:10])).days
+        except Exception:
+            return 0
+
+    aging_buckets = {"0-30": {"count": 0, "value": 0.0}, "31-60": {"count": 0, "value": 0.0},
+                      "61-90": {"count": 0, "value": 0.0}, "90+": {"count": 0, "value": 0.0}}
+    for item in items:
+        if item.get("status") != "In Stock":
+            continue
+        age = _age_days(item.get("created_at"))
+        bucket = "0-30" if age <= 30 else "31-60" if age <= 60 else "61-90" if age <= 90 else "90+"
+        aging_buckets[bucket]["count"] += 1
+        aging_buckets[bucket]["value"] += (item.get("mrp") or 0) * (item.get("qty") or 0)
+
     return {
         "total_items": len(items),
         "total_qty": sum((item.get("qty") or 0) for item in items),
@@ -1405,6 +1454,7 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
         "by_location": top(by_location),
         "by_status": [{"name": k, "value": v} for k, v in by_status.items()],
         "top_items": top_items,
+        "aging": [{"bucket": k, **v} for k, v in aging_buckets.items()],
     }
 
 
@@ -1566,11 +1616,22 @@ async def update_project_stage(project_id: str, data: ProjectStageUpdate, user=D
     if data.stage not in valid_stages:
         raise HTTPException(400, f"Invalid stage. Must be one of: {valid_stages}")
     owned = tenancy.scope({"id": project_id}, "projects", user)
+    before = await db.projects.find_one(owned, {"_id": 0, "stage": 1})
+    if not before:
+        raise HTTPException(404, "Project not found")
     res = await db.projects.update_one(owned, {"$set": {"stage": data.stage}})
     if res.matched_count == 0:
         raise HTTPException(404, "Project not found")
     item = await db.projects.find_one(owned)
     item.pop("_id", None)
+    # "Execution" is this project model's installation/fulfillment phase —
+    # there's no separate "Installation Scheduling" stage, so entering
+    # Execution is the trigger. Only on the transition INTO it, not every
+    # time the stage is (redundantly) set to Execution again.
+    if data.stage == "Execution" and before.get("stage") != "Execution" and item.get("phone"):
+        await notif.notify(db, user, "installation_scheduled", to=item.get("phone", ""),
+                            customer_name=item.get("customer", ""), ref_type="project",
+                            ref_id=item.get("project_no", ""), date=item.get("target_date", "TBD"))
     return item
 
 
@@ -2197,6 +2258,9 @@ async def _settle_sale_balance(sale: dict, user: dict) -> dict:
         tenancy.stamp(on_insert, "customers", user)
         await db.customers.update_one(
             cust_owned, {"$set": {"stage": active}, "$setOnInsert": on_insert}, upsert=True)
+        await notif.notify(db, user, "payment_cleared", to=phone,
+                            customer_name=(out or sale).get("customer", ""),
+                            ref_type="sale", ref_id=(out or sale).get("sale_no", ""))
     return out or sale
 
 
@@ -2556,6 +2620,17 @@ async def alerts(user: dict = Depends(get_current_user)):
 
 
 # ---------- Customer journey (one timeline by phone) ----------
+@api.get("/notifications")
+async def list_notifications(phone: str = "", user: dict = Depends(get_current_user)):
+    """The Notification Log tab on the Customer 360 drawer — every WhatsApp/
+    SMS/Email fired for this phone number, most recent first."""
+    q: dict = {}
+    if phone:
+        q["to"] = phone
+    return await db.notification_logs.find(tenancy.scope(q, "notification_logs", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(200)
+
+
 @api.get("/journey/{phone}")
 async def journey(phone: str, user: dict = Depends(get_current_user)):
     leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)

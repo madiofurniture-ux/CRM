@@ -55,6 +55,19 @@ export default function InventoryAnalytics() {
           </div>
         </div>
 
+        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5" data-testid="inventory-aging">
+          <div className="font-heading font-semibold text-[var(--ink)] mb-4">Stock Aging — Days In Stock</div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {(data?.aging || []).map((b) => (
+              <div key={b.bucket} className="p-3 rounded-lg border border-[var(--border-light)] bg-[var(--surface-2)]">
+                <div className="text-[10px] uppercase tracking-widest font-semibold text-[var(--ink-3)]">{b.bucket} days</div>
+                <div className="font-heading font-bold text-base">{b.count} items</div>
+                <div className="text-xs text-[var(--ink-2)] font-mono">{inrFull(b.value)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
           <div className="p-5 border-b border-[var(--border-light)]">
             <div className="font-heading font-semibold text-[var(--ink)]">Top 10 Items by Value</div>
