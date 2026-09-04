@@ -35,6 +35,7 @@ from models import (
     InvoiceCreate, Invoice,
     MeetCreate, Meet,
     PettyCashCreate, PettyCash,
+    CashbookCreate, Cashbook, CashbookEntryCreate, CashbookEntry,
     AttendanceCheckIn, OfficeSettings,
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
     TeamCreate, Team, RoleCreate, Role,
@@ -613,7 +614,7 @@ ALL_MODULE_IDS = [
     "inventory", "stock-ledger", "inv-analytics", "projects", "dwsurvey",
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
     "outstanding", "data-centre", "financial-year", "workflows", "business",
-    "roles", "teams", "roles-permissions", "executive", "commissions",
+    "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -1104,6 +1105,72 @@ make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-g
 make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by")
 
 make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty", owner_field="by_user")
+
+async def _init_cashbook_balance(doc: dict, user: dict):
+    """current_balance always starts equal to initial_balance, regardless
+    of what a caller sent for current_balance — a fresh book's running
+    total isn't a caller-supplied value, it's derived."""
+    if doc.get("current_balance") != doc.get("initial_balance"):
+        owned = tenancy.scope({"id": doc["id"]}, "cashbooks", user)
+        await db.cashbooks.update_one(owned, {"$set": {"current_balance": doc["initial_balance"]}})
+        doc["current_balance"] = doc["initial_balance"]
+
+
+make_crud(api, "cashbooks", "cashbooks", CashbookCreate, Cashbook, module="cashbook",
+          on_create=_init_cashbook_balance)
+
+
+@api.get("/cashbooks/{cashbook_id}/entries")
+async def list_cashbook_entries(cashbook_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    q = tenancy.scope({"cashbook_id": cashbook_id}, "cashbook_entries", user)
+    return await db.cashbook_entries.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@api.post("/cashbooks/{cashbook_id}/entries")
+async def create_cashbook_entry(cashbook_id: str, payload: CashbookEntryCreate, user: dict = Depends(get_current_user)):
+    """Atomic: the entry write and the book's running-balance update must
+    never drift apart, so the balance is derived with $inc (never a
+    read-then-write) the same way _settle_sale_balance/create_payment do
+    it for sales/invoices elsewhere in this file."""
+    await _require_permission("cashbook", "create", user)
+    owned = tenancy.scope({"id": cashbook_id}, "cashbooks", user)
+    book = await db.cashbooks.find_one(owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Cashbook not found")
+    if book.get("status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Cashbook is archived")
+    if payload.cashbook_id != cashbook_id:
+        raise HTTPException(status_code=400, detail="cashbook_id mismatch")
+
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    doc["entry_person"] = doc.get("entry_person") or user.get("name", "")
+    tenancy.stamp(doc, "cashbook_entries", user)
+    await db.cashbook_entries.insert_one(dict(doc))
+    doc.pop("_id", None)
+
+    delta = doc["amount"] if doc["type"] == "CASH_IN" else -doc["amount"]
+    await db.cashbooks.update_one(owned, {"$inc": {"current_balance": delta}})
+    return doc
+
+
+@api.delete("/cashbook-entries/{entry_id}")
+async def delete_cashbook_entry(entry_id: str, user: dict = Depends(get_current_user)):
+    """Reverses exactly what create_cashbook_entry did — the opposite $inc,
+    never a recompute-from-scratch, so concurrent entries on the same book
+    can't be lost to a read-modify-write race."""
+    await _require_permission("cashbook", "delete", user)
+    owned = tenancy.scope({"id": entry_id}, "cashbook_entries", user)
+    entry = await db.cashbook_entries.find_one(owned, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    await db.cashbook_entries.delete_one(owned)
+    delta = -entry["amount"] if entry["type"] == "CASH_IN" else entry["amount"]
+    book_owned = tenancy.scope({"id": entry["cashbook_id"]}, "cashbooks", user)
+    await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": delta}})
+    return {"ok": True}
 
 
 # ---------- Dated, multi-entry follow-up/remarks ledger ----------
@@ -1701,14 +1768,14 @@ DEFAULT_ROLES = [
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
                   "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
-                  "commissions")
+                  "commissions", "cashbook")
     ]},
     {"name": "Management", "permissions": [
         {"module": m, "view": True, "create": False, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
                   "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
-                  "commissions")
+                  "commissions", "cashbook")
     ]},
     {"name": "Sales Manager", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
@@ -1730,7 +1797,7 @@ DEFAULT_ROLES = [
     {"name": "Accounts", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
-        for m in ("petty", "invoice-gen", "commissions")
+        for m in ("petty", "invoice-gen", "commissions", "cashbook")
     ]},
     {"name": "Marketing", "permissions": []},
 ]

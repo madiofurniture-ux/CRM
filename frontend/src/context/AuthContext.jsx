@@ -9,7 +9,7 @@ const AuthContext = createContext(null);
 const GATED_MODULES = [
   "leads", "customers", "quotes", "sales", "inventory",
   "visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
-  "commissions",
+  "commissions", "cashbook",
 ];
 
 export function AuthProvider({ children }) {

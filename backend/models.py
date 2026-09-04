@@ -419,6 +419,66 @@ class PettyCash(PettyCashBase):
     created_at: str
 
 
+# ------- Cashbooks (multiple named cash boxes, each with a running
+# balance — distinct from the single flat PettyCash ledger above, which
+# stays untouched) -------
+class CashbookBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    book_name: str
+    description: Optional[str] = ""
+    assigned_users: List[str] = Field(default_factory=list)  # user ids with access
+    initial_balance: float = 0
+    current_balance: float = 0
+    status: str = "ACTIVE"  # ACTIVE / ARCHIVED
+
+
+class CashbookCreate(CashbookBase):
+    @field_validator("book_name")
+    @classmethod
+    def _name_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Book name is required")
+        return v
+
+
+class Cashbook(CashbookBase):
+    id: str
+    created_at: str
+
+
+class CashbookEntryBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    cashbook_id: str
+    type: str                            # CASH_IN / CASH_OUT
+    amount: float = 0
+    category: Optional[str] = ""         # Hardware / Fuel / Refreshments / Transport / Advances / ...
+    payment_mode: str = "CASH"            # CASH / UPI / ONLINE
+    remark: Optional[str] = ""
+    receipt_url: Optional[str] = ""
+    entry_person: Optional[str] = ""
+
+
+class CashbookEntryCreate(CashbookEntryBase):
+    @field_validator("type")
+    @classmethod
+    def _valid_type(cls, v):
+        if v not in ("CASH_IN", "CASH_OUT"):
+            raise ValueError("type must be CASH_IN or CASH_OUT")
+        return v
+
+    @field_validator("amount")
+    @classmethod
+    def _positive_amount(cls, v):
+        if v <= 0:
+            raise ValueError("amount must be greater than zero")
+        return v
+
+
+class CashbookEntry(CashbookEntryBase):
+    id: str
+    created_at: str
+
+
 # ------- Attendance -------
 class AttendanceCheckIn(BaseModel):
     lat: float
