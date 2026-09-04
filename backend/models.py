@@ -667,6 +667,35 @@ class CommissionRule(CommissionRuleBase):
     created_at: str
 
 
+# ------- Commission payouts (approved, persisted snapshot of a computed
+# commission — the live /analytics/commissions computation is re-run every
+# request, but once a manager approves a row it's frozen here so a later
+# rule change or extra payment doesn't silently move an already-approved
+# number) -------
+class CommissionPayoutBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    period: str                         # "YYYY-MM"
+    payee: str
+    payee_type: str = "user"            # user / architect — mirrors CommissionRule
+    division: Optional[str] = ""
+    base_amount: float = 0              # sum of cleared (received) payments the payout is computed from
+    rate_pct: float = 0
+    flat_amount: float = 0
+    commission_amount: float = 0
+    status: str = "Approved"            # Approved / Paid — a row only exists once approved
+    approved_by: Optional[str] = ""
+    remarks: Optional[str] = ""
+
+
+class CommissionPayoutCreate(CommissionPayoutBase):
+    pass
+
+
+class CommissionPayout(CommissionPayoutBase):
+    id: str
+    created_at: str
+
+
 # ------- Requirements (structured need captured before a quote) -------
 class RequirementBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

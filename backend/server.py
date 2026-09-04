@@ -605,7 +605,7 @@ ALL_MODULE_IDS = [
     "inventory", "stock-ledger", "inv-analytics", "projects", "dwsurvey",
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
     "outstanding", "data-centre", "financial-year", "workflows", "business",
-    "roles", "teams", "roles-permissions",
+    "roles", "teams", "roles-permissions", "executive", "commissions",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -1408,6 +1408,121 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
     }
 
 
+# ------- Executive Analytics: pipeline funnel, revenue, commissions -------
+
+@api.get("/analytics/pipeline")
+async def analytics_pipeline(user: dict = Depends(get_current_user)):
+    """Stage-by-stage quote funnel. `conversion_rate` is each stage's share
+    of the whole pipeline (bounded 0-100%) — not a ratio to the "New" stage,
+    which is usually near-empty at any snapshot since leads move through it
+    quickly, and would make later stages read as impossible ">100%"."""
+    quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
+    funnel = _calc_stage_split(quotes)
+    total = sum(s["count"] for s in funnel) or 1
+    for s in funnel:
+        s["conversion_rate"] = round((s["count"] / total) * 100, 1)
+    won = next((s["count"] for s in funnel if s["stage"] == "Won"), 0)
+    return {"funnel": funnel, "total": sum(s["count"] for s in funnel), "won": won,
+            "win_rate": round((won / total) * 100, 1) if total else 0}
+
+
+@api.get("/analytics/revenue")
+async def analytics_revenue(user: dict = Depends(get_current_user)):
+    """Revenue collected (paid) vs pending (balance_due) across sales and
+    invoices — the two places money is actually owed to the business."""
+    sales, invoices = await asyncio.gather(
+        db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
+        db.invoices.find(tenancy.scope({}, "invoices", user), {"_id": 0}).to_list(5000),
+    )
+    collected = sum((s.get("paid") or 0) for s in sales) + sum((i.get("paid") or 0) for i in invoices)
+    pending = sum((s.get("balance") or 0) for s in sales) + sum((i.get("balance") or 0) for i in invoices)
+    total = collected + pending
+    return {
+        "collected": collected, "pending": pending, "total": total,
+        "collection_rate": round((collected / total) * 100, 1) if total else 0,
+        "monthly": _calc_monthly_revenue(sales),
+    }
+
+
+def _match_commission_rule(rules: List[dict], payee: str, division: str) -> Optional[dict]:
+    """Most specific active "user" rule wins: an exact payee match beats the
+    payee=="" wildcard, and (independently) an exact division match beats
+    the division=="" wildcard."""
+    candidates = [r for r in rules if r.get("active", True) and r.get("payee_type") == "user"
+                  and (not r.get("payee") or r.get("payee") == payee)
+                  and (not r.get("division") or r.get("division") == division)]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda r: (r.get("payee") == payee, r.get("division") == division), reverse=True)
+    return candidates[0]
+
+
+@api.get("/analytics/commissions")
+async def analytics_commissions(period: str = "", user: dict = Depends(get_current_user)):
+    """Sales-rep commission payouts for `period` ("YYYY-MM", default this
+    month), computed live from cleared (received) payments against each
+    sale's owning rep. A row already approved for this period is returned
+    as-is (frozen), not recomputed — approval is a snapshot, not a view."""
+    await _require_permission("commissions", "view", user)
+    period = period or now_iso()[:7]
+
+    payments, sales, rules, existing = await asyncio.gather(
+        db.payments.find(tenancy.scope({"direction": "In"}, "payments", user), {"_id": 0}).to_list(5000),
+        db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
+        db.commission_rules.find(tenancy.scope({}, "commission_rules", user), {"_id": 0}).to_list(500),
+        db.commission_payouts.find(tenancy.scope({"period": period}, "commission_payouts", user), {"_id": 0}).to_list(500),
+    )
+    sales_by_id = {s["id"]: s for s in sales}
+    grouped: dict[tuple, float] = {}
+    for p in payments:
+        if (p.get("date") or "")[:7] != period:
+            continue
+        sale = sales_by_id.get(p.get("against_sale_id") or "")
+        payee = sale.get("by_user") if sale else ""
+        if not sale or not payee:
+            continue
+        key = (payee, sale.get("division") or "")
+        grouped[key] = grouped.get(key, 0.0) + (p.get("amount") or 0)
+
+    existing_by_key = {(e["payee"], e.get("division", "")): e for e in existing}
+    rows = []
+    for (payee, division), base_amount in grouped.items():
+        if (payee, division) in existing_by_key:
+            rows.append(existing_by_key[(payee, division)])
+            continue
+        rule = _match_commission_rule(rules, payee, division)
+        rate_pct = rule.get("rate_pct", 0) if rule else 0
+        flat_amount = rule.get("flat_amount", 0) if rule else 0
+        rows.append({
+            "id": "", "period": period, "payee": payee, "payee_type": "user", "division": division,
+            "base_amount": base_amount, "rate_pct": rate_pct, "flat_amount": flat_amount,
+            "commission_amount": round(base_amount * rate_pct / 100 + flat_amount, 2),
+            "status": "Draft" if rule else "No Rule",
+        })
+    return sorted(rows, key=lambda r: -r["commission_amount"])
+
+
+@api.post("/analytics/commissions/approve")
+async def approve_commission(payload: dict, user: dict = Depends(get_current_user)):
+    """Freezes one computed commission row from /analytics/commissions into
+    a persisted, tenant-scoped CommissionPayout — store managers only."""
+    await _require_permission("commissions", "approve", user)
+    doc = {
+        "id": new_id(), "created_at": now_iso(),
+        "period": str(payload.get("period") or ""), "payee": str(payload.get("payee") or ""),
+        "payee_type": str(payload.get("payee_type") or "user"), "division": str(payload.get("division") or ""),
+        "base_amount": payload.get("base_amount") or 0, "rate_pct": payload.get("rate_pct") or 0,
+        "flat_amount": payload.get("flat_amount") or 0,
+        "commission_amount": payload.get("commission_amount") or 0,
+        "status": "Approved", "approved_by": user.get("name", ""),
+    }
+    if not doc["period"] or not doc["payee"]:
+        raise HTTPException(status_code=400, detail="period and payee are required")
+    tenancy.stamp(doc, "commission_payouts", user)
+    await db.commission_payouts.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
 
 # ------- Projects Execution Endpoints -------
 @api.get("/projects", response_model=List[dict])
@@ -1481,6 +1596,7 @@ from models import (
     StockMovementCreate, StockMovement,
     QuoteLineCreate, QuoteLine, DWOpeningCreate, DWOpening,
     CommissionRuleCreate, CommissionRule,
+    CommissionPayoutCreate, CommissionPayout,
     RequirementCreate, Requirement, ProductConfigCreate, ProductConfig,
     CustomerCreate, Customer, GST_DEFAULT,
 )
@@ -1523,13 +1639,15 @@ DEFAULT_ROLES = [
         {"module": m, "view": True, "create": True, "edit": True, "delete": True,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
-                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements")
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
+                  "commissions")
     ]},
     {"name": "Management", "permissions": [
         {"module": m, "view": True, "create": False, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
-                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements")
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
+                  "commissions")
     ]},
     {"name": "Sales Manager", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
@@ -1551,7 +1669,7 @@ DEFAULT_ROLES = [
     {"name": "Accounts", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
-        for m in ("petty", "invoice-gen")
+        for m in ("petty", "invoice-gen", "commissions")
     ]},
     {"name": "Marketing", "permissions": []},
 ]

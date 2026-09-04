@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Bell, Columns3, FileText, Receipt, UserPlus, Sparkles,
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
-  Layers, Database, ClipboardList, Wand2, Contact, PhoneCall,
+  Layers, Database, ClipboardList, Wand2, Contact, PhoneCall, TrendingUp,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
@@ -44,6 +44,7 @@ export const NAV = [
   { app: "relations", id: "meetplan", to: "/meets", label: "Meet Planner", icon: CalendarDays },
 
   // Command
+  { app: "command", id: "executive", to: "/executive", label: "Executive Analytics", icon: TrendingUp },
   { app: "command", id: "reports", to: "/reports", label: "Reports", icon: PieChart },
   { app: "command", id: "tasks", to: "/tasks", label: "Tasks", icon: ListTodo },
   { app: "command", id: "attendance", to: "/attendance", label: "Attendance", icon: Fingerprint },
