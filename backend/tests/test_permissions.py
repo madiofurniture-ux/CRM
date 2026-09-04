@@ -80,3 +80,21 @@ def test_is_last_active_admin():
     # An inactive admin doesn't count as the "last" active one.
     users3 = [{"id": "A1", "role": "admin", "active": False}]
     assert perm.is_last_active_admin("A1", users3) is False
+
+
+def test_p3_gated_modules_are_registered():
+    """Every module a DEFAULT_ROLES entry grants must be a real ALL_MODULE_IDS
+    page id, and the P3 modules (visitors/architects/tasks/invoice-gen/
+    meetplan/petty/requirements) must actually be enforced somewhere — a typo
+    in server.py's make_crud(module=...) wiring silently disables enforcement
+    rather than erroring, so this is the only thing that would catch it."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import server
+
+    granted_modules = {p["module"] for role in server.DEFAULT_ROLES for p in role["permissions"]}
+    assert granted_modules <= set(server.ALL_MODULE_IDS)
+
+    p3_modules = {"visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements"}
+    assert p3_modules <= granted_modules
+    admin_perms = next(r for r in server.DEFAULT_ROLES if r["name"] == "Administrator")["permissions"]
+    assert p3_modules <= {p["module"] for p in admin_perms}

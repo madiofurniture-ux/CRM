@@ -6,7 +6,10 @@ import { Save, Plus, Trash2 } from "lucide-react";
 
 // The only modules the backend actually enforces this matrix against today
 // (server.py's make_crud module= calls) — matches AuthContext's GATED_MODULES.
-const MODULES = ["leads", "customers", "quotes", "sales", "inventory"];
+const MODULES = [
+  "leads", "customers", "quotes", "sales", "inventory",
+  "visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
+];
 const ACTIONS = ["view", "create", "edit", "delete", "approve", "export"];
 const SCOPES = ["own", "team", "all"];
 

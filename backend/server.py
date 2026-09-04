@@ -1066,18 +1066,18 @@ async def _sync_lead_followup_task(lead: dict, user: dict):
     await db.tasks.insert_one(dict(task))
 
 
-make_crud(api, "visitors", "visitors", VisitorCreate, Visitor)
+make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, module="visitors")
 make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task,
           module="leads", owner_field="assigned_to")
-make_crud(api, "architects", "architects", ArchitectCreate, Architect)
+make_crud(api, "architects", "architects", ArchitectCreate, Architect, module="architects")
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user")
 make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user")
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory")
-make_crud(api, "tasks", "tasks", TaskCreate, Task)
-make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice)
-make_crud(api, "meets", "meets", MeetCreate, Meet)
+make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to")
+make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user")
+make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by")
 
-make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash)
+make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty", owner_field="by_user")
 
 
 # ---------- Dated, multi-entry follow-up/remarks ledger ----------
@@ -1488,7 +1488,8 @@ from models import (
 make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
 make_crud(api, "dw-openings", "dw_openings", DWOpeningCreate, DWOpening)
 make_crud(api, "commission-rules", "commission_rules", CommissionRuleCreate, CommissionRule)
-make_crud(api, "requirements", "requirements", RequirementCreate, Requirement)
+make_crud(api, "requirements", "requirements", RequirementCreate, Requirement,
+          module="requirements", owner_field="by_user")
 make_crud(api, "product-configs", "product_configs", ProductConfigCreate, ProductConfig)
 make_crud(api, "customers", "customers", CustomerCreate, Customer, module="customers")
 # No owner-name field exists on Customer (it's a post-sale lifecycle record,
@@ -1510,38 +1511,48 @@ async def _audit(action: str, user: dict, detail: str = ""):
         logger.warning(f"Audit log write failed ({action}): {e}")
 
 
-# One entry per module named in the P2 spec's example matrix/role list.
-# Modules with no backend enforcement wired up yet (HR/Accounts/Marketing —
-# those features don't exist yet, see server.py's ALL_MODULE_IDS / P1) get
-# an empty or minimal permissions list; they exist as role *names* now so an
-# admin isn't limited to hardcoded choices, per "roles must be configurable."
+# One entry per module named in the P2 spec's example matrix/role list, plus
+# the P3 modules (visitors/architects/tasks/invoice-gen/meetplan/petty/
+# requirements) that gained backend enforcement once their make_crud() calls
+# were tagged with module=/owner_field=. HR/Marketing still get no backend
+# enforcement (those features don't exist yet, see ALL_MODULE_IDS / P1) and
+# keep an empty permissions list; they exist as role *names* now so an admin
+# isn't limited to hardcoded choices, per "roles must be configurable."
 DEFAULT_ROLES = [
     {"name": "Administrator", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": True,
          "approve": True, "export": True, "scope": "all"}
-        for m in ("leads", "customers", "quotes", "sales", "inventory")
+        for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements")
     ]},
     {"name": "Management", "permissions": [
         {"module": m, "view": True, "create": False, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
-        for m in ("leads", "customers", "quotes", "sales", "inventory")
+        for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements")
     ]},
     {"name": "Sales Manager", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": True, "export": False, "scope": "team"}
-        for m in ("leads", "customers", "quotes", "sales")
+        for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
+                  "tasks", "meetplan", "requirements")
     ]},
     {"name": "Salesperson", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": False, "export": False, "scope": "own"}
-        for m in ("leads", "customers", "quotes", "sales")
+        for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
+                  "tasks", "meetplan", "requirements")
     ]},
     {"name": "Inventory", "permissions": [
         {"module": "inventory", "view": True, "create": True, "edit": True,
          "delete": True, "approve": False, "export": True, "scope": "all"},
     ]},
     {"name": "HR", "permissions": []},
-    {"name": "Accounts", "permissions": []},
+    {"name": "Accounts", "permissions": [
+        {"module": m, "view": True, "create": True, "edit": True, "delete": False,
+         "approve": True, "export": True, "scope": "all"}
+        for m in ("petty", "invoice-gen")
+    ]},
     {"name": "Marketing", "permissions": []},
 ]
 
