@@ -2896,6 +2896,7 @@ _dispatch_task = None
 
 
 async def _dispatch_tick():
+    await agent_tasks.reconcile(db)
     claimed = await agent_tasks.claim_batch(db, n=10, worker_id="inline")
     for task in claimed:
         handler = _TASK_HANDLERS.get(task["kind"])

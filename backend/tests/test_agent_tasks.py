@@ -89,3 +89,49 @@ def test_complete_task_is_idempotent():
         assert doc2["outcome"] == "done"
         assert doc2["finished_at"] == first_finished_at
     asyncio.run(run())
+
+
+def test_reconcile_releases_dead_leases():
+    async def run():
+        db = _db()
+        task_id = await agent_tasks.schedule_task(db, USER, kind="x", subject_id="s1", due_at="2000-01-01")
+        # Simulate a claim whose worker died before completing — lease
+        # expired, attempts still under the cap.
+        await db.agent_tasks.update_one({"id": task_id},
+                                         {"$set": {"leased_until": "2000-01-01T00:00:00", "attempts": 1}})
+        result = await agent_tasks.reconcile(db)
+        assert result["released"] == 1
+        doc = await db.agent_tasks.find_one({"id": task_id})
+        assert doc["leased_until"] == ""  # reclaimable again
+        assert doc["finished_at"] == ""   # not closed — just unleashed
+        claimed = await agent_tasks.claim_batch(db, n=10, worker_id="w1")
+        assert [t["id"] for t in claimed] == [task_id]
+    asyncio.run(run())
+
+
+def test_reconcile_retires_exhausted_attempts():
+    async def run():
+        db = _db()
+        task_id = await agent_tasks.schedule_task(db, USER, kind="x", subject_id="s1", due_at="2000-01-01")
+        await db.agent_tasks.update_one({"id": task_id}, {"$set": {"attempts": 3}})
+        result = await agent_tasks.reconcile(db)
+        assert result["retired"] == 1
+        doc = await db.agent_tasks.find_one({"id": task_id})
+        assert doc["finished_at"] != ""
+        assert doc["outcome"] == "abandoned"
+        # No longer claimable — it's finished.
+        claimed = await agent_tasks.claim_batch(db, n=10, worker_id="w1")
+        assert claimed == []
+    asyncio.run(run())
+
+
+def test_reconcile_leaves_live_leases_alone():
+    async def run():
+        db = _db()
+        task_id = await agent_tasks.schedule_task(db, USER, kind="x", subject_id="s1", due_at="2000-01-01")
+        await db.agent_tasks.update_one({"id": task_id}, {"$set": {"leased_until": "2999-01-01T00:00:00"}})
+        result = await agent_tasks.reconcile(db)
+        assert result == {"released": 0, "retired": 0}
+        doc = await db.agent_tasks.find_one({"id": task_id})
+        assert doc["leased_until"] == "2999-01-01T00:00:00"  # untouched
+    asyncio.run(run())

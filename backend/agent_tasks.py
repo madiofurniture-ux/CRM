@@ -113,3 +113,24 @@ async def complete_task(db, task_id: str, outcome: str) -> None:
     silent no-op — a guarded update, not a blind set."""
     await db.agent_tasks.update_one({"id": task_id, "finished_at": ""},
                                      {"$set": {"finished_at": m.now_iso(), "outcome": outcome[:500]}})
+
+
+async def reconcile(db) -> dict:
+    """Pure risk-reduction pass, run at the top of every dispatch tick
+    before claim_batch — same ordering as the reference queue's stale-row
+    sweep. Releases leases that died without the handler ever completing
+    (crash, timeout) so the task becomes reclaimable again, and retires
+    tasks that exhausted their attempts so they stop being polled forever.
+    Both are broad update_many calls — safe because they only ever relax a
+    stuck state, never race against a live claim (a task mid-lease has
+    leased_until in the future and is untouched by either branch)."""
+    now = m.now_iso()
+    released = await db.agent_tasks.update_many(
+        {"finished_at": "", "leased_until": {"$ne": "", "$lt": now}, "attempts": {"$lt": 3}},
+        {"$set": {"leased_until": ""}},
+    )
+    retired = await db.agent_tasks.update_many(
+        {"finished_at": "", "attempts": {"$gte": 3}},
+        {"$set": {"finished_at": now, "outcome": "abandoned"}},
+    )
+    return {"released": released.modified_count, "retired": retired.modified_count}
