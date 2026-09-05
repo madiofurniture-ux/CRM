@@ -5,13 +5,14 @@ import LogTimeline from "@/components/LogTimeline";
 import CustomerResolver from "@/components/CustomerResolver";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
+import CsvImportModal from "@/components/CsvImportModal";
 import EmptyState from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import useCustomFields from "@/hooks/useCustomFields";
 import api from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { toast } from "sonner";
-import { Phone, Calendar, X, Trash2, MessageSquare, MessageCircle, Sparkles } from "lucide-react";
+import { Phone, Calendar, X, Trash2, MessageSquare, MessageCircle, Sparkles, Download, Upload } from "lucide-react";
 
 const waLink = (phone, text = "") => {
   const ph = String(phone || "").replace(/\D/g, "").slice(-10);
@@ -33,6 +34,7 @@ export default function Leads() {
   const [logLead, setLogLead] = useState(null);
   const { defs: customFieldDefs } = useCustomFields("lead");
   const [customFilters, setCustomFilters] = useState({});
+  const [showImport, setShowImport] = useState(false);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", phone: "", source: "Walk-in",
     reference: "", attended_by: "", confidence_level: "", team_id: "",
@@ -85,9 +87,30 @@ export default function Leads() {
   };
   const remove = async (id) => { if (!window.confirm("Delete?")) return; await api.delete(`/leads/${id}`); load(); };
 
+  const exportCsv = async () => {
+    const { data } = await api.get("/leads/export.csv", { skipCache: true, responseType: "blob" });
+    const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `leads_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   return (
     <>
-      <Topbar title="Leads" subtitle={`${filtered.length} leads · pipeline ${inrFull(filtered.reduce((a, b) => a + (b.value || 0), 0))}`} onAdd={() => { setForm(empty); setShow(true); }} addLabel="Add Lead" />
+      <Topbar
+        title="Leads"
+        subtitle={`${filtered.length} leads · pipeline ${inrFull(filtered.reduce((a, b) => a + (b.value || 0), 0))}`}
+        onAdd={() => { setForm(empty); setShow(true); }}
+        addLabel="Add Lead"
+        actions={
+          <>
+            <button onClick={exportCsv} title="Export CSV" className="p-2 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" data-testid="leads-export"><Download size={16} /></button>
+            <button onClick={() => setShowImport(true)} title="Import CSV" className="p-2 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" data-testid="leads-import-open"><Upload size={16} /></button>
+          </>
+        }
+      />
       <div className="p-6" data-testid="leads-page">
         <div className="flex flex-wrap gap-2 mb-3">
           <input placeholder="Search lead, remarks…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="leads-search" />
@@ -279,6 +302,10 @@ export default function Leads() {
             </div>
           </div>
         </div>
+      )}
+
+      {showImport && (
+        <CsvImportModal entity="leads" onClose={() => setShowImport(false)} onImported={load} />
       )}
     </>
   );

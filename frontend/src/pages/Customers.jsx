@@ -3,13 +3,14 @@ import Topbar from "@/components/Topbar";
 import JourneyDrawer from "@/components/JourneyDrawer";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
+import CsvImportModal from "@/components/CsvImportModal";
 import EmptyState from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import useCustomFields from "@/hooks/useCustomFields";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
-import { Compass, X, Pencil, Phone, MessageCircle, Contact } from "lucide-react";
+import { Compass, X, Pencil, Phone, MessageCircle, Contact, Download, Upload } from "lucide-react";
 
 const waLink = (phone, text = "") => {
   const ph = String(phone || "").replace(/\D/g, "").slice(-10);
@@ -35,6 +36,7 @@ export default function Customers() {
   const [teams, setTeams] = useState([]);
   const { defs: customFieldDefs } = useCustomFields("customer");
   const [customFilters, setCustomFilters] = useState({});
+  const [showImport, setShowImport] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -44,6 +46,16 @@ export default function Customers() {
   const updateStage = async (c, stage) => {
     await api.put(`/customers/${c.id}`, { ...c, stage });
     setRows((p) => p.map((x) => x.id === c.id ? { ...x, stage } : x));
+  };
+
+  const exportCsv = async () => {
+    const { data } = await api.get("/customers/export.csv", { skipCache: true, responseType: "blob" });
+    const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `customers_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
   useEffect(() => {
     load();
@@ -97,7 +109,18 @@ export default function Customers() {
 
   return (
     <>
-      <Topbar title="Customers" subtitle={`${filtered.length} of ${rows.length}`} onAdd={openNew} addLabel="New Customer" />
+      <Topbar
+        title="Customers"
+        subtitle={`${filtered.length} of ${rows.length}`}
+        onAdd={openNew}
+        addLabel="New Customer"
+        actions={
+          <>
+            <button onClick={exportCsv} title="Export CSV" className="p-2 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" data-testid="customers-export"><Download size={16} /></button>
+            <button onClick={() => setShowImport(true)} title="Import CSV" className="p-2 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" data-testid="customers-import-open"><Upload size={16} /></button>
+          </>
+        }
+      />
       <div className="p-6" data-testid="customers-page">
         <div className="flex flex-wrap gap-2 mb-4">
           <input
@@ -266,6 +289,10 @@ export default function Customers() {
       )}
 
       <JourneyDrawer phone={jny?.phone} name={jny?.name} onClose={() => setJny(null)} />
+
+      {showImport && (
+        <CsvImportModal entity="customers" onClose={() => setShowImport(false)} onImported={load} />
+      )}
     </>
   );
 }

@@ -6,12 +6,14 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
+import json
 import logging
 import time
 import asyncio
 from typing import List, Optional
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError as PydanticValidationError
 from pymongo.errors import DuplicateKeyError
 from starlette.middleware.cors import CORSMiddleware
@@ -22,6 +24,7 @@ import tenancy
 import permissions as perm
 import notifications as notif
 import agent_tasks
+import csv_engine
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -2924,6 +2927,52 @@ async def delete_custom_field_def(item_id: str, user: dict = Depends(require_adm
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
+
+
+# ------- Bulk CSV export/import for Leads and Customers. One pair of
+# routes for both entities (path param), not four — see csv_engine.py. -------
+def _csv_entity(entity: str) -> str:
+    if entity not in csv_engine.ENTITY_CONFIG:
+        raise HTTPException(status_code=404, detail="Unknown entity")
+    return entity
+
+
+@api.get("/{entity}/export.csv")
+async def csv_export(entity: str, user: dict = Depends(get_current_user)):
+    entity = _csv_entity(entity)
+    await _require_permission(entity, "export", user)
+    filename = f"{entity}_{lc.today_iso()}.csv"
+    return StreamingResponse(
+        csv_engine.stream_csv_rows(db, entity, user),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api.post("/{entity}/import/preview")
+async def csv_import_preview(entity: str, file: UploadFile = File(...),
+                              user: dict = Depends(get_current_user)):
+    entity = _csv_entity(entity)
+    await _require_permission(entity, "create", user)
+    raw = await file.read()
+    if len(raw) > csv_engine.MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=400, detail="File too large")
+    return await csv_engine.preview_import(db, entity, user, raw.decode("utf-8", errors="replace"))
+
+
+@api.post("/{entity}/import/commit")
+async def csv_import_commit(entity: str, file: UploadFile = File(...), mapping: str = Form(...),
+                             user: dict = Depends(get_current_user)):
+    entity = _csv_entity(entity)
+    await _require_permission(entity, "create", user)
+    raw = await file.read()
+    if len(raw) > csv_engine.MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=400, detail="File too large")
+    try:
+        mapping_dict = json.loads(mapping)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="mapping must be a JSON object")
+    return await csv_engine.commit_import(db, entity, user, raw.decode("utf-8", errors="replace"), mapping_dict)
 
 
 @api.get("/journey/{phone}")
