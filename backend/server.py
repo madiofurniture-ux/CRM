@@ -1566,6 +1566,22 @@ async def cashbook_entries_export(user: dict = Depends(get_current_user)):
     )
 
 
+@api.get("/reports/project-pnl")
+async def project_pnl_report(user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    return await csv_engine.compute_project_pnl(db, user)
+
+
+@api.get("/reports/project-pnl/export.csv")
+async def project_pnl_export(user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "export", user)
+    return StreamingResponse(
+        csv_engine.stream_project_pnl_csv(db, user),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="project_pnl_{lc.today_iso()}.csv"'},
+    )
+
+
 # ---------- Dated, multi-entry follow-up/remarks ledger ----------
 # Only these three entities carry a `log` field on their model (Lead/Quote/
 # Project) — the plain `remarks` string on each stays untouched so existing

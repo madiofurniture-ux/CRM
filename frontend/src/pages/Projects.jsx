@@ -4,7 +4,7 @@ import StageBadge from "@/components/StageBadge";
 import LogTimeline from "@/components/LogTimeline";
 import PettyCashBurnWidget from "@/components/PettyCashBurnWidget";
 import api from "@/lib/api";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, marginTone } from "@/lib/format";
 import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2, MessageSquare } from "lucide-react";
 import { toast } from "sonner";
 
@@ -48,6 +48,7 @@ export default function Projects() {
     quote_ref: "",
   };
   const [form, setForm] = useState(emptyForm);
+  const [pnlByProject, setPnlByProject] = useState({});
 
   const load = async () => {
     try {
@@ -60,6 +61,9 @@ export default function Projects() {
 
   useEffect(() => {
     load();
+    api.get("/reports/project-pnl")
+      .then(({ data }) => setPnlByProject(Object.fromEntries(data.projects.map((p) => [p.project_id, p]))))
+      .catch(() => setPnlByProject({}));
   }, []);
 
   const filtered = useMemo(() => {
@@ -272,7 +276,7 @@ export default function Projects() {
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between text-xs font-mono mb-4 pt-1">
+                  <div className="flex items-center justify-between text-xs font-mono mb-2 pt-1">
                     <div>
                       <div className="text-[10px] text-[var(--ink-3)] uppercase tracking-wider">Value</div>
                       <div className="font-bold text-[var(--ink)]">{inrFull(p.value)}</div>
@@ -282,6 +286,16 @@ export default function Projects() {
                       <div className="font-bold text-[var(--moss)]">{inrFull(p.paid)}</div>
                     </div>
                   </div>
+                  {pnlByProject[p.id]?.wallet_count > 0 && (() => {
+                    const tone = marginTone(pnlByProject[p.id].margin_pct);
+                    return (
+                      <div className="mb-4">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${tone.bg} ${tone.text}`} data-testid={`project-margin-${p.id}`}>
+                          Margin {pnlByProject[p.id].margin_pct}%
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 <div className="pt-3 border-t border-[var(--border-light)] flex items-center justify-between gap-2">
@@ -464,7 +478,17 @@ export default function Projects() {
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setLogProject(null)}>
           <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
-              <h3 className="font-heading font-semibold text-lg">Follow-ups — {logProject.project_no}</h3>
+              <h3 className="font-heading font-semibold text-lg flex items-center gap-2">
+                Follow-ups — {logProject.project_no}
+                {pnlByProject[logProject.id]?.wallet_count > 0 && (() => {
+                  const tone = marginTone(pnlByProject[logProject.id].margin_pct);
+                  return (
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${tone.bg} ${tone.text}`} data-testid={`project-drawer-margin-${logProject.id}`}>
+                      Margin {pnlByProject[logProject.id].margin_pct}%
+                    </span>
+                  );
+                })()}
+              </h3>
               <button onClick={() => setLogProject(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
