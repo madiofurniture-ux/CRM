@@ -27,12 +27,13 @@
 # (frontend/src/lib/api.js). Proxying here keeps the browser on one origin, so
 # the backend needs no CORS configuration.
 #
-# CHANGE THIS to your deployed backend URL. The host below follows from the
-# service name in render.yaml ("madio-crm-api"); confirm it in the Render
-# dashboard once the backend is live.
+# STAGING BRANCH: this must point at the staging backend (its own database —
+# server.py refuses to boot otherwise, see APP_ENV=staging check), never at
+# production's madio-crm-api.onrender.com. Confirm the host in the Render
+# dashboard once the madio-crm-api-staging service is live.
 [[redirects]]
   from = "/api/*"
-  to = "https://madio-crm-api.onrender.com/api/:splat"
+  to = "https://madio-crm-api-staging.onrender.com/api/:splat"
   status = 200
   force = true
 

@@ -54,7 +54,8 @@ ENDPOINTS = [
 WRITE_ENDPOINTS = {
     "leads": {
         "create": "/api/leads",
-        "payload": lambda tag: {"date": TODAY, "name": f"Iso Lead {tag}"},
+        "payload": lambda tag: {"date": TODAY, "name": f"Iso Lead {tag}", "phone": f"90000{tag[-5:]}",
+                                 "source": "Walk-in", "reference": "Isolation Test"},
         "put": lambda i: f"/api/leads/{i}", "delete": lambda i: f"/api/leads/{i}",
     },
     "quotes": {

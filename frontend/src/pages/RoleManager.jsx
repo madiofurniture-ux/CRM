@@ -9,21 +9,38 @@ import { Shield, Trash2, X, Plus } from "lucide-react";
 const COLORS = ["#C85A32", "#4A5D4E", "#D48B30", "#B24040", "#1A1D1A", "#5C7AA1"];
 
 export default function RoleManager() {
-  const { user: me } = useAuth();
+  const { user: me, tenant, roles } = useAuth();
   const [users, setUsers] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [show, setShow] = useState(false);
-  const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: ALL_PAGES.map((p) => p.id) };
+  // A disabled module can't be granted to anyone — no point offering it here.
+  const pages = tenant?.enabled_modules
+    ? ALL_PAGES.filter((p) => tenant.enabled_modules.includes(p.id))
+    : ALL_PAGES;
+  const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: pages.map((p) => p.id), team_id: "", role_id: "", active: true };
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const load = async () => { const { data } = await api.get("/auth/users"); setUsers(data); };
+  const load = async () => {
+    const { data } = await api.get("/auth/users");
+    setUsers(data);
+    const { data: t } = await api.get("/teams");
+    setTeams(t);
+  };
   useEffect(() => { load(); }, []);
+
+  const teamName = (id) => teams.find((t) => t.id === id)?.name || "";
+  const roleName = (id) => roles.find((r) => r.id === id)?.name || "";
 
   const openNew = () => { setEditing(null); setForm(empty); setShow(true); };
   const openEdit = (u) => {
     setEditing(u);
-    setForm({ username: u.username, name: u.name, pin: "", role: u.role, icon: u.icon, color: u.color, pages: u.pages ?? ALL_PAGES.map((p) => p.id) });
+    setForm({
+      username: u.username, name: u.name, pin: "", role: u.role, icon: u.icon, color: u.color,
+      pages: u.pages ?? pages.map((p) => p.id), team_id: u.team_id || "", role_id: u.role_id || "",
+      active: u.active !== false,
+    });
     setShow(true);
   };
 
@@ -36,7 +53,11 @@ export default function RoleManager() {
     setSaving(true);
     try {
       if (editing) {
-        const payload = { name: form.name, role: form.role, icon: form.icon, color: form.color, pages: form.role === "admin" ? null : form.pages };
+        const payload = {
+          name: form.name, role: form.role, icon: form.icon, color: form.color,
+          pages: form.role === "admin" ? null : form.pages,
+          team_id: form.team_id, role_id: form.role_id, active: form.active,
+        };
         if (form.pin) payload.pin = form.pin;
         await api.put(`/auth/users/${editing.id}`, payload);
         toast.success("User updated");
@@ -77,17 +98,28 @@ export default function RoleManager() {
                     <div className="text-xs font-mono text-[var(--ink-3)]">@{u.username}</div>
                   </div>
                 </div>
-                {u.role === "admin" && (
-                  <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-[var(--brand)]">
-                    <Shield size={11} /> Admin
-                  </span>
-                )}
-                {u.role === "accountant" && (
-                  <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-[var(--moss)]">
-                    <Shield size={11} /> Accountant
-                  </span>
-                )}
+                <div className="flex flex-col items-end gap-1">
+                  {u.role === "admin" && (
+                    <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-[var(--brand)]">
+                      <Shield size={11} /> Admin
+                    </span>
+                  )}
+                  {u.role === "accountant" && (
+                    <span className="flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-[var(--moss)]">
+                      <Shield size={11} /> Accountant
+                    </span>
+                  )}
+                  {u.active === false && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--danger)]">Inactive</span>
+                  )}
+                </div>
               </div>
+              {(u.team_id || u.role_id) && (
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {u.team_id && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--ink-2)]">Team: {teamName(u.team_id)}</span>}
+                  {u.role_id && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--brand-soft)] text-[var(--brand)]">{roleName(u.role_id)}</span>}
+                </div>
+              )}
               <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Pages</div>
               <div className="flex flex-wrap gap-1">
                 {u.pages == null ? (
@@ -135,11 +167,33 @@ export default function RoleManager() {
                   ))}
                 </div>
               </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Team</label>
+                <select value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                  <option value="">— None —</option>
+                  {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              {form.role !== "admin" && (
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Permission Role</label>
+                  <select value={form.role_id} onChange={(e) => setForm({ ...form, role_id: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                    <option value="">— Legacy page access (below) —</option>
+                    {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  </select>
+                </div>
+              )}
+              {editing && (
+                <label className="flex items-center gap-2 text-sm col-span-2">
+                  <input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} className="accent-[var(--brand)]" />
+                  Active
+                </label>
+              )}
               {form.role !== "admin" && (
                 <div className="col-span-2">
                   <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-2">Page access</label>
                   <div className="grid grid-cols-2 gap-2">
-                    {ALL_PAGES.map((p) => (
+                    {pages.map((p) => (
                       <label key={p.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:bg-[var(--surface-2)] text-sm">
                         <input type="checkbox" checked={form.pages.includes(p.id)} onChange={() => togglePage(p.id)} className="accent-[var(--brand)]" />
                         {p.label}

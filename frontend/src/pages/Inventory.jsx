@@ -14,6 +14,22 @@ const STATUSES = ["In Stock", "Display", "Sold", "Missing", "Reserved"];
 // So display logic never needs its own role check; it just shows what's there.
 const vendorLabel = (r) => [r.vendor_code, r.vendor].filter(Boolean).join(" · ");
 
+// Location color legend — color is always paired with the name/code, never
+// the only identifier. Matches lc.normalize_location()'s canonical labels.
+const LOCATION_COLORS = [
+  { match: /ground floor/i, code: "GF", color: "#3B82F6" },
+  { match: /1st floor/i, code: "F1", color: "#10B981" },
+  { match: /2nd floor/i, code: "F2", color: "#EAB308" },
+  { match: /warehouse/i, code: "WH", color: "#EF4444" },
+  { match: /dispatch/i, code: "DSP", color: "#8B5CF6" },
+];
+function locationBadge(location) {
+  const loc = String(location || "");
+  const hit = LOCATION_COLORS.find((l) => l.match.test(loc));
+  if (!hit) return loc || null;
+  return <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full shrink-0" style={{ background: hit.color }} />{loc} <span className="text-[10px] text-[var(--ink-3)]">({hit.code})</span></span>;
+}
+
 export default function Inventory() {
   const [rows, setRows] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -25,20 +41,22 @@ export default function Inventory() {
   const [show, setShow] = useState(false);
   const [editingId, setEditingId] = useState(null); // null = creating, else the item id being edited
   const [saving, setSaving] = useState(false);
-  const empty = { sku: "", name: "", category: "", vendor_id: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "", image_url: "" };
+  const empty = { sku: "", name: "", category: "", vendor_id: "", vendor: "", vendor_code: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "", image_url: "" };
   const [form, setForm] = useState(empty);
 
   const vendorOptions = useMemo(() => vendors.map((v) => ({
     id: v.id,
     name: v.name || v.code,
     label: v.name ? `${v.code} — ${v.name}` : v.code,
+    code: v.code,
   })), [vendors]);
 
   const openEdit = (item) => {
     // copy only the editable fields so stray keys (id/created_at) never round-trip into the form
     setForm({
       sku: item.sku || "", name: item.name || "", category: item.category || "",
-      vendor_id: item.vendor_id || "", model_no: item.model_no || "", qty: item.qty ?? 1,
+      vendor_id: item.vendor_id || "", vendor: item.vendor || "", vendor_code: item.vendor_code || "",
+      model_no: item.model_no || "", qty: item.qty ?? 1,
       cost: item.cost ?? 0, mrp: item.mrp ?? 0, margin: item.margin ?? 0,
       status: item.status || "In Stock", location: item.location || "", image_url: item.image_url || "",
     });
@@ -70,6 +88,7 @@ export default function Inventory() {
   const save = async () => {
     if (saving) return;
     if (!form.sku.trim() || !form.name.trim()) { toast.error("SKU and Name are required"); return; }
+    if (!editingId && !form.vendor_code.trim()) { toast.error("Vendor code is required for new items"); return; }
     const margin = form.cost > 0 ? +(((form.mrp - form.cost) / form.cost) * 100).toFixed(2) : 0;
     setSaving(true);
     try {
@@ -81,7 +100,7 @@ export default function Inventory() {
         toast.success("Item added");
       }
       setShow(false); setForm(empty); setEditingId(null); load();
-    } catch { toast.error("Save failed"); }
+    } catch (e) { toast.error(e?.response?.data?.detail?.toString?.() || "Save failed"); }
     finally { setSaving(false); }
   };
 
@@ -111,7 +130,7 @@ export default function Inventory() {
       />
       <div className="p-6" data-testid="inventory-page">
         <div className="flex flex-wrap gap-2 mb-4">
-          <input placeholder="Search SKU, name, vendor…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="inv-search" />
+          <input placeholder="Search SKU, name, vendor, vendor code…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="inv-search" />
           <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             <option>All</option>
             {STATUSES.map((s) => <option key={s}>{s}</option>)}
@@ -151,7 +170,7 @@ export default function Inventory() {
                   </div>
                   <div className="mt-auto pt-2 border-t border-[var(--border-light)] flex items-center justify-between gap-2 text-[11px] text-[var(--ink-3)]">
                     <span className="truncate">{vendorLabel(i)}</span>
-                    <span className="shrink-0">{i.location}</span>
+                    <span className="shrink-0">{locationBadge(i.location)}</span>
                   </div>
                 </div>
               </div>
@@ -168,6 +187,7 @@ export default function Inventory() {
                     <th className="text-left font-semibold px-4 py-2.5">Name</th>
                     <th className="text-left font-semibold px-4 py-2.5">Category</th>
                     <th className="text-left font-semibold px-4 py-2.5">Vendor</th>
+                    <th className="text-left font-semibold px-4 py-2.5">Vendor Code</th>
                     <th className="text-right font-semibold px-4 py-2.5">Qty</th>
                     <th className="text-right font-semibold px-4 py-2.5">Cost</th>
                     <th className="text-right font-semibold px-4 py-2.5">MRP</th>
@@ -182,13 +202,14 @@ export default function Inventory() {
                       <td className="px-4 py-3 font-mono text-xs">{i.sku}</td>
                       <td className="px-4 py-3 font-medium">{i.name}</td>
                       <td className="px-4 py-3 text-[var(--ink-2)]">{i.category}</td>
-                      <td className="px-4 py-3 text-[var(--ink-2)]">{vendorLabel(i)}</td>
+                      <td className="px-4 py-3 text-[var(--ink-2)]">{i.vendor}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-[var(--ink-2)]">{i.vendor_code || "—"}</td>
                       <td className="px-4 py-3 text-right font-mono">{i.qty}</td>
                       <td className="px-4 py-3 text-right font-mono text-[var(--ink-2)]">{inrFull(i.cost)}</td>
                       <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(i.mrp)}</td>
                       <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{i.margin?.toFixed(0)}%</td>
                       <td className="px-4 py-3"><StageBadge stage={i.status} /></td>
-                      <td className="px-4 py-3 text-[var(--ink-2)] text-xs">{i.location}</td>
+                      <td className="px-4 py-3 text-[var(--ink-2)] text-xs">{locationBadge(i.location)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -209,12 +230,12 @@ export default function Inventory() {
               <F l="SKU" v={form.sku} oc={(v) => setForm({ ...form, sku: v })} t2="if-sku" />
               <F l="Name" v={form.name} oc={(v) => setForm({ ...form, name: v })} t2="if-name" />
               <F l="Category" v={form.category} oc={(v) => setForm({ ...form, category: v })} />
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Vendor</label>
+              <div className="col-span-2">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Vendor{!editingId ? " *" : ""}</label>
                 <SearchSelect
                   options={vendorOptions}
                   value={form.vendor_id}
-                  onChange={(id) => setForm({ ...form, vendor_id: id })}
+                  onChange={(id, opt) => setForm({ ...form, vendor_id: id, vendor: opt ? opt.name : "", vendor_code: opt ? opt.code : "" })}
                   placeholder="Search vendor…"
                   emptyLabel="No vendors found"
                   testId="if-vendor"

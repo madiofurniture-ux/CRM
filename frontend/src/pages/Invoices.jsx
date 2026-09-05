@@ -19,7 +19,7 @@ export default function Invoices() {
   const [editing, setEditing] = useState(null);
   const [printRow, setPrintRow] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [office, setOffice] = useState({ name: "MADIO", address: "", gstin: "", invoice_prefix: "MAD" });
+  const [office, setOffice] = useState({ name: "", address: "", gstin: "", invoice_prefix: "INV" });
 
   const empty = {
     invoice_no: "", date: new Date().toISOString().slice(0, 10),

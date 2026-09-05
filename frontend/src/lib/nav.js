@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Bell, Columns3, FileText, Receipt, UserPlus, Sparkles,
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
-  Layers, Database,
+  Layers, Database, ClipboardList, Wand2, Contact, PhoneCall, TrendingUp, Wallet,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
@@ -17,7 +17,10 @@ export const NAV = [
   // Sell
   { app: "sell", id: "leads", to: "/leads", label: "Leads", icon: Sparkles },
   { app: "sell", id: "pipeline", to: "/pipeline", label: "Pipeline", icon: Columns3 },
+  { app: "sell", id: "requirements", to: "/requirements", label: "Requirements", icon: ClipboardList },
+  { app: "sell", id: "configurator", to: "/configurator", label: "Configurator", icon: Wand2 },
   { app: "sell", id: "quotes", to: "/quotes", label: "Deals / Quotes", icon: FileText },
+  { app: "sell", id: "quote-followups", to: "/quotes/followups", label: "Follow-ups", icon: PhoneCall },
   { app: "sell", id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
   { app: "sell", id: "visitors", to: "/visitors", label: "Visitors", icon: UserPlus },
 
@@ -34,12 +37,15 @@ export const NAV = [
   // Money
   { app: "money", id: "invoice-gen", to: "/invoices", label: "Tax Invoices", icon: FileSpreadsheet },
   { app: "money", id: "petty", to: "/petty-cash", label: "Petty Cash", icon: IndianRupee },
+  { app: "money", id: "cashbook", to: "/cashbook", label: "Cashbooks", icon: Wallet },
 
   // Relations
+  { app: "relations", id: "customers", to: "/customers", label: "Customers", icon: Contact },
   { app: "relations", id: "architects", to: "/architects", label: "Architects", icon: Building2 },
   { app: "relations", id: "meetplan", to: "/meets", label: "Meet Planner", icon: CalendarDays },
 
   // Command
+  { app: "command", id: "executive", to: "/executive", label: "Executive Analytics", icon: TrendingUp },
   { app: "command", id: "reports", to: "/reports", label: "Reports", icon: PieChart },
   { app: "command", id: "tasks", to: "/tasks", label: "Tasks", icon: ListTodo },
   { app: "command", id: "attendance", to: "/attendance", label: "Attendance", icon: Fingerprint },

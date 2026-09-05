@@ -7,18 +7,26 @@ load_dotenv(ROOT_DIR / ".env")
 
 import os
 import re
+import json
 import logging
 import time
 import asyncio
 from typing import List, Optional
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
+from pydantic import ValidationError as PydanticValidationError
+from pymongo.errors import DuplicateKeyError
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 
 import tenancy
 import lifecycle as lc
+import permissions as perm
+import notifications as notif
+import agent_tasks
+import csv_engine
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -35,8 +43,13 @@ from models import (
     InvoiceCreate, Invoice,
     MeetCreate, Meet,
     PettyCashCreate, PettyCash,
+    CashbookCreate, Cashbook, CashbookEntryCreate, CashbookEntry,
+    CashbookEntryApproval, CashbookTopUp, CashbookExpense,
+    RecordContactCreate, RecordContact,
     AttendanceCheckIn, OfficeSettings,
-    ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project
+    ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
+    TeamCreate, Team, RoleCreate, Role,
+    SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
 )
 from seed import seed_all
 
@@ -46,6 +59,21 @@ logger = logging.getLogger("madio")
 # Mongo
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 db_name = os.environ.get("DB_NAME", "madio_crm")
+APP_ENV = os.environ.get("APP_ENV", "production").strip().lower()
+APP_VERSION = os.environ.get("APP_VERSION", "1.0.0")
+
+# A staging deploy pointed at the production database by a copy-pasted env
+# var is how staging testing corrupts real customer data. There's no way to
+# know the actual prod connection string from here, so the guardrail is a
+# naming convention: a staging environment's database must say so. Fails
+# fast, before the Mongo client (and everything downstream) is constructed.
+if APP_ENV == "staging" and "staging" not in db_name.lower():
+    raise RuntimeError(
+        f"APP_ENV=staging but DB_NAME={db_name!r} doesn't look like a staging "
+        "database. Refusing to start — this almost certainly means staging is "
+        "about to write into production data. Set DB_NAME to something "
+        "containing 'staging' (e.g. 'madio_crm_staging').")
+
 # Deliberately no JWT_SECRET default here: setdefault would put a key that is
 # readable in this public repo into the environment, and auth.py could no longer
 # tell that it was missing. See auth._secret().
@@ -54,6 +82,13 @@ db = client[db_name]
 
 app = FastAPI(title="MADIO CRM")
 app.state.db = db
+
+# kind -> async def handler(db, task) -> str (outcome text). Defined here,
+# before any route/hook code below registers into it, so a handler can be
+# added right next to the make_crud call it belongs to (e.g.
+# lead_followup_reminder next to the leads make_crud call) instead of all
+# being listed in one place far from what schedules them.
+_TASK_HANDLERS: dict = {}
 
 @app.get("/")
 async def app_root():
@@ -72,6 +107,13 @@ api = APIRouter(prefix="/api")
 @api.get("/")
 async def root():
     return {"app": "MADIO CRM", "status": "ok"}
+
+
+@api.get("/health")
+async def health():
+    """No secrets, no auth required — just enough for a deploy pipeline or a
+    person staring at a URL to tell staging and production apart at a glance."""
+    return {"status": "ok", "environment": APP_ENV, "version": APP_VERSION}
 
 
 
@@ -194,6 +236,16 @@ async def list_users(user: dict = Depends(require_admin)):
     return users
 
 
+@api.get("/users/directory")
+async def users_directory(user: dict = Depends(get_current_user)):
+    """id/name only, open to any signed-in user — for "Attended By" style
+    dropdowns that must link to a real user without exposing the full
+    /auth/users admin listing (roles, page grants, pin hashes) to everyone."""
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    return await db.users.find(
+        {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+
+
 @api.post("/auth/users")
 async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
     if await db.users.find_one({"username": payload.username.lower().strip()}):
@@ -228,8 +280,23 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
     update = {k: v for k, v in payload.model_dump(exclude_none=True).items() if k != "pin"}
     if payload.pin:
         update["pin_hash"] = hash_pin(payload.pin)
+    demoting = "role" in update and update["role"] != "admin" and existing.get("role") == "admin"
+    deactivating = update.get("active") is False and existing.get("role") == "admin"
+    if demoting or deactivating:
+        all_users = await db.users.find({"tenant_id": tid}, {"_id": 0, "id": 1, "role": 1, "active": 1}).to_list(500)
+        if perm.is_last_active_admin(user_id, all_users):
+            raise HTTPException(status_code=400,
+                detail="Cannot remove the last administrator — the entity would be unmanageable")
     if update:
         await db.users.update_one({"id": user_id, "tenant_id": tid}, {"$set": update})
+        if "role_id" in update:
+            await _audit("user_role_assigned", user, f"{existing.get('name')} -> role {update['role_id'] or '(none)'}")
+        if "team_id" in update:
+            await _audit("user_team_assigned", user, f"{existing.get('name')} -> team {update['team_id'] or '(none)'}")
+        if update.get("active") is False:
+            await _audit("user_deactivated", user, existing.get("name", ""))
+        elif update.get("active") is True:
+            await _audit("user_activated", user, existing.get("name", ""))
     out = await db.users.find_one({"id": user_id, "tenant_id": tid}, {"_id": 0, "pin_hash": 0})
     return out
 
@@ -255,6 +322,12 @@ async def delete_user(user_id: str, current: dict = Depends(require_admin)):
     if current["id"] == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     tid = tenancy.tenant_of(current) or "__no_tenant__"
+    target = await db.users.find_one({"id": user_id, "tenant_id": tid}, {"role": 1})
+    if target and target.get("role") == "admin":
+        all_users = await db.users.find({"tenant_id": tid}, {"_id": 0, "id": 1, "role": 1, "active": 1}).to_list(500)
+        if perm.is_last_active_admin(user_id, all_users):
+            raise HTTPException(status_code=400,
+                detail="Cannot delete the last administrator — the entity would be unmanageable")
     res = await db.users.delete_one({"id": user_id, "tenant_id": tid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
@@ -269,7 +342,7 @@ async def delete_user(user_id: str, current: dict = Depends(require_admin)):
 # ══════════════════════════════════════════════════════════════════
 FY_COLLECTIONS = {"quotes", "sales", "visitors", "leads", "invoices",
                   "petty_cash", "payments", "meets", "tasks",
-                  "projects", "dw_surveys", "stock_movements"}
+                  "projects", "dw_surveys", "stock_movements", "requirements"}
 FY_DATE_FIELD = {"tasks": "due", "projects": "start_date"}   # which field holds the record's date
 
 
@@ -385,8 +458,105 @@ async def fy_query(collection: str, base: dict = None, user: dict = None) -> dic
 
 
 # ---------- Generic CRUD helper (per-collection) ----------
-def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model, normalize=None, redact=None):
-    """`normalize(doc, existing, user)` — optional async hook run on the payload
+def validate_partial_update(create_model, existing: dict, payload: dict) -> dict:
+    """
+    Run PUT payloads through the same Pydantic model POST uses, merged onto
+    the existing record, so a malformed/malicious value (blank phone, junk
+    name, out-of-range confidence) can't bypass rules enforced at creation
+    — PUT used to take a raw dict straight to $set with no validation at all.
+
+    Only blocks on fields the caller actually *changed*: most edit forms in
+    this app resend the whole record on every PUT (not a diff), so "key
+    present in payload" would treat every field as touched and force a
+    legacy record missing e.g. vendor_code/phone to backfill it just to
+    save an unrelated edit. Comparing against the existing value instead
+    means a resent-but-unchanged blank field is left alone.
+    """
+    changed = {k for k, v in payload.items() if str(existing.get(k) or "") != str(v or "")}
+    merged = {**existing, **payload}
+    try:
+        validated = create_model(**merged).model_dump()
+    except PydanticValidationError as e:
+        blocking = [err for err in e.errors() if err.get("loc") and err["loc"][0] in changed]
+        if blocking:
+            detail = "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in blocking)
+            raise HTTPException(status_code=422, detail=detail)
+        return payload  # only a field the caller didn't actually change is invalid — don't block this edit
+    return {k: validated[k] for k in payload if k in validated}
+
+
+async def _raise_duplicate(collection: str, doc: dict, user: dict):
+    """Turn a raw Mongo unique-index violation into a message a UI can show
+    (and, for customers, enough to link straight to the existing record) —
+    a bare DuplicateKeyError used to surface as an unhandled 500."""
+    if collection == "customers" and doc.get("phone"):
+        dupe = await db.customers.find_one(
+            tenancy.scope({"phone": doc["phone"]}, "customers", user), {"_id": 0, "id": 1, "name": 1})
+        if dupe:
+            raise HTTPException(status_code=409, detail={
+                "message": "A customer with this phone number already exists.",
+                "existing_id": dupe["id"], "existing_name": dupe.get("name", ""),
+            })
+    raise HTTPException(status_code=409, detail="A record with this value already exists.")
+
+
+async def _roles_for(user: dict) -> list:
+    return await db.roles.find(tenancy.scope({}, "roles", user), {"_id": 0}).to_list(200)
+
+
+async def _team_member_names(user: dict) -> list:
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    team_id = user.get("team_id")
+    if not team_id:
+        return [user.get("name", "")]
+    rows = await db.users.find({"tenant_id": tid, "team_id": team_id}, {"_id": 0, "name": 1}).to_list(500)
+    return [r["name"] for r in rows] or [user.get("name", "")]
+
+
+async def _require_permission(module: str, action: str, user: dict) -> list:
+    """Raises 403 if `user` can't `action` on `module`; returns the tenant's
+    roles (so a caller that also needs scope doesn't re-fetch them)."""
+    roles = await _roles_for(user)
+    if not perm.can(user, roles, module, action):
+        raise HTTPException(status_code=403, detail=f"Not permitted: {action} {module}")
+    return roles
+
+
+async def _scope_owners(user: dict, roles: list, module: str) -> Optional[list]:
+    """None = no scope restriction ("all"). Otherwise the list of owner-field
+    values ("own" -> just this user's name, "team" -> the whole team's)."""
+    scope = perm.scope_for(user, roles, module)
+    if scope == "all":
+        return None
+    if scope == "team":
+        return await _team_member_names(user)
+    return [user.get("name", "")]
+
+
+def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
+              after_write=None, module: str = None, owner_field: str = None, on_create=None,
+              normalize=None, redact=None):
+    """`after_write`, when given, runs after a successful create/update with the
+    saved document and the acting user — for side effects that must stay in
+    lockstep with this collection's own writes (e.g. leads syncing a
+    Follow-up Task from follow_up_date). It never runs on delete or on a
+    failed/no-op write, and its errors are not caught here — a hook that
+    can't be trusted to succeed shouldn't be wired in as one.
+
+    `on_create`, when given, runs only on a successful create (never on
+    update) — for side effects that must fire exactly once per record, like
+    a "your quote was created" customer notification that would otherwise
+    re-fire on every subsequent edit if it were wired through after_write.
+
+    `module`/`owner_field` (P2), when given, gate every route through
+    permissions.py's Role matrix on top of the tenant boundary above it:
+    view/create/edit/delete must be explicitly granted (admins and legacy
+    accounts without a role_id are unaffected — see permissions.py), and a
+    non-"all" scope filters `_list` and blocks `_update`/`_delete` on
+    records outside it (as a 404, not a 403 — a record outside your scope
+    should look exactly like a record that doesn't exist).
+
+    `normalize(doc, existing, user)` — optional async hook run on the payload
     dict before it's written, for validation/normalization shared by create AND
     update (e.g. Indian phone format + uniqueness). It mutates `doc` in place and
     may raise HTTPException. `existing` is the current DB document on update,
@@ -397,15 +567,23 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     `redact(item, user) -> dict` — optional sync hook applied to every item this
     collection sends back (list/create/update), for role-gated fields like a
     vendor's name. Must return a new dict, not mutate in place — the caller
-    doesn't control aliasing between list entries."""
+    doesn't control aliasing between list entries.
+    """
     @router.get(f"/{base}")
     async def _list(user: dict = Depends(get_current_user)):
         q = await fy_query(collection, user=user)
+        if module:
+            roles = await _require_permission(module, "view", user)
+            owners = await _scope_owners(user, roles, module)
+            if owners is not None and owner_field:
+                q[owner_field] = {"$in": owners}
         items = await db[collection].find(q, {"_id": 0}).sort("created_at", -1).to_list(3000)
         return [redact(i, user) for i in items] if redact else items
 
     @router.post(f"/{base}")
     async def _create(payload: create_model, user: dict = Depends(get_current_user)):
+        if module:
+            await _require_permission(module, "create", user)
         doc = payload.model_dump()
         doc["id"] = new_id()
         doc["created_at"] = now_iso()
@@ -415,8 +593,15 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         stamp_fy(doc, collection)
         stamp_closure(doc, collection)
         tenancy.stamp(doc, collection, user)
-        await db[collection].insert_one(doc)
+        try:
+            await db[collection].insert_one(doc)
+        except DuplicateKeyError:
+            await _raise_duplicate(collection, doc, user)
         doc.pop("_id", None)
+        if after_write:
+            await after_write(doc, user)
+        if on_create:
+            await on_create(doc, user)
         return redact(doc, user) if redact else doc
 
     @router.put(f"/{base}/{{item_id}}")
@@ -430,19 +615,39 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         existing = await db[collection].find_one(owned)
         if not existing:
             raise HTTPException(status_code=404, detail="Not found")
+        if module:
+            roles = await _require_permission(module, "edit", user)
+            owners = await _scope_owners(user, roles, module)
+            if owners is not None and owner_field and existing.get(owner_field) not in owners:
+                raise HTTPException(status_code=404, detail="Not found")
         if normalize:
             await normalize(payload, existing, user)
+        payload = validate_partial_update(create_model, existing, payload)
         await validate_stage(collection, payload, user)
         stamp_fy(payload, collection)
         stamp_closure(payload, collection, existing)
-        await db[collection].update_one(owned, {"$set": payload})
+        try:
+            await db[collection].update_one(owned, {"$set": payload})
+        except DuplicateKeyError:
+            await _raise_duplicate(collection, {**existing, **payload}, user)
         out = await db[collection].find_one(owned, {"_id": 0})
+        if after_write:
+            await after_write(out, user)
         return redact(out, user) if redact else out
 
     @router.delete(f"/{base}/{{item_id}}")
     async def _delete(item_id: str, user: dict = Depends(get_current_user)):
         # Scoped so one tenant can never delete another's record by id.
-        res = await db[collection].delete_one(tenancy.scope({"id": item_id}, collection, user))
+        owned = tenancy.scope({"id": item_id}, collection, user)
+        if module:
+            existing = await db[collection].find_one(owned)
+            if not existing:
+                raise HTTPException(status_code=404, detail="Not found")
+            roles = await _require_permission(module, "delete", user)
+            owners = await _scope_owners(user, roles, module)
+            if owners is not None and owner_field and existing.get(owner_field) not in owners:
+                raise HTTPException(status_code=404, detail="Not found")
+        res = await db[collection].delete_one(owned)
         if res.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Not found")
         return {"ok": True}
@@ -450,6 +655,27 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
 
 DEFAULT_TENANT = os.environ.get("DEFAULT_TENANT", "madio")
 DEFAULT_TENANT_NAME = os.environ.get("DEFAULT_TENANT_NAME", "MADIO Furniture")
+
+# Every sidebar/permission page id that exists today — the set enabled_modules
+# is validated against and defaults to (so an un-configured tenant behaves
+# exactly as before: every module on).
+ALL_MODULE_IDS = [
+    "dashboard", "alerts", "reports", "pipeline", "quotes", "quote-followups",
+    "sales", "visitors", "leads", "requirements", "configurator", "architects",
+    "inventory", "stock-ledger", "inv-analytics", "projects", "dwsurvey",
+    "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
+    "outstanding", "data-centre", "financial-year", "workflows", "business",
+    "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
+    "record-contacts", "custom-fields",
+]
+
+# Entity/branding config layered onto a tenant doc — additive fields, not a
+# new collection, so an existing tenant with none of these set just falls
+# back to these defaults (the current MADIO look), unchanged.
+TENANT_CONFIG_DEFAULTS = {
+    "display_name": "MADIO CRM", "short_name": "MADIO", "logo_url": "",
+    "primary_color": "", "secondary_color": "", "enabled_modules": ALL_MODULE_IDS,
+}
 
 
 async def backfill_tenant() -> int:
@@ -503,10 +729,37 @@ async def backfill_fy() -> int:
 # ══════════════════════════════════════════════════════════════════
 @api.get("/tenants/me")
 async def tenant_me(user: dict = Depends(get_current_user)):
-    """Which business the caller belongs to — drives branding and limits."""
+    """Which business the caller belongs to — drives branding and which
+    modules its sidebar/permission grid shows."""
     tid = tenancy.tenant_of(user)
     t = await db.tenants.find_one({"id": tid}, {"_id": 0}) if tid else None
-    return t or {"id": tid, "name": tid or "(no tenant)", "status": "unknown"}
+    t = t or {"id": tid, "name": tid or "(no tenant)", "status": "unknown"}
+    for k, v in TENANT_CONFIG_DEFAULTS.items():
+        t.setdefault(k, v)
+    return t
+
+
+@api.put("/tenants/me/config")
+async def tenant_update_config(payload: dict, user: dict = Depends(require_admin)):
+    """Business admin edits their own tenant's branding/enabled modules —
+    unlike POST /tenants (platform onboarding), any tenant's admin may call
+    this for themselves."""
+    tid = tenancy.tenant_of(user)
+    if not tid:
+        raise HTTPException(status_code=400, detail="No tenant on this account")
+    update = {}
+    for k in ("display_name", "short_name", "logo_url", "primary_color", "secondary_color"):
+        if k in payload:
+            update[k] = str(payload[k] or "")
+    if "enabled_modules" in payload:
+        mods = payload["enabled_modules"]
+        if not isinstance(mods, list) or not all(m in ALL_MODULE_IDS for m in mods):
+            raise HTTPException(status_code=400, detail="enabled_modules must be a subset of the known module ids")
+        update["enabled_modules"] = mods
+    if not update:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    await db.tenants.update_one({"id": tid}, {"$set": update})
+    return await tenant_me(user)
 
 
 @api.get("/tenants")
@@ -920,8 +1173,9 @@ async def normalize_lead(doc: dict, existing: dict | None, user: dict) -> None:
     if "source" in doc and doc.get("source") != "Architect":
         doc["architect_id"] = ""
         doc["architect_name"] = ""
-    if "remarks" in doc:
-        doc["remarks"] = _shape_remarks(doc["remarks"])
+    # Lead.remarks is deliberately a plain string (see LeadBase) — not shaped
+    # into the dated-entries list here the way Visitor.remarks is; the dated
+    # multi-entry history for Lead lives in the separate `log` field instead.
 
 
 async def normalize_architect(doc: dict, existing: dict | None, user: dict) -> None:
@@ -1026,19 +1280,333 @@ async def normalize_inventory(doc: dict, existing: dict | None, user: dict) -> N
     doc["vendor_code"] = v.get("code", "")
 
 
-make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, normalize=normalize_visitor)
-make_crud(api, "leads", "leads", LeadCreate, Lead, normalize=normalize_lead)
-make_crud(api, "architects", "architects", ArchitectCreate, Architect, normalize=normalize_architect)
-make_crud(api, "quotes", "quotes", QuoteCreate, Quote)
-make_crud(api, "sales", "sales", SaleCreate, Sale)
 make_crud(api, "vendors", "vendors", VendorCreate, Vendor, normalize=normalize_vendor, redact=redact_vendor)
 make_crud(api, "floors", "floors", FloorCreate, Floor, normalize=normalize_floor)
-make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, normalize=normalize_inventory, redact=redact_vendor_field)
-make_crud(api, "tasks", "tasks", TaskCreate, Task)
-make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice)
-make_crud(api, "meets", "meets", MeetCreate, Meet)
+# visitors/leads/architects/quotes/sales/inventory/tasks/invoices/meets are
+# registered once, further down, with BOTH this file's normalize=/redact=
+# hooks and the permission-matrix module=/owner_field= kwargs merged in —
+# two separate make_crud() calls for the same collection would silently
+# shadow one side's hooks (whichever FastAPI kept was undefined), so those
+# duplicate registrations that used to be here were removed, not kept.
 
-make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash)
+
+async def _sync_lead_followup_task(lead: dict, user: dict):
+    """
+    Unify Lead.follow_up_date with Task-backed follow-ups: keep exactly one
+    Follow-up Task (ref=lead id, ref_type="lead") mirroring the date, so
+    Tasks.jsx/Alerts.jsx and the 11-stage pipeline bar (lc.build_pipeline)
+    see lead follow-ups without server.py's dashboard stats or Leads.jsx
+    having to change — they keep reading follow_up_date directly.
+    """
+    lead_id = lead.get("id")
+    if not lead_id:
+        return
+    due = str(lead.get("follow_up_date") or "").strip()
+    owned = tenancy.scope({"ref": lead_id, "ref_type": "lead", "category": "Follow-up"}, "tasks", user)
+    existing = await db.tasks.find_one(owned)
+    if not due:
+        if existing:
+            await db.tasks.delete_one(owned)  # date cleared -> nothing left to follow up on
+        return
+    if existing:
+        if existing.get("due_date") != due or existing.get("done"):
+            await db.tasks.update_one(owned, {"$set": {"due_date": due, "done": False}})
+        return
+    task = {
+        "id": new_id(), "created_at": now_iso(),
+        "title": f"Follow up — {lead.get('name', '')}", "priority": "Medium",
+        "due_date": due, "assigned_to": lead.get("assigned_to", ""),
+        "category": "Follow-up", "ref": lead_id, "ref_type": "lead",
+        "notes": "", "done": False, "created_by": user.get("name", ""),
+    }
+    stamp_fy(task, "tasks")
+    tenancy.stamp(task, "tasks", user)
+    await db.tasks.insert_one(dict(task))
+
+
+async def _notify_quote_created(doc: dict, user: dict):
+    await notif.notify(db, user, "quote_created", to=doc.get("phone", ""),
+                        customer_name=doc.get("customer", ""), ref_type="quote", ref_id=doc.get("quote_no", ""))
+
+
+async def _notify_order_confirmed(doc: dict, user: dict):
+    # Sale has no phone field of its own (extra="ignore" drops it if a
+    # caller sends one) — the source Quote is the only place to look it up.
+    phone = ""
+    if doc.get("quote_id"):
+        q = await db.quotes.find_one(tenancy.scope({"id": doc["quote_id"]}, "quotes", user), {"_id": 0, "phone": 1})
+        phone = (q or {}).get("phone", "")
+    await notif.notify(db, user, "order_confirmed", to=phone,
+                        customer_name=doc.get("customer", ""), ref_type="sale", ref_id=doc.get("sale_no", ""))
+
+
+async def _schedule_lead_followup_reminder(doc: dict, user: dict):
+    """Phase 3 of the agent-task-queue rollout: the first real consumer,
+    proving the queue end-to-end with low blast radius. Only fires when the
+    rep didn't already set an explicit follow-up date at creation — nothing
+    to remind about otherwise."""
+    if doc.get("follow_up_date"):
+        return
+    from datetime import datetime, timedelta, timezone
+    due = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
+    await agent_tasks.schedule_task(db, user, kind="lead_followup_reminder", subject_type="lead",
+                                     subject_id=doc["id"], due_at=due)
+
+
+async def _handle_lead_followup_reminder(db, task: dict) -> str:
+    """Reuses the Lead's own log[] ledger — the same {at, by, text, kind}
+    follow-up-history convention already used for rep-entered notes — rather
+    than stretching notifications.py's customer-facing contract for an
+    internal reminder that was never meant to reach the customer."""
+    lead = await db.leads.find_one({"id": task.get("subject_id", "")}, {"_id": 0})
+    if not lead:
+        return "lead not found"
+    if lead.get("stage") in ("Won", "Lost"):
+        return "lead already closed"
+    if lead.get("follow_up_date") or lead.get("log"):
+        return "already followed up"
+    entry = {"at": now_iso(), "by": "System", "by_id": "",
+             "text": "No follow-up logged since creation — reminder raised.", "kind": "reminder"}
+    await db.leads.update_one({"id": lead["id"]}, {"$push": {"log": entry}})
+    return "reminder logged"
+
+
+_TASK_HANDLERS["lead_followup_reminder"] = _handle_lead_followup_reminder
+
+
+make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, module="visitors", normalize=normalize_visitor)
+make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task,
+          module="leads", owner_field="assigned_to", on_create=_schedule_lead_followup_reminder,
+          normalize=normalize_lead)
+make_crud(api, "architects", "architects", ArchitectCreate, Architect, module="architects", normalize=normalize_architect)
+make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user",
+          on_create=_notify_quote_created)
+make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user",
+          on_create=_notify_order_confirmed)
+make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory",
+          normalize=normalize_inventory, redact=redact_vendor_field)
+make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to")
+make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user")
+make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by")
+
+make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty", owner_field="by_user")
+
+async def _init_cashbook_balance(doc: dict, user: dict):
+    """current_balance always starts equal to initial_balance, regardless
+    of what a caller sent for current_balance — a fresh book's running
+    total isn't a caller-supplied value, it's derived."""
+    if doc.get("current_balance") != doc.get("initial_balance"):
+        owned = tenancy.scope({"id": doc["id"]}, "cashbooks", user)
+        await db.cashbooks.update_one(owned, {"$set": {"current_balance": doc["initial_balance"]}})
+        doc["current_balance"] = doc["initial_balance"]
+
+
+make_crud(api, "cashbooks", "cashbooks", CashbookCreate, Cashbook, module="cashbook",
+          on_create=_init_cashbook_balance)
+
+
+@api.get("/cashbooks/{cashbook_id}/entries")
+async def list_cashbook_entries(cashbook_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    q = tenancy.scope({"cashbook_id": cashbook_id}, "cashbook_entries", user)
+    return await db.cashbook_entries.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+
+
+@api.post("/cashbooks/{cashbook_id}/entries")
+async def create_cashbook_entry(cashbook_id: str, payload: CashbookEntryCreate, user: dict = Depends(get_current_user)):
+    """Atomic: the entry write and the book's running-balance update must
+    never drift apart, so the balance is derived with $inc (never a
+    read-then-write) the same way _settle_sale_balance/create_payment do
+    it for sales/invoices elsewhere in this file."""
+    await _require_permission("cashbook", "create", user)
+    owned = tenancy.scope({"id": cashbook_id}, "cashbooks", user)
+    book = await db.cashbooks.find_one(owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Cashbook not found")
+    if book.get("status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Cashbook is archived")
+    if payload.cashbook_id != cashbook_id:
+        raise HTTPException(status_code=400, detail="cashbook_id mismatch")
+
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    doc["entry_person"] = doc.get("entry_person") or user.get("name", "")
+    tenancy.stamp(doc, "cashbook_entries", user)
+    await db.cashbook_entries.insert_one(dict(doc))
+    doc.pop("_id", None)
+
+    delta = doc["amount"] if doc["type"] == "CASH_IN" else -doc["amount"]
+    await db.cashbooks.update_one(owned, {"$inc": {"current_balance": delta}})
+    return doc
+
+
+@api.delete("/cashbook-entries/{entry_id}")
+async def delete_cashbook_entry(entry_id: str, user: dict = Depends(get_current_user)):
+    """Reverses exactly what create_cashbook_entry did — the opposite $inc,
+    never a recompute-from-scratch, so concurrent entries on the same book
+    can't be lost to a read-modify-write race."""
+    await _require_permission("cashbook", "delete", user)
+    owned = tenancy.scope({"id": entry_id}, "cashbook_entries", user)
+    entry = await db.cashbook_entries.find_one(owned, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    await db.cashbook_entries.delete_one(owned)
+    delta = -entry["amount"] if entry["type"] == "CASH_IN" else entry["amount"]
+    book_owned = tenancy.scope({"id": entry["cashbook_id"]}, "cashbooks", user)
+    await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": delta}})
+    return {"ok": True}
+
+
+# ------- Cashbook top-up / expense / approval — dedicated routes for the
+# wallet UI. Unlike the generic create_cashbook_entry above (kept as-is for
+# backward compatibility), an expense here is created Pending and only
+# debits the book's balance once approved; a top-up is pre-trusted credit
+# and lands immediately, same as before. -------
+@api.post("/cashbooks/{cashbook_id}/top-up")
+async def cashbook_top_up(cashbook_id: str, payload: CashbookTopUp, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "create", user)
+    owned = tenancy.scope({"id": cashbook_id}, "cashbooks", user)
+    book = await db.cashbooks.find_one(owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Cashbook not found")
+    if book.get("status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Cashbook is archived")
+
+    doc = payload.model_dump()
+    doc.update(cashbook_id=cashbook_id, type="CASH_IN", status="Approved",
+                id=new_id(), created_at=now_iso())
+    doc["entry_person"] = doc.get("entry_person") or user.get("name", "")
+    tenancy.stamp(doc, "cashbook_entries", user)
+    await db.cashbook_entries.insert_one(dict(doc))
+    doc.pop("_id", None)
+    await db.cashbooks.update_one(owned, {"$inc": {"current_balance": doc["amount"]}})
+    return doc
+
+
+@api.post("/cashbooks/{cashbook_id}/expense")
+async def cashbook_expense(cashbook_id: str, payload: CashbookExpense, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "create", user)
+    owned = tenancy.scope({"id": cashbook_id}, "cashbooks", user)
+    book = await db.cashbooks.find_one(owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Cashbook not found")
+    if book.get("status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Cashbook is archived")
+
+    doc = payload.model_dump()
+    doc.update(cashbook_id=cashbook_id, type="CASH_OUT", status="Pending",
+                id=new_id(), created_at=now_iso())
+    doc["entry_person"] = doc.get("entry_person") or user.get("name", "")
+    tenancy.stamp(doc, "cashbook_entries", user)
+    await db.cashbook_entries.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc  # no balance change yet — see cashbook_entry_approve
+
+
+@api.post("/cashbook-entries/{entry_id}/approve")
+async def cashbook_entry_approve(entry_id: str, payload: CashbookEntryApproval, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "approve", user)
+    owned = tenancy.scope({"id": entry_id}, "cashbook_entries", user)
+    entry = await db.cashbook_entries.find_one(owned, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.get("status") != "Pending":
+        raise HTTPException(status_code=400, detail="Entry is not pending approval")
+
+    book_owned = tenancy.scope({"id": entry["cashbook_id"]}, "cashbooks", user)
+    book = await db.cashbooks.find_one(book_owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Cashbook not found")
+
+    updates = {
+        "status": "Approved" if payload.approved else "Rejected",
+        "approved_by": user.get("name", ""),
+        "approved_at": now_iso(),
+    }
+    if payload.approved:
+        # The debit lands only now — check strict_overdraft against the
+        # balance as it stands at approval time, not at creation time.
+        if book.get("strict_overdraft") and book["current_balance"] < entry["amount"]:
+            raise HTTPException(status_code=400, detail="Approving this would overdraw the cashbook")
+        await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": -entry["amount"]}})
+    await db.cashbook_entries.update_one(owned, {"$set": updates})
+    return await db.cashbook_entries.find_one(owned, {"_id": 0})
+
+
+@api.get("/projects/{project_id}/petty-cash/summary")
+async def project_petty_cash_summary(project_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    books = await db.cashbooks.find(
+        tenancy.scope({"project_id": project_id}, "cashbooks", user), {"_id": 0}).to_list(200)
+    book_ids = [b["id"] for b in books]
+    balance_total = sum(b.get("current_balance", 0) for b in books)
+
+    burn_total = pending_total = 0.0
+    if book_ids:
+        entries = await db.cashbook_entries.find(
+            tenancy.scope({"cashbook_id": {"$in": book_ids}, "type": "CASH_OUT"}, "cashbook_entries", user),
+            {"_id": 0}).to_list(5000)
+        burn_total = sum(e["amount"] for e in entries if e.get("status") == "Approved")
+        pending_total = sum(e["amount"] for e in entries if e.get("status") == "Pending")
+
+    return {
+        "project_id": project_id, "wallet_count": len(books),
+        "balance_total": balance_total, "burn_total": burn_total, "pending_total": pending_total,
+    }
+
+
+@api.get("/cashbook-entries/export.csv")
+async def cashbook_entries_export(user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "export", user)
+    return StreamingResponse(
+        csv_engine.stream_cashbook_entries_csv(db, user),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="cashbook_entries_{lc.today_iso()}.csv"'},
+    )
+
+
+# ---------- Dated, multi-entry follow-up/remarks ledger ----------
+# Only these three entities carry a `log` field on their model (Lead/Quote/
+# Project) — the plain `remarks` string on each stays untouched so existing
+# screens keep rendering it unchanged.
+LOG_ENTITIES = {"lead", "quote", "project"}
+
+
+@api.post("/log/{entity}/{item_id}")
+async def append_log(entity: str, item_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    if entity not in LOG_ENTITIES:
+        raise HTTPException(status_code=404, detail="Unknown log entity")
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    collection = tenancy.ENTITY_COLLECTION[entity]
+    coll = db[collection]
+    owned = tenancy.scope({"id": item_id}, collection, user)
+    record = await coll.find_one(owned, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=404, detail="Not found")
+    entry = {
+        "at": now_iso(), "by": user.get("name", ""), "by_id": user.get("id", ""),
+        "text": text, "confidence_level": payload.get("confidence_level"),
+        "kind": str(payload.get("kind") or "note"),
+    }
+    update = {"$push": {"log": entry}}
+    # Denormalized onto the quote itself (not just the log entry) so the
+    # follow-up dashboard can bucket by date without scanning every quote's
+    # full log array.
+    if entity == "quote":
+        set_fields = {}
+        if "next_follow_up" in payload:
+            set_fields["next_follow_up"] = str(payload.get("next_follow_up") or "")
+        if entry["confidence_level"] is not None:
+            set_fields["confidence_level"] = entry["confidence_level"]
+        if set_fields:
+            update["$set"] = set_fields
+    await coll.update_one(owned, update)
+    record["log"] = record.get("log", []) + [entry]
+    record.update(update.get("$set", {}))
+    return record
 
 
 # ---------- Outstanding report ----------
@@ -1318,6 +1886,29 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
     top_items = sorted(items, key=lambda item: -((item.get("mrp") or 0) * (item.get("qty") or 0)))[:10]
     if not see_names:
         top_items = [redact_vendor_field(i, user) for i in top_items]
+
+    # Aging: days since created_at for items still sitting In Stock — how
+    # long unsold stock has been on hand, not a lifecycle age for Sold/
+    # Display items where "how long ago" isn't the interesting question.
+    from datetime import date as _date
+    today = _date.today()
+
+    def _age_days(created_at: str) -> int:
+        try:
+            return (today - _date.fromisoformat((created_at or "")[:10])).days
+        except Exception:
+            return 0
+
+    aging_buckets = {"0-30": {"count": 0, "value": 0.0}, "31-60": {"count": 0, "value": 0.0},
+                      "61-90": {"count": 0, "value": 0.0}, "90+": {"count": 0, "value": 0.0}}
+    for item in items:
+        if item.get("status") != "In Stock":
+            continue
+        age = _age_days(item.get("created_at"))
+        bucket = "0-30" if age <= 30 else "31-60" if age <= 60 else "61-90" if age <= 90 else "90+"
+        aging_buckets[bucket]["count"] += 1
+        aging_buckets[bucket]["value"] += (item.get("mrp") or 0) * (item.get("qty") or 0)
+
     return {
         "total_items": len(items),
         "total_qty": sum((item.get("qty") or 0) for item in items),
@@ -1328,8 +1919,124 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
         "by_location": top(by_location),
         "by_status": [{"name": k, "value": v} for k, v in by_status.items()],
         "top_items": top_items,
+        "aging": [{"bucket": k, **v} for k, v in aging_buckets.items()],
     }
 
+
+# ------- Executive Analytics: pipeline funnel, revenue, commissions -------
+
+@api.get("/analytics/pipeline")
+async def analytics_pipeline(user: dict = Depends(get_current_user)):
+    """Stage-by-stage quote funnel. `conversion_rate` is each stage's share
+    of the whole pipeline (bounded 0-100%) — not a ratio to the "New" stage,
+    which is usually near-empty at any snapshot since leads move through it
+    quickly, and would make later stages read as impossible ">100%"."""
+    quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
+    funnel = _calc_stage_split(quotes)
+    total = sum(s["count"] for s in funnel) or 1
+    for s in funnel:
+        s["conversion_rate"] = round((s["count"] / total) * 100, 1)
+    won = next((s["count"] for s in funnel if s["stage"] == "Won"), 0)
+    return {"funnel": funnel, "total": sum(s["count"] for s in funnel), "won": won,
+            "win_rate": round((won / total) * 100, 1) if total else 0}
+
+
+@api.get("/analytics/revenue")
+async def analytics_revenue(user: dict = Depends(get_current_user)):
+    """Revenue collected (paid) vs pending (balance_due) across sales and
+    invoices — the two places money is actually owed to the business."""
+    sales, invoices = await asyncio.gather(
+        db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
+        db.invoices.find(tenancy.scope({}, "invoices", user), {"_id": 0}).to_list(5000),
+    )
+    collected = sum((s.get("paid") or 0) for s in sales) + sum((i.get("paid") or 0) for i in invoices)
+    pending = sum((s.get("balance") or 0) for s in sales) + sum((i.get("balance") or 0) for i in invoices)
+    total = collected + pending
+    return {
+        "collected": collected, "pending": pending, "total": total,
+        "collection_rate": round((collected / total) * 100, 1) if total else 0,
+        "monthly": _calc_monthly_revenue(sales),
+    }
+
+
+def _match_commission_rule(rules: List[dict], payee: str, division: str) -> Optional[dict]:
+    """Most specific active "user" rule wins: an exact payee match beats the
+    payee=="" wildcard, and (independently) an exact division match beats
+    the division=="" wildcard."""
+    candidates = [r for r in rules if r.get("active", True) and r.get("payee_type") == "user"
+                  and (not r.get("payee") or r.get("payee") == payee)
+                  and (not r.get("division") or r.get("division") == division)]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda r: (r.get("payee") == payee, r.get("division") == division), reverse=True)
+    return candidates[0]
+
+
+@api.get("/analytics/commissions")
+async def analytics_commissions(period: str = "", user: dict = Depends(get_current_user)):
+    """Sales-rep commission payouts for `period` ("YYYY-MM", default this
+    month), computed live from cleared (received) payments against each
+    sale's owning rep. A row already approved for this period is returned
+    as-is (frozen), not recomputed — approval is a snapshot, not a view."""
+    await _require_permission("commissions", "view", user)
+    period = period or now_iso()[:7]
+
+    payments, sales, rules, existing = await asyncio.gather(
+        db.payments.find(tenancy.scope({"direction": "In"}, "payments", user), {"_id": 0}).to_list(5000),
+        db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
+        db.commission_rules.find(tenancy.scope({}, "commission_rules", user), {"_id": 0}).to_list(500),
+        db.commission_payouts.find(tenancy.scope({"period": period}, "commission_payouts", user), {"_id": 0}).to_list(500),
+    )
+    sales_by_id = {s["id"]: s for s in sales}
+    grouped: dict[tuple, float] = {}
+    for p in payments:
+        if (p.get("date") or "")[:7] != period:
+            continue
+        sale = sales_by_id.get(p.get("against_sale_id") or "")
+        payee = sale.get("by_user") if sale else ""
+        if not sale or not payee:
+            continue
+        key = (payee, sale.get("division") or "")
+        grouped[key] = grouped.get(key, 0.0) + (p.get("amount") or 0)
+
+    existing_by_key = {(e["payee"], e.get("division", "")): e for e in existing}
+    rows = []
+    for (payee, division), base_amount in grouped.items():
+        if (payee, division) in existing_by_key:
+            rows.append(existing_by_key[(payee, division)])
+            continue
+        rule = _match_commission_rule(rules, payee, division)
+        rate_pct = rule.get("rate_pct", 0) if rule else 0
+        flat_amount = rule.get("flat_amount", 0) if rule else 0
+        rows.append({
+            "id": "", "period": period, "payee": payee, "payee_type": "user", "division": division,
+            "base_amount": base_amount, "rate_pct": rate_pct, "flat_amount": flat_amount,
+            "commission_amount": round(base_amount * rate_pct / 100 + flat_amount, 2),
+            "status": "Draft" if rule else "No Rule",
+        })
+    return sorted(rows, key=lambda r: -r["commission_amount"])
+
+
+@api.post("/analytics/commissions/approve")
+async def approve_commission(payload: dict, user: dict = Depends(get_current_user)):
+    """Freezes one computed commission row from /analytics/commissions into
+    a persisted, tenant-scoped CommissionPayout — store managers only."""
+    await _require_permission("commissions", "approve", user)
+    doc = {
+        "id": new_id(), "created_at": now_iso(),
+        "period": str(payload.get("period") or ""), "payee": str(payload.get("payee") or ""),
+        "payee_type": str(payload.get("payee_type") or "user"), "division": str(payload.get("division") or ""),
+        "base_amount": payload.get("base_amount") or 0, "rate_pct": payload.get("rate_pct") or 0,
+        "flat_amount": payload.get("flat_amount") or 0,
+        "commission_amount": payload.get("commission_amount") or 0,
+        "status": "Approved", "approved_by": user.get("name", ""),
+    }
+    if not doc["period"] or not doc["payee"]:
+        raise HTTPException(status_code=400, detail="period and payee are required")
+    tenancy.stamp(doc, "commission_payouts", user)
+    await db.commission_payouts.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
 
 
 # ------- Projects Execution Endpoints -------
@@ -1374,11 +2081,22 @@ async def update_project_stage(project_id: str, data: ProjectStageUpdate, user=D
     if data.stage not in valid_stages:
         raise HTTPException(400, f"Invalid stage. Must be one of: {valid_stages}")
     owned = tenancy.scope({"id": project_id}, "projects", user)
+    before = await db.projects.find_one(owned, {"_id": 0, "stage": 1})
+    if not before:
+        raise HTTPException(404, "Project not found")
     res = await db.projects.update_one(owned, {"$set": {"stage": data.stage}})
     if res.matched_count == 0:
         raise HTTPException(404, "Project not found")
     item = await db.projects.find_one(owned)
     item.pop("_id", None)
+    # "Execution" is this project model's installation/fulfillment phase —
+    # there's no separate "Installation Scheduling" stage, so entering
+    # Execution is the trigger. Only on the transition INTO it, not every
+    # time the stage is (redundantly) set to Execution again.
+    if data.stage == "Execution" and before.get("stage") != "Execution" and item.get("phone"):
+        await notif.notify(db, user, "installation_scheduled", to=item.get("phone", ""),
+                            customer_name=item.get("customer", ""), ref_type="project",
+                            ref_id=item.get("project_no", ""), date=item.get("target_date", "TBD"))
     return item
 
 
@@ -1402,10 +2120,242 @@ from models import (
     DWSurveyCreate, DWSurvey, PaymentCreate, Payment,
     StockMovementCreate, StockMovement,
     QuoteLineCreate, QuoteLine, DWOpeningCreate, DWOpening,
+    CommissionRuleCreate, CommissionRule,
+    CommissionPayoutCreate, CommissionPayout,
+    RequirementCreate, Requirement, ProductConfigCreate, ProductConfig,
+    CustomerCreate, Customer, GST_DEFAULT,
 )
 
 make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
 make_crud(api, "dw-openings", "dw_openings", DWOpeningCreate, DWOpening)
+make_crud(api, "commission-rules", "commission_rules", CommissionRuleCreate, CommissionRule)
+make_crud(api, "requirements", "requirements", RequirementCreate, Requirement,
+          module="requirements", owner_field="by_user")
+make_crud(api, "product-configs", "product_configs", ProductConfigCreate, ProductConfig)
+make_crud(api, "customers", "customers", CustomerCreate, Customer, module="customers")
+# No owner-name field exists on Customer (it's a post-sale lifecycle record,
+# not something one salesperson "owns") — "own"/"team" scope on the
+# Customers module currently behaves like "all". Documented limitation, not
+# silently swept under; a real fix needs an owner concept on Customer first.
+make_crud(api, "teams", "teams", TeamCreate, Team)
+
+
+async def _audit(action: str, user: dict, detail: str = ""):
+    """Insert-only trail — role/permission/team/user changes. Never raises:
+    a logging failure must not block the action it's logging."""
+    try:
+        doc = {"id": new_id(), "created_at": now_iso(), "action": action,
+               "by_user": user.get("name", ""), "by_id": user.get("id", ""), "detail": detail}
+        tenancy.stamp(doc, "audit_log", user)
+        await db.audit_log.insert_one(doc)
+    except Exception as e:
+        logger.warning(f"Audit log write failed ({action}): {e}")
+
+
+# One entry per module named in the P2 spec's example matrix/role list, plus
+# the P3 modules (visitors/architects/tasks/invoice-gen/meetplan/petty/
+# requirements) that gained backend enforcement once their make_crud() calls
+# were tagged with module=/owner_field=. HR/Marketing still get no backend
+# enforcement (those features don't exist yet, see ALL_MODULE_IDS / P1) and
+# keep an empty permissions list; they exist as role *names* now so an admin
+# isn't limited to hardcoded choices, per "roles must be configurable."
+DEFAULT_ROLES = [
+    {"name": "Administrator", "permissions": [
+        {"module": m, "view": True, "create": True, "edit": True, "delete": True,
+         "approve": True, "export": True, "scope": "all"}
+        for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
+                  "commissions", "cashbook", "record-contacts")
+    ]},
+    {"name": "Management", "permissions": [
+        {"module": m, "view": True, "create": False, "edit": True, "delete": False,
+         "approve": True, "export": True, "scope": "all"}
+        for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
+                  "commissions", "cashbook", "record-contacts")
+    ]},
+    {"name": "Sales Manager", "permissions": [
+        {"module": m, "view": True, "create": True, "edit": True, "delete": False,
+         "approve": True, "export": False, "scope": "team"}
+        for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
+                  "tasks", "meetplan", "requirements", "record-contacts")
+    ]},
+    {"name": "Salesperson", "permissions": [
+        {"module": m, "view": True, "create": True, "edit": True, "delete": False,
+         "approve": False, "export": False, "scope": "own"}
+        for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
+                  "tasks", "meetplan", "requirements", "record-contacts")
+    ]},
+    {"name": "Inventory", "permissions": [
+        {"module": "inventory", "view": True, "create": True, "edit": True,
+         "delete": True, "approve": False, "export": True, "scope": "all"},
+    ]},
+    {"name": "HR", "permissions": []},
+    {"name": "Accounts", "permissions": [
+        {"module": m, "view": True, "create": True, "edit": True, "delete": False,
+         "approve": True, "export": True, "scope": "all"}
+        for m in ("petty", "invoice-gen", "commissions", "cashbook")
+    ]},
+    {"name": "Marketing", "permissions": []},
+]
+
+
+@api.get("/roles")
+async def list_roles(user: dict = Depends(get_current_user)):
+    q = tenancy.scope({}, "roles", user)
+    existing = await db.roles.find(q, {"_id": 0}).to_list(200)
+    if existing:
+        return existing
+    # Lazy-seed on first access, not at tenant creation — new tenants
+    # onboard through several different code paths (POST /tenants,
+    # backfill_tenant) and this way none of them need to remember to do it.
+    seeded = []
+    for r in DEFAULT_ROLES:
+        doc = {"id": new_id(), "created_at": now_iso(), "name": r["name"],
+               "permissions": r["permissions"], "active": True}
+        tenancy.stamp(doc, "roles", user)
+        await db.roles.insert_one(dict(doc))
+        doc.pop("_id", None)
+        seeded.append(doc)
+    return seeded
+
+
+make_crud(api, "roles", "roles", RoleCreate, Role, after_write=lambda doc, user: _audit("role_changed", user, doc.get("name", "")))
+
+
+@api.get("/customers/search")
+async def customer_resolver(q: str = "", user: dict = Depends(get_current_user)):
+    """
+    One shared "does this customer already exist" lookup — Walk-in, Lead, and
+    Quotation creation all call this instead of each rolling its own dedup
+    check, which is how duplicate customer records happen in the first place.
+
+    Matches phone/alt_phone by substring (fast, exact-ish — phone is the
+    strongest identifier) and name by per-word prefix ("Ravi" also finds
+    "K Ravi") — not true fuzzy/edit-distance matching, and deliberately never
+    auto-merges: the caller always confirms before linking.
+    """
+    q = q.strip()
+    if len(q) < 2:
+        return []
+    import re as _re
+    pattern = _re.escape(q)
+    or_clauses = [
+        {"phone": {"$regex": pattern, "$options": "i"}},
+        {"alt_phone": {"$regex": pattern, "$options": "i"}},
+        {"name": {"$regex": r"(^|\s)" + pattern, "$options": "i"}},
+    ]
+    rows = await db.customers.find(
+        tenancy.scope({"$or": or_clauses}, "customers", user), {"_id": 0}).to_list(20)
+    out = []
+    for c in rows:
+        phone = c.get("phone")
+        projects = await db.projects.count_documents(tenancy.scope({"phone": phone}, "projects", user)) if phone else 0
+        quotes = await db.quotes.count_documents(tenancy.scope({"phone": phone}, "quotes", user)) if phone else 0
+        out.append({**c, "project_count": projects, "quote_count": quotes})
+    return out
+
+
+@api.post("/requirements/{requirement_id}/configure")
+async def requirement_to_configurator(requirement_id: str, user: dict = Depends(get_current_user)):
+    """
+    Requirement -> Configurator: seed a ProductConfiguration's line items from
+    the requirement's dynamic item list, priced through the same lc.calc_line
+    every other line-item screen uses. Idempotent by requirement_id.
+    """
+    req = await db.requirements.find_one(
+        tenancy.scope({"id": requirement_id}, "requirements", user), {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    existing = await db.product_configs.find_one(
+        tenancy.scope({"requirement_id": requirement_id}, "product_configs", user), {"_id": 0})
+    if existing:
+        return existing
+
+    lines = [lc.calc_line(dict(item)) for item in (req.get("items") or [])]
+    subtotal = lc.lines_subtotal(lines)
+    config = {
+        "id": new_id(), "created_at": now_iso(),
+        "requirement_id": requirement_id, "quote_id": "",
+        "name": req.get("title") or f"Config for {req.get('customer', '')}",
+        "division": req.get("division", "Furniture"),
+        "inputs": {"items": req.get("items") or []}, "line_items": lines,
+        "subtotal": subtotal, "discount": 0, "tax_pct": GST_DEFAULT,
+        "tax_total": 0, "grand_total": subtotal, "version": 1, "status": "Draft",
+        "by_user": user.get("name", ""),
+    }
+    tenancy.stamp(config, "product_configs", user)
+    await db.product_configs.insert_one(dict(config))
+    config.pop("_id", None)
+    await db.requirements.update_one(
+        tenancy.scope({"id": requirement_id}, "requirements", user), {"$set": {"status": "Configured"}})
+    return config
+
+
+@api.post("/product-configs/{config_id}/to-quote")
+async def configurator_to_quote(config_id: str, user: dict = Depends(get_current_user)):
+    """
+    Configurator -> Quote: write the config's computed pricing into a real
+    Quote, as both the embedded snapshot fields AND real quote_lines rows —
+    _generate_sales_order_and_project reads lines via the quote_lines
+    collection (_quote_lines(), server.py), not the embedded array, so a
+    quote missing those rows would convert to an order with an empty line
+    snapshot. Idempotent by config_id. Runs the same discount-policy check
+    quote_save_total uses, so a heavily-discounted config still needs sign-off
+    before it can close.
+    """
+    config = await db.product_configs.find_one(
+        tenancy.scope({"id": config_id}, "product_configs", user), {"_id": 0})
+    if not config:
+        raise HTTPException(status_code=404, detail="Product configuration not found")
+    existing = await db.quotes.find_one(
+        tenancy.scope({"config_id": config_id}, "quotes", user), {"_id": 0})
+    if existing:
+        return existing
+
+    req = await db.requirements.find_one(
+        tenancy.scope({"id": config.get("requirement_id")}, "requirements", user), {"_id": 0}) or {}
+    subtotal = lc.money(config.get("subtotal"))
+    discount = lc.money(config.get("discount"))
+    totals = lc.quote_total(subtotal, discount, config.get("tax_pct") or GST_DEFAULT)
+    approval = "pending" if lc.needs_approval(subtotal, discount) else ""
+
+    existing_quotes = await db.quotes.find(
+        tenancy.scope({}, "quotes", user), {"quote_no": 1, "_id": 0}).to_list(5000)
+    quote_no = lc.next_quote_no(existing_quotes)
+    quote = {
+        "id": new_id(), "created_at": now_iso(),
+        "quote_no": quote_no, "date": lc.today_iso(),
+        "customer": req.get("customer", ""), "phone": req.get("phone", ""),
+        "division": config.get("division", "Furniture"), "by_user": user.get("name", ""),
+        "stage": "Quoted", "status": "Sent",
+        "lead_id": req.get("lead_id", ""), "requirement_id": req.get("id", ""),
+        "config_id": config_id, "version": 1,
+        "subtotal": totals["subtotal"], "discount": totals["discount"],
+        "tax_pct": config.get("tax_pct") or GST_DEFAULT, "tax_total": totals["tax_total"],
+        "grand_total": totals["grand_total"], "value": totals["value"],
+        "approval": approval,
+        "line_items": config.get("line_items") or [],
+    }
+    stamp_fy(quote, "quotes")
+    tenancy.stamp(quote, "quotes", user)
+    await db.quotes.insert_one(dict(quote))
+    quote.pop("_id", None)
+
+    for line in (config.get("line_items") or []):
+        row = dict(line)
+        row.pop("_id", None)
+        row.update({"id": new_id(), "created_at": now_iso(), "quote_id": quote["id"], "version": 1})
+        tenancy.stamp(row, "quote_lines", user)
+        await db.quote_lines.insert_one(dict(row))
+
+    await db.product_configs.update_one(
+        tenancy.scope({"id": config_id}, "product_configs", user),
+        {"$set": {"status": "Quoted", "quote_id": quote["id"]}})
+    if req:
+        await db.requirements.update_one(
+            tenancy.scope({"id": req["id"]}, "requirements", user), {"$set": {"status": "Quoted"}})
+    return quote
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1496,11 +2446,127 @@ async def quote_save_total(quote_id: str, payload: dict,
     return out
 
 
+async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[dict, dict]:
+    """
+    Auto-conversion on quote approval: snapshot the quote into a sales order
+    (the `sales` collection — see models.SaleBase) and spin up an execution
+    Project with the standard milestone set.
+
+    Idempotent by quote_id: re-approving (or a race between two approve
+    calls) must never mint a second order for the same quote.
+    """
+    quote_id = quote["id"]
+    existing_sale = await db.sales.find_one(
+        tenancy.scope({"quote_id": quote_id}, "sales", user), {"_id": 0})
+    if existing_sale:
+        project = await db.projects.find_one(
+            tenancy.scope({"sale_id": existing_sale["id"]}, "projects", user), {"_id": 0})
+        if project:
+            project = await _ensure_project_artifacts(project, user)
+        return existing_sale, project or {}
+
+    lines = [lc.calc_line(dict(l)) for l in await _quote_lines(quote_id, user)
+             if int(l.get("version") or 1) == int(quote.get("version") or 1)]
+
+    existing_sales = await db.sales.find(
+        tenancy.scope({}, "sales", user), {"sale_no": 1, "_id": 0}).to_list(5000)
+    value = lc.money(quote.get("grand_total") or quote.get("value"))
+    sale = {
+        "id": new_id(), "created_at": now_iso(),
+        "sale_no": lc.next_sale_no(existing_sales), "date": lc.today_iso(),
+        "customer": quote.get("customer", ""), "phone": quote.get("phone", ""),
+        "division": quote.get("division", "Furniture"),
+        "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id,
+        "lead_id": quote.get("lead_id", ""),
+        "by_user": user.get("name", ""), "value": value, "paid": 0, "balance": value,
+        "status": "PENDING", "stage": "Confirmed", "remarks": "",
+        "line_items": [{k: v for k, v in l.items() if k != "_id"} for l in lines],
+    }
+    stamp_fy(sale, "sales")
+    tenancy.stamp(sale, "sales", user)
+    await db.sales.insert_one(dict(sale))
+    sale.pop("_id", None)
+
+    # Adopt an early-started project (POST /leads/{id}/start-project) rather
+    # than minting a second one for the same lead: fill in what only exists
+    # once there's a sale, keep whatever site/engineer/milestone progress the
+    # team already logged.
+    lead_id = quote.get("lead_id", "")
+    adopted = await db.projects.find_one(
+        tenancy.scope({"lead_id": lead_id}, "projects", user), {"_id": 0}) if lead_id else None
+    if adopted:
+        owned = tenancy.scope({"id": adopted["id"]}, "projects", user)
+        patch = {"sale_id": sale["id"], "quote_ref": quote.get("quote_no", ""), "value": value}
+        if not adopted.get("milestones"):
+            patch["milestones"] = lc.default_milestones()
+        await db.projects.update_one(owned, {"$set": patch})
+        project = await db.projects.find_one(owned, {"_id": 0})
+        project = await _ensure_project_artifacts(project, user)
+        return sale, project
+
+    existing_projects = await db.projects.find(
+        tenancy.scope({}, "projects", user), {"project_no": 1, "_id": 0}).to_list(5000)
+    project = {
+        "id": new_id(), "created_at": now_iso(),
+        "project_no": lc.next_project_no(existing_projects),
+        "customer": quote.get("customer", ""), "phone": quote.get("phone", ""),
+        "division": quote.get("division", "Furniture"), "value": value, "paid": 0,
+        "stage": "Survey", "site_address": "", "assigned_engineer": "",
+        "start_date": lc.today_iso(), "target_date": "", "remarks": "",
+        "quote_ref": quote.get("quote_no", ""), "sale_id": sale["id"], "lead_id": lead_id,
+        "milestones": lc.default_milestones(),
+    }
+    stamp_fy(project, "projects")
+    tenancy.stamp(project, "projects", user)
+    await db.projects.insert_one(dict(project))
+    project.pop("_id", None)
+    project = await _ensure_project_artifacts(project, user)
+
+    return sale, project
+
+
+async def _ensure_project_artifacts(project: dict, user: dict) -> dict:
+    """
+    Order-trigger artifacts (Production + Installation), made idempotent on
+    their own: called on every path through _generate_sales_order_and_project
+    above, including the early-return-because-it-already-exists path, so a
+    retry after a partial failure can still finish what's missing instead of
+    leaving a converted quote with no installation task forever.
+    """
+    owned = tenancy.scope({"id": project["id"]}, "projects", user)
+    if not project.get("milestones"):
+        await db.projects.update_one(owned, {"$set": {"milestones": lc.default_milestones()}})
+        project = await db.projects.find_one(owned, {"_id": 0}) or project
+
+    existing_task = await db.tasks.find_one(tenancy.scope(
+        {"ref": project["id"], "ref_type": "project", "category": "Installation"}, "tasks", user))
+    if not existing_task:
+        task = {
+            "id": new_id(), "created_at": now_iso(),
+            "title": f"Installation — {project.get('project_no', '')}",
+            "priority": "Medium", "due_date": project.get("target_date") or "",
+            "assigned_to": project.get("assigned_engineer", ""), "category": "Installation",
+            "ref": project["id"], "ref_type": "project", "notes": "", "done": False,
+            "created_by": user.get("name", ""),
+        }
+        stamp_fy(task, "tasks")
+        tenancy.stamp(task, "tasks", user)
+        await db.tasks.insert_one(dict(task))
+    return project
+
+
 @api.post("/quotes/{quote_id}/approve")
 async def quote_approve(quote_id: str, payload: dict,
                         user: dict = Depends(require_admin)):
-    """Admin-only sign-off on a discount that exceeds the policy threshold."""
-    await _quote_or_404(quote_id, user)
+    """
+    Admin-only sign-off on a discount that exceeds the policy threshold.
+
+    On approval this also drives the conversion pipeline: a sales order and
+    an execution Project (with default milestones) are generated from the
+    quote automatically, so approval is the single trigger for "this deal is
+    won and ready to execute" rather than a separate manual conversion step.
+    """
+    quote = await _quote_or_404(quote_id, user)
     ok = bool(payload.get("approved", True))
     upd = {"approval": "approved" if ok else "rejected",
            "approved_by": (user.get("username") or "") if ok else "",
@@ -1509,7 +2575,12 @@ async def quote_approve(quote_id: str, payload: dict,
     await db.quotes.update_one(owned, {"$set": upd})
     out = await db.quotes.find_one(owned, {"_id": 0})
     out["derived_status"] = lc.quote_status(out)
-    return out
+    result = {"quote": out}
+    if ok:
+        sale, project = await _generate_sales_order_and_project(out, user)
+        result["sales_order"] = sale
+        result["project"] = project
+    return result
 
 
 @api.post("/quotes/{quote_id}/revise")
@@ -1612,6 +2683,51 @@ async def list_payments(user: dict = Depends(get_current_user)):
     return await db.payments.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
+async def _settle_sale_balance(sale: dict, user: dict) -> dict:
+    """
+    Recompute a sale's balance/status from its already-incremented `paid`,
+    and — the moment it reaches zero — mark the customer record Active.
+
+    Shared by create_payment and create_order_payment so the two payment
+    entry points can't drift, the way commit a0ca265 already had to fix once
+    for a duplicated save-form pattern (see docs/CODEMAPS/frontend.md).
+    """
+    paid = lc.money(sale.get("paid"))
+    value = lc.money(sale.get("value"))
+    balance = max(0.0, value - paid)
+    status = "PAID" if balance == 0 else ("PARTIAL" if paid > 0 else "PENDING")
+    update = {"balance": balance, "status": status}
+    if balance == 0:
+        update["stage"] = "Payment Received"
+    owned = tenancy.scope({"id": sale["id"]}, "sales", user)
+    await db.sales.update_one(owned, {"$set": update})
+    out = await db.sales.find_one(owned, {"_id": 0})
+
+    phone = (out or sale).get("phone")
+    if balance == 0 and phone:
+        stages, _enforced = await workflow_for("customer", user)
+        active = (tenancy.resolve_stage(stages, "Active") or {}).get("label", "Active")
+        # Atomic upsert-by-phone: a find-then-insert here (as this used to be)
+        # is a check-then-act race — two payments crossing the balance-zero
+        # line for the same phone at once could each pass the find_one and
+        # insert two customer rows. $setOnInsert only applies on the branch
+        # that actually creates the doc, so a concurrent upsert can't double it.
+        cust_owned = tenancy.scope({"phone": phone}, "customers", user)
+        on_insert = {
+            "id": new_id(), "created_at": now_iso(), "phone": phone,
+            "name": (out or sale).get("customer", ""),
+            "lead_id": (out or sale).get("lead_id", ""), "first_sale_id": sale["id"],
+            "customer_since": now_iso(),
+        }
+        tenancy.stamp(on_insert, "customers", user)
+        await db.customers.update_one(
+            cust_owned, {"$set": {"stage": active}, "$setOnInsert": on_insert}, upsert=True)
+        await notif.notify(db, user, "payment_cleared", to=phone,
+                            customer_name=(out or sale).get("customer", ""),
+                            ref_type="sale", ref_id=(out or sale).get("sale_no", ""))
+    return out or sale
+
+
 @api.post("/payments")
 async def create_payment(payload: PaymentCreate, user: dict = Depends(get_current_user)):
     doc = payload.model_dump()
@@ -1638,14 +2754,7 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
             return_document=ReturnDocument.AFTER,
         )
         if sale:
-            paid = lc.money(sale.get("paid"))
-            value = lc.money(sale.get("value"))
-            balance = max(0.0, value - paid)
-            update = {"balance": balance}
-            if balance == 0:
-                update["stage"] = "Payment Received"
-            await db.sales.update_one(
-                tenancy.scope({"id": sale["id"]}, "sales", user), {"$set": update})
+            await _settle_sale_balance(sale, user)
     if doc.get("against_invoice_id") and doc.get("direction") != "Refund":
         invoice = await db.invoices.find_one_and_update(
             tenancy.scope({"id": doc["against_invoice_id"]}, "invoices", user),
@@ -1666,10 +2775,74 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
 
 @api.delete("/payments/{item_id}")
 async def delete_payment(item_id: str, user: dict = Depends(get_current_user)):
-    res = await db.payments.delete_one(tenancy.scope({"id": item_id}, "payments", user))
+    """
+    Deleting a payment must reverse what it did to the sale it was against —
+    otherwise a corrected/duplicate payment entry leaves the order (and any
+    customer flag it triggered) permanently overstated as PAID.
+    """
+    owned = tenancy.scope({"id": item_id}, "payments", user)
+    payment = await db.payments.find_one(owned, {"_id": 0})
+    if not payment:
+        raise HTTPException(status_code=404, detail="Not found")
+    res = await db.payments.delete_one(owned)
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
+    if payment.get("against_sale_id") and payment.get("direction") != "Refund":
+        sale = await db.sales.find_one_and_update(
+            tenancy.scope({"id": payment["against_sale_id"]}, "sales", user),
+            {"$inc": {"paid": -lc.money(payment.get("amount"))}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if sale:
+            paid = max(0.0, lc.money(sale.get("paid")))
+            if paid != sale.get("paid"):
+                await db.sales.update_one(
+                    tenancy.scope({"id": sale["id"]}, "sales", user), {"$set": {"paid": paid}})
+                sale["paid"] = paid
+            value = lc.money(sale.get("value"))
+            status = "PAID" if paid >= value and value > 0 else ("PARTIAL" if paid > 0 else "PENDING")
+            await db.sales.update_one(
+                tenancy.scope({"id": sale["id"]}, "sales", user),
+                {"$set": {"balance": max(0.0, value - paid), "status": status}})
     return {"ok": True}
+
+
+@api.post("/v1/payments")
+async def create_order_payment(payload: PaymentCreate, user: dict = Depends(get_current_user)):
+    """
+    Log a payment against a sales order and roll it into the order's balance.
+
+    Separate from POST /api/payments (which the Outstanding page already
+    uses against `against_invoice_id`/older sale flows) so that existing
+    callers keep their exact behaviour; this one always targets a sales
+    order and always returns its PENDING/PARTIAL/PAID status.
+    """
+    if not payload.against_sale_id:
+        raise HTTPException(status_code=400, detail="against_sale_id is required")
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    if not doc.get("date"):
+        doc["date"] = lc.today_iso()
+    existing = await db.payments.find(
+        tenancy.scope({}, "payments", user), {"payment_id": 1, "_id": 0}).to_list(5000)
+    doc["payment_id"] = lc.next_payment_id(existing)
+    stamp_fy(doc, "payments")
+    tenancy.stamp(doc, "payments", user)
+    await db.payments.insert_one(doc)
+    doc.pop("_id", None)
+
+    # $inc is atomic, so two payments landing at once (see create_payment's
+    # comment above) can never lose one to a read-modify-write race.
+    order = await db.sales.find_one_and_update(
+        tenancy.scope({"id": payload.against_sale_id}, "sales", user),
+        {"$inc": {"paid": lc.money(doc.get("amount"))}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Sales order not found")
+    order = await _settle_sale_balance(order, user)
+    return {"payment": doc, "sales_order": order}
 
 
 # ---------- Projects (auto PM- id) ----------
@@ -1736,23 +2909,31 @@ async def stock_summary(user: dict = Depends(get_current_user)):
 
 # ---------- Data Centre (CSV import / export per collection) ----------
 # name → (mongo collection, id field, exported columns)
+# name -> (mongo collection, id_field, exported columns). id_field MUST be a
+# field that actually exists on the model — dc_import upserts by matching
+# {id_field: value} against stored docs; a fictional id_field (leads used
+# "lead_id", projects "customer_name"/"applicator", payments "payment_id" —
+# none of those fields exist on the real model) means find_one() never
+# matches, so every re-import silently creates duplicates instead of
+# updating. "id" is always safe since every document has one.
 DC_COLLECTIONS = {
-    "leads": ("leads", "lead_id", ["lead_id", "source", "intake_date", "name", "phone",
-              "referrer", "requirement", "division", "owner", "stage", "next_action_date", "remarks"]),
+    "leads": ("leads", "id", ["id", "date", "name", "phone", "source", "reference",
+              "stage", "follow_up_date", "assigned_to", "attended_by", "confidence_level",
+              "value", "remarks"]),
     "quotes": ("quotes", "quote_no", ["quote_no", "date", "customer", "phone", "reference",
                "division", "by_user", "stage", "status", "value", "remarks"]),
     "sales": ("sales", "sale_no", ["sale_no", "date", "customer", "phone", "division",
               "quote_ref", "by_user", "value", "paid", "balance", "stage", "remarks"]),
     "visitors": ("visitors", "id", ["date", "name", "phone", "location", "reference",
                  "requirement", "attend_person", "stage", "remarks"]),
-    "inventory": ("inventory", "sku", ["sku", "name", "category", "vendor", "model_no",
-                  "qty", "cost", "mrp", "status", "location"]),
+    "inventory": ("inventory", "sku", ["sku", "name", "category", "vendor", "vendor_code",
+                  "model_no", "qty", "cost", "mrp", "status", "location"]),
     "architects": ("architects", "name", ["name", "firm", "type", "location", "phone",
                    "assigned_to", "visited", "remarks"]),
-    "payments": ("payments", "payment_id", ["payment_id", "date", "division", "direction",
+    "payments": ("payments", "id", ["id", "date", "division", "direction",
                  "amount", "mode", "kind", "received_by", "against_sale_id", "remarks"]),
-    "projects": ("projects", "id", ["name", "division", "customer_name", "phone", "stage",
-                 "applicator", "value", "paid", "balance", "notes"]),
+    "projects": ("projects", "id", ["id", "project_no", "division", "customer", "phone", "stage",
+                 "assigned_engineer", "value", "paid", "remarks"]),
 }
 
 @api.get("/data-centre/collections")
@@ -1808,6 +2989,73 @@ async def dc_import(name: str, request: Request, user: dict = Depends(require_ad
     return {"inserted": inserted, "updated": updated, "skipped": skipped, "total": len(records)}
 
 
+@api.get("/search")
+async def global_search(q: str = "", user: dict = Depends(get_current_user)):
+    """One search box across the entities people actually look someone/something
+    up by: customer (name/phone/alt_phone), lead (name/phone/reference),
+    quotation, project, inventory (SKU/vendor code), and team members."""
+    q = q.strip()
+    if len(q) < 2:
+        return []
+    import re as _re
+    rx = {"$regex": _re.escape(q), "$options": "i"}
+    results = []
+
+    async def add(cursor, kind: str, title_field: str, subtitle_fn, limit=8):
+        async for r in cursor.limit(limit):
+            results.append({"type": kind, "id": r.get("id"), "title": r.get(title_field, ""),
+                             "subtitle": subtitle_fn(r)})
+
+    await add(db.customers.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"alt_phone": rx}]}, "customers", user), {"_id": 0}),
+              "customer", "name", lambda r: r.get("phone", ""))
+    await add(db.leads.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"reference": rx}]}, "leads", user), {"_id": 0}),
+              "lead", "name", lambda r: r.get("phone", ""))
+    await add(db.quotes.find(tenancy.scope({"$or": [{"quote_no": rx}, {"customer": rx}]}, "quotes", user), {"_id": 0}),
+              "quotation", "quote_no", lambda r: f"{r.get('customer', '')} · ₹{r.get('grand_total') or r.get('value') or 0:,.0f}")
+    await add(db.projects.find(tenancy.scope({"$or": [{"project_no": rx}, {"customer": rx}]}, "projects", user), {"_id": 0}),
+              "project", "project_no", lambda r: r.get("customer", ""))
+    await add(db.inventory.find(tenancy.scope({"$or": [{"sku": rx}, {"vendor_code": rx}, {"name": rx}]}, "inventory", user), {"_id": 0}),
+              "inventory", "name", lambda r: f"SKU {r.get('sku', '')} · Vendor {r.get('vendor_code') or '—'}")
+    await add(db.users.find({"tenant_id": tenancy.tenant_of(user) or "__no_tenant__", "name": rx}, {"_id": 0}),
+              "employee", "name", lambda r: r.get("role", ""))
+    return results
+
+
+@api.get("/quotes/followups")
+async def quote_followups(user: dict = Depends(get_current_user)):
+    """Sales > Follow-ups dashboard: every quote with a scheduled next
+    follow-up, bucketed Overdue/Today/Tomorrow/This Week/Upcoming.
+    Admins see the whole tenant; a regular user sees only their own quotes —
+    this codebase has no separate "management" role, so admin stands in for
+    team-wide visibility until one exists."""
+    q = tenancy.scope({}, "quotes", user)
+    if user.get("role") != "admin":
+        q["by_user"] = user.get("name", "")
+    quotes = await db.quotes.find(q, {"_id": 0}).to_list(5000)
+    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
+    projects = await db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000)
+    sale_by_quote = {s.get("quote_id"): s for s in sales if s.get("quote_id")}
+    project_by_sale = {p.get("sale_id"): p for p in projects if p.get("sale_id")}
+
+    def row(qq: dict) -> dict:
+        sale = sale_by_quote.get(qq.get("id"))
+        project = project_by_sale.get(sale.get("id")) if sale else None
+        log = qq.get("log") or []
+        last = log[-1] if log else None
+        return {
+            "id": qq.get("id"), "quote_no": qq.get("quote_no"), "customer": qq.get("customer"),
+            "project_no": (project or {}).get("project_no", ""),
+            "value": qq.get("grand_total") or qq.get("value") or 0,
+            "confidence_level": qq.get("confidence_level"),
+            "assigned_to": qq.get("by_user", ""), "status": qq.get("derived_status", qq.get("stage")),
+            "next_follow_up": qq.get("next_follow_up", ""),
+            "last_remark": (last or {}).get("text", ""), "last_kind": (last or {}).get("kind", ""),
+        }
+
+    buckets = lc.bucket_followups(quotes)
+    return {b: [row(q) for q in rows] for b, rows in buckets.items()}
+
+
 @api.get("/reports")
 async def reports(period: str = "thisweek", user: dict = Depends(get_current_user)):
     leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
@@ -1834,53 +3082,312 @@ async def alerts(user: dict = Depends(get_current_user)):
 
 
 # ---------- Customer journey (one timeline by phone) ----------
+@api.get("/notifications")
+async def list_notifications(phone: str = "", user: dict = Depends(get_current_user)):
+    """The Notification Log tab on the Customer 360 drawer — every WhatsApp/
+    SMS/Email fired for this phone number, most recent first."""
+    q: dict = {}
+    if phone:
+        q["to"] = phone
+    return await db.notification_logs.find(tenancy.scope(q, "notification_logs", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(200)
+
+
+@api.get("/agent-conversations")
+async def list_agent_conversations(phone: str = "", user: dict = Depends(get_current_user)):
+    """The Agent tab on the Customer 360 drawer. Conversations are keyed by
+    (subject_type, subject_id), not phone, so this resolves phone -> lead
+    ids first (the only subject_type anything currently creates
+    conversations for) then looks up conversations for those leads —
+    same two-step shape as _notify_order_confirmed resolving a sale's phone
+    through its source quote."""
+    if not phone:
+        return []
+    leads = await db.leads.find(tenancy.scope({"phone": phone}, "leads", user), {"_id": 0, "id": 1}).to_list(200)
+    lead_ids = [l["id"] for l in leads]
+    if not lead_ids:
+        return []
+    q = tenancy.scope({"subject_type": "lead", "subject_id": {"$in": lead_ids}}, "agent_conversations", user)
+    return await db.agent_conversations.find(q, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
+# ------- Record contacts: a lightweight many-to-many "people on this
+# record" join. No owner concept exists on a join row, so — same
+# documented limitation as Customer's scope handling elsewhere in this
+# file — "own"/"team" scope currently behaves like "all" here. -------
+@api.get("/record-contacts")
+async def list_record_contacts(subject_type: str = "", subject_id: str = "", phone: str = "",
+                                user: dict = Depends(get_current_user)):
+    await _require_permission("record-contacts", "view", user)
+    if phone and not subject_id:
+        leads = await db.leads.find(tenancy.scope({"phone": phone}, "leads", user), {"_id": 0, "id": 1}).to_list(200)
+        lead_ids = [l["id"] for l in leads]
+        if not lead_ids:
+            return []
+        q = tenancy.scope({"subject_type": "lead", "subject_id": {"$in": lead_ids}}, "record_contacts", user)
+        return await db.record_contacts.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+    q: dict = {}
+    if subject_type:
+        q["subject_type"] = subject_type
+    if subject_id:
+        q["subject_id"] = subject_id
+    return await db.record_contacts.find(tenancy.scope(q, "record_contacts", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(200)
+
+
+@api.post("/record-contacts")
+async def create_record_contact(payload: RecordContactCreate, resolve_phone: str = "",
+                                 user: dict = Depends(get_current_user)):
+    """`resolve_phone` is a convenience for phone-centric UIs (e.g.
+    JourneyDrawer): the *customer's* phone number, used only when the
+    caller doesn't already know a specific lead id — resolved to that
+    phone's most recently created lead. Not to be confused with
+    contact_phone on the payload, which is the new contact PERSON's own
+    number and has nothing to do with which record they're attached to."""
+    await _require_permission("record-contacts", "create", user)
+    doc = payload.model_dump()
+    if not doc.get("subject_id") and doc.get("subject_type") == "lead":
+        if not resolve_phone:
+            raise HTTPException(status_code=400, detail="subject_id or resolve_phone is required")
+        lead = await db.leads.find(tenancy.scope({"phone": resolve_phone}, "leads", user),
+                                    {"_id": 0, "id": 1}).sort("created_at", -1).to_list(1)
+        if not lead:
+            raise HTTPException(status_code=400, detail="No matching lead found to attach this contact to")
+        doc["subject_id"] = lead[0]["id"]
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    tenancy.stamp(doc, "record_contacts", user)
+    await db.record_contacts.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/record-contacts/{item_id}")
+async def update_record_contact(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    await _require_permission("record-contacts", "edit", user)
+    payload.pop("id", None)
+    payload.pop("_id", None)
+    payload.pop("tenant_id", None)
+    owned = tenancy.scope({"id": item_id}, "record_contacts", user)
+    res = await db.record_contacts.update_one(owned, {"$set": payload})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await db.record_contacts.find_one(owned, {"_id": 0})
+
+
+@api.delete("/record-contacts/{item_id}")
+async def delete_record_contact(item_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("record-contacts", "delete", user)
+    owned = tenancy.scope({"id": item_id}, "record_contacts", user)
+    res = await db.record_contacts.delete_one(owned)
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+# ------- Saved views: per-user or shared filter presets on a list page.
+# Personal convenience, not a governed business entity — no Role-matrix
+# permission check, any authenticated user can save/read their own +
+# shared views for their tenant. -------
+@api.get("/saved-views")
+async def list_saved_views(entity: str, user: dict = Depends(get_current_user)):
+    q = tenancy.scope({"entity": entity, "$or": [
+        {"created_by_id": user.get("id")}, {"shared": True},
+    ]}, "saved_views", user)
+    return await db.saved_views.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@api.post("/saved-views")
+async def create_saved_view(payload: SavedViewCreate, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_by"] = user.get("name") or user.get("username") or ""
+    doc["created_by_id"] = user.get("id")
+    doc["created_at"] = now_iso()
+    tenancy.stamp(doc, "saved_views", user)
+    await db.saved_views.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/saved-views/{item_id}")
+async def delete_saved_view(item_id: str, user: dict = Depends(get_current_user)):
+    owned = tenancy.scope({"id": item_id}, "saved_views", user)
+    if user.get("role") != "admin":
+        owned["created_by_id"] = user.get("id")
+    res = await db.saved_views.delete_one(owned)
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+# ------- Custom field definitions: admin-configurable extra fields per
+# entity. Values live directly on the entity's own document (custom_fields
+# dict), so they ride through the existing /leads and /customers CRUD
+# routes untouched — only the definitions need routes here. -------
+@api.get("/custom-fields")
+async def list_custom_field_defs(entity: str, user: dict = Depends(get_current_user)):
+    q = tenancy.scope({"entity": entity, "active": True}, "custom_field_defs", user)
+    return await db.custom_field_defs.find(q, {"_id": 0}).sort("order", 1).to_list(200)
+
+
+@api.post("/custom-fields")
+async def create_custom_field_def(payload: CustomFieldDefCreate, user: dict = Depends(require_admin)):
+    if payload.entity not in tenancy.CUSTOM_FIELD_ENTITIES:
+        raise HTTPException(status_code=400, detail=f"entity must be one of {tenancy.CUSTOM_FIELD_ENTITIES}")
+    doc = payload.model_dump()
+    key = tenancy.stage_key(payload.label)
+    existing = await db.custom_field_defs.find_one(
+        tenancy.scope({"entity": payload.entity, "key": key}, "custom_field_defs", user))
+    if existing:
+        raise HTTPException(status_code=400, detail="A field with this label already exists for this entity")
+    count = await db.custom_field_defs.count_documents(
+        tenancy.scope({"entity": payload.entity}, "custom_field_defs", user))
+    doc["id"] = new_id()
+    doc["key"] = key
+    doc["order"] = count
+    doc["active"] = True
+    doc["created_at"] = now_iso()
+    tenancy.stamp(doc, "custom_field_defs", user)
+    await db.custom_field_defs.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/custom-fields/{item_id}")
+async def update_custom_field_def(item_id: str, payload: CustomFieldDefUpdate,
+                                   user: dict = Depends(require_admin)):
+    owned = tenancy.scope({"id": item_id}, "custom_field_defs", user)
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        return await db.custom_field_defs.find_one(owned, {"_id": 0})
+    res = await db.custom_field_defs.update_one(owned, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await db.custom_field_defs.find_one(owned, {"_id": 0})
+
+
+@api.delete("/custom-fields/{item_id}")
+async def delete_custom_field_def(item_id: str, user: dict = Depends(require_admin)):
+    owned = tenancy.scope({"id": item_id}, "custom_field_defs", user)
+    res = await db.custom_field_defs.delete_one(owned)
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+# ------- Bulk CSV export/import for Leads and Customers. One pair of
+# routes for both entities (path param), not four — see csv_engine.py. -------
+def _csv_entity(entity: str) -> str:
+    if entity not in csv_engine.ENTITY_CONFIG:
+        raise HTTPException(status_code=404, detail="Unknown entity")
+    return entity
+
+
+async def _read_capped(file: UploadFile) -> bytes:
+    """Reads at most MAX_IMPORT_BYTES+1 — enforces the cap during the read
+    itself rather than buffering an unbounded upload before checking it."""
+    raw = await file.read(csv_engine.MAX_IMPORT_BYTES + 1)
+    if len(raw) > csv_engine.MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=400, detail="File too large")
+    return raw
+
+
+@api.get("/{entity}/export.csv")
+async def csv_export(entity: str, user: dict = Depends(get_current_user)):
+    entity = _csv_entity(entity)
+    roles = await _require_permission(entity, "export", user)
+    owners = await _scope_owners(user, roles, entity)
+    filename = f"{entity}_{lc.today_iso()}.csv"
+    return StreamingResponse(
+        csv_engine.stream_csv_rows(db, entity, user, owners=owners),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api.post("/{entity}/import/preview")
+async def csv_import_preview(entity: str, file: UploadFile = File(...),
+                              user: dict = Depends(get_current_user)):
+    entity = _csv_entity(entity)
+    await _require_permission(entity, "create", user)
+    raw = await _read_capped(file)
+    return await csv_engine.preview_import(db, entity, user, raw.decode("utf-8", errors="replace"))
+
+
+@api.post("/{entity}/import/commit")
+async def csv_import_commit(entity: str, file: UploadFile = File(...), mapping: str = Form(...),
+                             user: dict = Depends(get_current_user)):
+    entity = _csv_entity(entity)
+    # Import can both create and update existing rows, so both permissions
+    # are required up front — a create-only grant must not be able to
+    # overwrite existing records via a CSV's id column.
+    await _require_permission(entity, "create", user)
+    roles = await _require_permission(entity, "edit", user)
+    owners = await _scope_owners(user, roles, entity)
+    raw = await _read_capped(file)
+    try:
+        mapping_dict = json.loads(mapping)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="mapping must be a JSON object")
+    return await csv_engine.commit_import(
+        db, entity, user, raw.decode("utf-8", errors="replace"), mapping_dict, owners=owners)
+
+
 @api.get("/journey/{phone}")
 async def journey(phone: str, user: dict = Depends(get_current_user)):
-    return lc.build_journey(
+    leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
+    quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
+    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
+    payments = await db.payments.find(tenancy.scope({}, "payments", user), {"_id": 0}).to_list(5000)
+    out = lc.build_journey(
         phone,
         visitors=await db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0}).to_list(5000),
-        leads=await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000),
-        quotes=await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000),
-        sales=await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
-        payments=await db.payments.find(tenancy.scope({}, "payments", user), {"_id": 0}).to_list(5000),
+        leads=leads, quotes=quotes, sales=sales, payments=payments,
         activities=await db.activities.find(tenancy.scope({}, "activities", user), {"_id": 0}).to_list(5000),
     )
+    out["pipeline"] = lc.build_pipeline(
+        phone, leads=leads, quotes=quotes, sales=sales, payments=payments,
+        requirements=await db.requirements.find(tenancy.scope({}, "requirements", user), {"_id": 0}).to_list(5000),
+        product_configs=await db.product_configs.find(tenancy.scope({}, "product_configs", user), {"_id": 0}).to_list(5000),
+        tasks=await db.tasks.find(tenancy.scope({}, "tasks", user), {"_id": 0}).to_list(5000),
+        projects=await db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000),
+        customers=await db.customers.find(tenancy.scope({}, "customers", user), {"_id": 0}).to_list(5000),
+    )
+    return out
 
 
 @api.post("/convert/visitor-to-lead/{visitor_id}")
 async def visitor_to_lead(visitor_id: str, user: dict = Depends(get_current_user)):
+    """Idempotent on visitor_id (a retry adopts the same Lead) and on phone
+    (a lead with this phone can already exist independently of this visitor —
+    walked in AND enquired some other way, or messy pre-existing data;
+    converting should link to it rather than duplicate it)."""
     visitor = await db.visitors.find_one(tenancy.scope({"id": visitor_id}, "visitors", user), {"_id": 0})
     if not visitor:
         raise HTTPException(status_code=404, detail="Visitor not found")
     phone = visitor.get("phone", "")
-    # A lead with this phone can already exist independently of this visitor
-    # (walked in AND enquired some other way, or messy pre-existing data) —
-    # converting should link to it rather than fail on the uniqueness rule
-    # that same phone number is enforcing correctly elsewhere.
-    if phone:
-        existing_lead = await db.leads.find_one(
-            tenancy.scope({"phone": phone}, "leads", user), {"_id": 0})
-        if existing_lead:
-            await db.visitors.update_one(
-                tenancy.scope({"id": visitor_id}, "visitors", user),
-                {"$set": {"stage": "Qualified", "converted_lead_id": existing_lead["id"]}})
-            return existing_lead
+    existing = await db.leads.find_one(tenancy.scope({"visitor_id": visitor_id}, "leads", user), {"_id": 0})
+    if not existing and phone:
+        existing = await db.leads.find_one(tenancy.scope({"phone": phone}, "leads", user), {"_id": 0})
+    if existing:
+        await db.visitors.update_one(
+            tenancy.scope({"id": visitor_id}, "visitors", user),
+            {"$set": {"stage": "Qualified", "converted_lead_id": existing["id"]}})
+        return existing
     has_architect = bool(visitor.get("reference_id"))
-    remarks = _shape_remarks(visitor.get("remarks"))
-    remarks.append({
-        "id": new_id(), "at": now_iso(),
-        "text": f"Converted from visitor record (visit on {visitor.get('date') or 'unknown date'}).",
-    })
     lead = {
         "id": new_id(), "created_at": now_iso(),
         "date": lc.today_iso(), "name": visitor.get("name", ""), "phone": phone,
-        "source": "Architect" if has_architect else "Walk-in",
+        "source": "Architect" if has_architect else (visitor.get("reference", "") or "Walk-in"),
         "architect_id": visitor.get("reference_id", "") if has_architect else "",
         "architect_name": visitor.get("reference", "") if has_architect else "",
-        "stage": "New", "follow_up_date": "", "remarks": remarks,
+        "stage": "New", "follow_up_date": "",
+        "remarks": visitor.get("requirement", ""),
         "assigned_to": visitor.get("attend_person", ""),
         "assigned_to_id": visitor.get("attend_person_id", ""),
-        "value": 0,
+        "value": visitor.get("ticket_value", 0),
+        "visitor_id": visitor_id,
     }
     stamp_fy(lead, "leads")
     tenancy.stamp(lead, "leads", user)
@@ -1903,9 +3410,10 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
         "id": new_id(), "created_at": now_iso(),
         "quote_no": lc.next_quote_no(existing), "date": lc.today_iso(),
         "customer": lead.get("name", ""), "phone": lead.get("phone", ""),
-        "reference": lead.get("referrer", ""), "division": lead.get("division", "Furniture"),
+        "reference": lead.get("source", ""), "division": lead.get("division", "Furniture"),
         "by_user": user.get("name", ""), "stage": "Quoted", "status": "Sent",
         "value": 0, "remarks": lead.get("requirement", ""), "version": 1,
+        "lead_id": lead_id,
     }
     stamp_fy(quote, "quotes")
     tenancy.stamp(quote, "quotes", user)
@@ -1915,25 +3423,56 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
     return quote
 
 
+@api.post("/leads/{lead_id}/start-project")
+async def start_project(lead_id: str, user: dict = Depends(get_current_user)):
+    """
+    Manual, opt-in early project start — for deals (e.g. a site survey) that
+    need a Project before any quote exists. Not admin-gated: unlike closing a
+    quote, starting execution work has no discount-policy question attached.
+
+    Idempotent on lead_id: _generate_sales_order_and_project (server.py:1278)
+    later adopts this same project by lead_id instead of creating a second
+    one once the deal reaches a sale.
+    """
+    lead = await db.leads.find_one(tenancy.scope({"id": lead_id}, "leads", user), {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    existing = await db.projects.find_one(
+        tenancy.scope({"lead_id": lead_id}, "projects", user), {"_id": 0})
+    if existing:
+        return existing
+    existing_projects = await db.projects.find(
+        tenancy.scope({}, "projects", user), {"project_no": 1, "_id": 0}).to_list(5000)
+    project = {
+        "id": new_id(), "created_at": now_iso(),
+        "project_no": lc.next_project_no(existing_projects),
+        "customer": lead.get("name", ""), "phone": lead.get("phone", ""),
+        "division": lead.get("division", "Furniture"), "value": 0, "paid": 0,
+        "stage": "Survey", "site_address": "", "assigned_engineer": "",
+        "start_date": lc.today_iso(), "target_date": "", "remarks": "",
+        "quote_ref": "", "sale_id": "", "lead_id": lead_id,
+        "milestones": lc.default_milestones(),
+    }
+    stamp_fy(project, "projects")
+    tenancy.stamp(project, "projects", user)
+    await db.projects.insert_one(dict(project))
+    project.pop("_id", None)
+    return project
+
+
 @api.post("/convert/quote-to-sale/{quote_id}")
-async def quote_to_sale(quote_id: str, user: dict = Depends(get_current_user)):
+async def quote_to_sale(quote_id: str, user: dict = Depends(require_admin)):
+    """
+    Manual conversion — admin-only, matching quote_approve: every quote, not
+    just ones with an over-threshold discount, now needs an admin to close.
+    Shares _generate_sales_order_and_project with the approve pipeline so the
+    two entry points can never mint two sale records for the same quote —
+    whichever one runs first wins, the other reuses its result.
+    """
     quote = await db.quotes.find_one(tenancy.scope({"id": quote_id}, "quotes", user), {"_id": 0})
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found")
-    existing = await db.sales.find(
-        tenancy.scope({}, "sales", user), {"sale_no": 1, "_id": 0}).to_list(5000)
-    value = lc.money(quote.get("value"))
-    sale = {
-        "id": new_id(), "created_at": now_iso(),
-        "sale_no": lc.next_sale_no(existing), "date": lc.today_iso(),
-        "customer": quote.get("customer", ""), "phone": quote.get("phone", ""),
-        "division": quote.get("division", "Furniture"), "quote_ref": quote.get("quote_no", ""),
-        "by_user": user.get("name", ""), "value": value, "paid": 0, "balance": value,
-        "stage": "Confirmed", "remarks": "",
-    }
-    stamp_fy(sale, "sales")
-    tenancy.stamp(sale, "sales", user)
-    await db.sales.insert_one(dict(sale))
+    sale, _project = await _generate_sales_order_and_project(quote, user)
     await db.quotes.update_one(tenancy.scope({"id": quote_id}, "quotes", user),
                                {"$set": {"stage": "Adv Received", "status": "Won"}})
     return sale
@@ -1962,6 +3501,22 @@ async def survey_to_quote(survey_id: str, user: dict = Depends(get_current_user)
     stamp_fy(quote, "quotes")
     tenancy.stamp(quote, "quotes", user)
     await db.quotes.insert_one(dict(quote))
+    # One quote_line per opening so the quotation actually itemizes what was
+    # surveyed — previously only an aggregate summary landed in remarks and
+    # the openings themselves were never carried into the quotation.
+    for o in openings:
+        calc = lc.calc_opening(dict(o))
+        desc = f"{o.get('type', 'Window')} — {o.get('room', '')}".strip(" —")
+        if o.get("handle_position"):
+            desc += f" · Handle Position: {o['handle_position']}"
+        line = {
+            "id": new_id(), "created_at": now_iso(), "quote_id": quote["id"], "version": 1,
+            "description": desc, "w": lc.money(o.get("w")), "h": lc.money(o.get("h")),
+            "qty": lc.money(o.get("qty")) or 1, "rate": 0,
+            "sft": calc.get("area", 0), "amount": 0,
+        }
+        tenancy.stamp(line, "quote_lines", user)
+        await db.quote_lines.insert_one(line)
     await db.dw_surveys.update_one(
         tenancy.scope({"id": survey_id}, "dw_surveys", user), {"$set": {"status": "Quoted"}})
     return quote
@@ -1984,8 +3539,45 @@ app.add_middleware(
 )
 
 
+# ------- Agent task dispatch loop (generic background-job queue; see
+# agent_tasks.py — no LLM, no separate worker process, just a fixed-
+# interval in-process poll appropriate for a single-uvicorn-process app).
+# _TASK_HANDLERS itself is defined near the top of the file (before any
+# make_crud/handler registration code runs) — see the "kind -> handler"
+# registrations sprinkled through this file, e.g. lead_followup_reminder.
+_dispatch_task = None
+
+
+async def _dispatch_tick():
+    await agent_tasks.reconcile(db)
+    claimed = await agent_tasks.claim_batch(db, n=10, worker_id="inline")
+    for task in claimed:
+        handler = _TASK_HANDLERS.get(task["kind"])
+        if not handler:
+            # No handler registered for this kind — leave it leased; it'll
+            # be reclaimed once the lease expires. Not a failure: a kind can
+            # be scheduled before its handler ships (see rollout Phase 1-3).
+            continue
+        try:
+            outcome = await handler(db, task)
+        except Exception as e:
+            outcome = f"error: {e}"
+        await agent_tasks.complete_task(db, task["id"], outcome)
+
+
+async def _agent_task_dispatch_loop():
+    while True:
+        try:
+            await _dispatch_tick()
+        except Exception:
+            logger.exception("agent_task dispatch tick failed")
+        await asyncio.sleep(15)
+
+
 @app.on_event("startup")
 async def startup():
+    global _dispatch_task
+    _dispatch_task = asyncio.create_task(_agent_task_dispatch_loop())
     try:
         await db.users.create_index("username", unique=True)
         await seed_all(db)
@@ -1999,8 +3591,34 @@ async def startup():
     except Exception as e:
         logger.warning(f"MongoDB connection skipped or unavailable on local machine: {e}")
 
+    # Own try/except: an index failure here (e.g. pre-existing duplicate
+    # phones in seeded data) must not abort the seed/backfill block above,
+    # and vice versa. partialFilterExpression (not sparse) so a blank phone
+    # never collides — only actual non-blank duplicates within the same
+    # tenant are rejected.
+    try:
+        await db.customers.create_index(
+            [("tenant_id", 1), ("phone", 1)], unique=True,
+            partialFilterExpression={"phone": {"$exists": True, "$ne": ""}})
+    except Exception as e:
+        logger.warning(f"Customer phone-uniqueness index not created: {e}")
+
+    # Non-unique lookups behind /customers/search and /search — regex-prefix
+    # queries can use these; phone/SKU/vendor_code are the ones people type
+    # under time pressure at a showroom counter, so they're the ones worth
+    # an index over a full collection scan.
+    try:
+        await db.customers.create_index([("tenant_id", 1), ("name", 1)])
+        await db.leads.create_index([("tenant_id", 1), ("phone", 1)])
+        await db.quotes.create_index([("tenant_id", 1), ("quote_no", 1)])
+        await db.inventory.create_index([("tenant_id", 1), ("sku", 1)])
+        await db.inventory.create_index([("tenant_id", 1), ("vendor_code", 1)])
+    except Exception as e:
+        logger.warning(f"Search indexes not created: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    if _dispatch_task:
+        _dispatch_task.cancel()
     client.close()

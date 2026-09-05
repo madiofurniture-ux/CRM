@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
+import StageProgressBar from "@/components/StageProgressBar";
+import LogTimeline from "@/components/LogTimeline";
 import api from "@/lib/api";
 import { inrFull } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
@@ -14,12 +16,20 @@ export default function QuoteWorkspace() {
   const nav = useNavigate();
   const { user } = useAuth();
   const [ws, setWs] = useState(null);
+  const [pipeline, setPipeline] = useState(null);
   const [tab, setTab] = useState("lines");
   const [busy, setBusy] = useState(false);
   const lineTimers = useRef({});   // per-line debounce timers, kept across renders
 
   const load = useCallback(async () => {
-    try { const { data } = await api.get(`/quotes/${id}/workspace`); setWs(data); }
+    try {
+      const { data } = await api.get(`/quotes/${id}/workspace`);
+      setWs(data);
+      if (data.quote?.phone) {
+        try { const { data: j } = await api.get(`/journey/${data.quote.phone}`); setPipeline(j.pipeline || null); }
+        catch { /* progress bar is a nice-to-have; the workspace still works without it */ }
+      }
+    }
     catch { toast.error("Quote not found"); }
   }, [id]);
   useEffect(() => { load(); }, [load]);
@@ -76,6 +86,7 @@ export default function QuoteWorkspace() {
   };
   const convert = async () => {
     if (busy) return;
+    if (!isAdmin) { toast.error("Only an admin can convert a quote to a sale"); return; }
     if (pending) { toast.error("Approve the discount before converting"); return; }
     if (!window.confirm(`Convert ${q.quote_no} to a sale?`)) return;
     setBusy(true);
@@ -90,11 +101,14 @@ export default function QuoteWorkspace() {
           <div className="flex items-center gap-2">
             <StageBadge stage={q.derived_status} />
             <button onClick={revise} disabled={busy} className="btn-ghost disabled:opacity-60"><GitBranch size={14} /> Revise</button>
-            <button onClick={convert} disabled={pending || busy} className={`btn-primary ${pending || busy ? "opacity-50 cursor-not-allowed" : ""}`}><ArrowRightCircle size={15} /> Convert to Sale</button>
+            <button onClick={convert} disabled={pending || busy || !isAdmin}
+              title={!isAdmin ? "Admin approval required to convert a quote to a sale" : undefined}
+              className={`btn-primary ${pending || busy || !isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}><ArrowRightCircle size={15} /> Convert to Sale</button>
           </div>
         } />
       <div className="p-6 space-y-4" data-testid="quote-workspace">
         <button onClick={() => nav("/quotes")} className="text-sm text-[var(--ink-2)] inline-flex items-center gap-1"><ChevronLeft size={14} /> All deals</button>
+        {pipeline && <StageProgressBar stages={pipeline} />}
 
         {pending && (
           <div className="bg-[var(--warn-soft)] border border-[var(--warn)] rounded-lg px-4 py-3 flex items-center justify-between">
@@ -111,9 +125,9 @@ export default function QuoteWorkspace() {
         {q.approval === "approved" && <div className="text-xs text-[var(--moss)]">✓ Discount approved</div>}
 
         <div className="flex gap-1 border-b border-[var(--border)]">
-          {["lines", "versions"].map((t) => (
+          {["lines", "versions", "followups"].map((t) => (
             <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${tab === t ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-[var(--ink-3)]"}`}>
-              {t === "lines" ? "Line Items" : "Versions"}
+              {t === "lines" ? "Line Items" : t === "versions" ? "Versions" : "Follow-ups"}
             </button>
           ))}
         </div>
@@ -171,6 +185,13 @@ export default function QuoteWorkspace() {
             </div>
             <div className="text-xs text-[var(--ink-3)] mt-3">“Revise” copies the current line items into a new version and reopens the quote as Sent.</div>
           </div>
+        )}
+
+        {tab === "followups" && (
+          <LogTimeline
+            entity="quote" itemId={q.id} entries={q.log || []}
+            onAppended={(log, record) => setWs((p) => ({ ...p, quote: { ...p.quote, ...record, log } }))}
+          />
         )}
       </div>
     </>

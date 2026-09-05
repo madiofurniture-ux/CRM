@@ -9,7 +9,7 @@ export const API = BASE ? `${BASE}/api` : "/api";
 const api = axios.create({ baseURL: API });
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("madio_token");
+  const token = localStorage.getItem("crm_token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -70,8 +70,8 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err.response?.status === 401) {
-      localStorage.removeItem("madio_token");
-      localStorage.removeItem("madio_user");
+      localStorage.removeItem("crm_token");
+      localStorage.removeItem("crm_user");
       if (window.location.pathname !== "/login") {
         window.location.href = "/login";
       }

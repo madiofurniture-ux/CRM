@@ -12,9 +12,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tenancy import (  # noqa: E402
-    DEFAULT_WORKFLOWS, WORKFLOW_ENTITIES, default_workflow, make_stage,
-    resolve_stage, scope, slugify_tenant, stage_key, stamp, tenant_of,
-    validate_stages,
+    DEFAULT_WORKFLOWS, ENTITY_COLLECTION, WORKFLOW_ENTITIES, default_workflow,
+    make_stage, resolve_stage, scope, slugify_tenant, stage_key, stamp,
+    tenant_of, validate_stages,
 )
 
 ACME = {"id": "u1", "tenant_id": "acme"}
@@ -53,8 +53,17 @@ def test_non_tenant_collections_are_untouched():
 
 def test_every_business_collection_is_scoped():
     for coll in ("leads", "quotes", "sales", "inventory", "customers",
-                 "projects", "invoices", "workflows", "settings"):
+                 "projects", "invoices", "workflows", "settings",
+                 "visitors", "payments", "commission_rules",
+                 "requirements", "product_configs",
+                 "teams", "roles", "audit_log"):
         assert scope({}, coll, ACME).get("tenant_id") == "acme", coll
+
+
+def test_commission_rules_have_no_workflow():
+    """Rules are configuration, not a record that moves through stages."""
+    assert "commission_rules" not in ENTITY_COLLECTION.values()
+    assert "commission_rule" not in WORKFLOW_ENTITIES
 
 
 # ── writes ─────────────────────────────────────────────────────────────────

@@ -30,10 +30,12 @@ const RoleManager = lazy(() => import("@/pages/RoleManager"));
 const Outstanding = lazy(() => import("@/pages/Outstanding"));
 const Invoices = lazy(() => import("@/pages/Invoices"));
 const PettyCash = lazy(() => import("@/pages/PettyCash"));
+const Cashbook = lazy(() => import("@/pages/Cashbook"));
 const Meets = lazy(() => import("@/pages/Meets"));
 
 // Recovered parity modules
 const Reports = lazy(() => import("@/pages/Reports"));
+const ExecutiveDashboard = lazy(() => import("@/pages/ExecutiveDashboard"));
 const Alerts = lazy(() => import("@/pages/Alerts"));
 const DWSurvey = lazy(() => import("@/pages/DWSurvey"));
 const QuoteWorkspace = lazy(() => import("@/pages/QuoteWorkspace"));
@@ -41,6 +43,16 @@ const StockLedger = lazy(() => import("@/pages/StockLedger"));
 const DataCentre = lazy(() => import("@/pages/DataCentre"));
 const FinancialYear = lazy(() => import("@/pages/FinancialYear"));
 const Workflows = lazy(() => import("@/pages/Workflows"));
+const BusinessSettings = lazy(() => import("@/pages/BusinessSettings"));
+const CustomFields = lazy(() => import("@/pages/CustomFields"));
+const Teams = lazy(() => import("@/pages/Teams"));
+const RolesPermissions = lazy(() => import("@/pages/RolesPermissions"));
+
+// 11-stage operational flow: Requirement + Configurator + Customer
+const Requirements = lazy(() => import("@/pages/Requirements"));
+const Configurator = lazy(() => import("@/pages/Configurator"));
+const Customers = lazy(() => import("@/pages/Customers"));
+const QuoteFollowups = lazy(() => import("@/pages/QuoteFollowups"));
 
 function PageLoader() {
   return (
@@ -83,10 +95,12 @@ function App() {
           <Route path="/outstanding" element={<ProtectedRoute page="outstanding"><Layout><Outstanding /></Layout></ProtectedRoute>} />
           <Route path="/invoices" element={<ProtectedRoute page="invoice-gen"><Layout><Invoices /></Layout></ProtectedRoute>} />
           <Route path="/petty-cash" element={<ProtectedRoute page="petty"><Layout><PettyCash /></Layout></ProtectedRoute>} />
+          <Route path="/cashbook" element={<ProtectedRoute page="cashbook"><Layout><Cashbook /></Layout></ProtectedRoute>} />
           <Route path="/meets" element={<ProtectedRoute page="meetplan"><Layout><Meets /></Layout></ProtectedRoute>} />
 
           {/* Recovered parity modules */}
           <Route path="/reports" element={<ProtectedRoute page="reports"><Layout><Reports /></Layout></ProtectedRoute>} />
+          <Route path="/executive" element={<ProtectedRoute page="executive"><Layout><ExecutiveDashboard /></Layout></ProtectedRoute>} />
           <Route path="/alerts" element={<ProtectedRoute page="alerts"><Layout><Alerts /></Layout></ProtectedRoute>} />
           <Route path="/dw-survey" element={<ProtectedRoute page="dwsurvey"><Layout><DWSurvey /></Layout></ProtectedRoute>} />
           <Route path="/quotes/ws/:id" element={<ProtectedRoute page="quotes"><Layout><QuoteWorkspace /></Layout></ProtectedRoute>} />
@@ -94,6 +108,14 @@ function App() {
           <Route path="/data-centre" element={<ProtectedRoute page="data-centre"><Layout><DataCentre /></Layout></ProtectedRoute>} />
           <Route path="/admin/financial-year" element={<ProtectedRoute page="financial-year"><Layout><FinancialYear /></Layout></ProtectedRoute>} />
           <Route path="/admin/workflows" element={<ProtectedRoute page="workflows"><Layout><Workflows /></Layout></ProtectedRoute>} />
+          <Route path="/admin/business" element={<ProtectedRoute page="business"><Layout><BusinessSettings /></Layout></ProtectedRoute>} />
+          <Route path="/admin/custom-fields" element={<ProtectedRoute page="custom-fields"><Layout><CustomFields /></Layout></ProtectedRoute>} />
+          <Route path="/admin/teams" element={<ProtectedRoute page="teams"><Layout><Teams /></Layout></ProtectedRoute>} />
+          <Route path="/admin/roles-permissions" element={<ProtectedRoute page="roles-permissions"><Layout><RolesPermissions /></Layout></ProtectedRoute>} />
+          <Route path="/requirements" element={<ProtectedRoute page="requirements"><Layout><Requirements /></Layout></ProtectedRoute>} />
+          <Route path="/configurator" element={<ProtectedRoute page="configurator"><Layout><Configurator /></Layout></ProtectedRoute>} />
+          <Route path="/customers" element={<ProtectedRoute page="customers"><Layout><Customers /></Layout></ProtectedRoute>} />
+          <Route path="/quotes/followups" element={<ProtectedRoute page="quote-followups"><Layout><QuoteFollowups /></Layout></ProtectedRoute>} />
         </Routes>
         </Suspense>
       </BrowserRouter>

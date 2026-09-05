@@ -1,8 +1,10 @@
 """Pydantic models for MADIO CRM."""
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import List, Optional, Any
 from datetime import datetime, timezone
 import uuid
+
+import lifecycle as lc
 
 
 def now_iso() -> str:
@@ -21,10 +23,15 @@ class UserBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     username: str
     name: str
-    role: str = "user"  # "admin" or "user"
+    role: str = "user"  # "admin" or "user" — the absolute superuser bypass; never governed by role_id
     icon: str = "U"  # short label or emoji
     color: str = "#C85A32"
-    pages: Optional[List[str]] = None  # None == all pages (admin)
+    pages: Optional[List[str]] = None  # None == all pages (admin) — legacy grant, still honored when role_id is unset
+    team_id: Optional[str] = ""
+    role_id: Optional[str] = ""   # "" = legacy role/pages behavior (every pre-P2 account)
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    active: bool = True
 
 
 class UserCreate(UserBase):
@@ -38,6 +45,11 @@ class UserUpdate(BaseModel):
     color: Optional[str] = None
     pages: Optional[List[str]] = None
     pin: Optional[str] = None
+    team_id: Optional[str] = None
+    role_id: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    active: Optional[bool] = None
 
 
 class UserPublic(UserBase):
@@ -103,22 +115,65 @@ class LeadBase(BaseModel):
     date: str
     name: str
     phone: Optional[str] = ""
-    source: Optional[str] = ""
+    source: Optional[str] = ""    # channel the lead came through, e.g. "Referral" / "Instagram"
     architect_id: Optional[str] = ""    # Architect.id, set when source == "Architect"
     architect_name: Optional[str] = ""  # display name, prepopulated from the picker
+    reference: Optional[str] = ""  # the specific person/campaign/handle, e.g. "Ramesh Kumar" / "@madiointeriors"
     stage: str = "New"  # New, Contacted, Qualified, Quoted, Won, Lost
     follow_up_date: Optional[str] = ""
-    # Accepts either the new list-of-entries shape or a legacy plain string;
-    # normalize_lead() upgrades a legacy string to a single entry on write —
-    # same convention as VisitorBase.remarks.
-    remarks: Optional[Any] = Field(default_factory=list)
+    # Deliberately a plain string, not the dated-entries list shape some other
+    # normalize_*() hooks use — every list/search/CSV path built around Lead
+    # already assumes remarks is text; the dated multi-entry history lives in
+    # `log` below instead.
+    remarks: Optional[str] = ""
     assigned_to: Optional[str] = ""     # display name, kept for legacy rows / CSV export
     assigned_to_id: Optional[str] = ""  # Staff (users) id when linked via the picker
+    attended_by: Optional[str] = ""       # who met the lead — linked to Team/Users by name
+    confidence_level: Optional[float] = None  # 0-100 — sales rep's read on close probability
+    team_id: Optional[str] = ""           # direct team link for reporting; independent of assigned_to's own team_id
+    visitor_id: Optional[str] = ""        # lineage when converted from a Visitor
     value: Optional[float] = 0
+    # Dated, multi-entry audit trail: [{at, by, by_id, text, confidence_level, kind}].
+    # `remarks` above stays a plain string (unmigrated) — old screens still read it.
+    log: List[dict] = Field(default_factory=list)
+    custom_fields: dict = Field(default_factory=dict)  # key (CustomFieldDef.key) -> value
 
 
 class LeadCreate(LeadBase):
-    pass
+    # Redeclared as required (no default): Pydantic v2 doesn't run
+    # field_validators against a value that was never supplied and fell
+    # back to LeadBase's "" default, so a payload that omits the key
+    # entirely would otherwise sail through. Required + the validators
+    # below together close both gaps (missing key AND empty string).
+    phone: str
+    source: str
+    reference: str
+
+    @field_validator("phone")
+    @classmethod
+    def _phone_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Phone number is required")
+        return v
+
+    @field_validator("source")
+    @classmethod
+    def _source_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Source is required")
+        return v
+
+    @field_validator("reference")
+    @classmethod
+    def _reference_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Reference is required")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, v):
+        return lc.validate_person_name(v)
 
 
 class Lead(LeadBase):
@@ -179,6 +234,9 @@ class QuoteBase(BaseModel):
     division: str = "Furniture"  # Furniture / MAP / D&W
     by_user: Optional[str] = ""
     stage: str = "Quoted"
+    lead_id: Optional[str] = ""           # lineage back to the originating lead
+    requirement_id: Optional[str] = ""    # set when generated from a Requirement
+    config_id: Optional[str] = ""         # set when generated from a Configurator run
     value: float = 0
     cash: Optional[float] = 0
     bank: Optional[float] = 0
@@ -198,6 +256,10 @@ class QuoteBase(BaseModel):
     approval: Optional[str] = ""
     approved_by: Optional[str] = ""
     approved_at: Optional[str] = ""
+    # Dated, multi-entry follow-up ledger: [{at, by, by_id, text, confidence_level, kind}]
+    log: List[dict] = Field(default_factory=list)
+    confidence_level: Optional[float] = None   # 0-100 — latest read on close probability
+    next_follow_up: Optional[str] = ""         # denormalized from the latest log entry, for dashboard bucketing
 
 
 class QuoteCreate(QuoteBase):
@@ -209,7 +271,8 @@ class Quote(QuoteBase):
     created_at: str
 
 
-# ------- Sales -------
+# ------- Sales (a.k.a. Sales Orders — same collection, "balance" is the
+# order's balance_due) -------
 class SaleBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     sale_no: str
@@ -217,12 +280,16 @@ class SaleBase(BaseModel):
     customer: str
     division: str = "Furniture"
     quote_ref: Optional[str] = ""
+    quote_id: Optional[str] = ""          # links back to the source quote, for idempotent auto-conversion
+    lead_id: Optional[str] = ""           # lineage back to the originating lead
     by_user: Optional[str] = ""
     value: float = 0
     paid: float = 0
-    balance: float = 0
+    balance: float = 0                    # balance_due
+    status: str = "PENDING"               # PENDING / PARTIAL / PAID
     stage: str = "Delivered"
     remarks: Optional[str] = ""
+    line_items: Optional[List[dict]] = []  # snapshot of quote lines at conversion time
 
 
 class SaleCreate(SaleBase):
@@ -267,10 +334,26 @@ class InventoryBase(BaseModel):
     status: str = "In Stock"  # In Stock / Display / Sold / Missing / Reserved
     location: Optional[str] = "Warehouse"
     image_url: Optional[str] = ""
+    vendor_code: Optional[str] = ""
 
 
 class InventoryCreate(InventoryBase):
-    pass
+    # Required (no default) so a payload that omits the key entirely can't
+    # skip the validator below the way InventoryBase's "" default would let
+    # it — new items only, the ~2000 historical rows are not backfilled.
+    vendor_code: str
+
+    @field_validator("vendor_code")
+    @classmethod
+    def _vendor_code_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Vendor code is required")
+        return v
+
+    @field_validator("location")
+    @classmethod
+    def _canonical_floor(cls, v):
+        return lc.normalize_location(v)
 
 
 class InventoryItem(InventoryBase):
@@ -287,6 +370,7 @@ class TaskBase(BaseModel):
     assigned_to: Optional[str] = ""
     category: Optional[str] = "General"
     ref: Optional[str] = ""
+    ref_type: Optional[str] = ""  # "" / lead / quote / sale / project — what `ref` points at
     notes: Optional[str] = ""
     done: bool = False
 
@@ -396,6 +480,197 @@ class PettyCash(PettyCashBase):
     created_at: str
 
 
+# ------- Cashbooks (multiple named cash boxes, each with a running
+# balance — distinct from the single flat PettyCash ledger above, which
+# stays untouched) -------
+class CashbookBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    book_name: str
+    description: Optional[str] = ""
+    assigned_users: List[str] = Field(default_factory=list)  # user ids with access
+    initial_balance: float = 0
+    current_balance: float = 0
+    status: str = "ACTIVE"  # ACTIVE / ARCHIVED
+    project_id: Optional[str] = ""        # "" = not linked to a project
+    imprest_limit: Optional[float] = 0    # 0 = no limit; shown as a balance-vs-limit bar
+    strict_overdraft: bool = False        # when true, an expense can't be approved past current_balance
+
+
+class CashbookCreate(CashbookBase):
+    @field_validator("book_name")
+    @classmethod
+    def _name_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Book name is required")
+        return v
+
+
+class Cashbook(CashbookBase):
+    id: str
+    created_at: str
+
+
+class CashbookEntryBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    cashbook_id: str
+    type: str                            # CASH_IN / CASH_OUT
+    amount: float = 0
+    category: Optional[str] = ""         # Hardware / Fuel / Refreshments / Transport / Advances / ...
+    payment_mode: str = "CASH"            # CASH / UPI / ONLINE
+    remark: Optional[str] = ""
+    receipt_url: Optional[str] = ""
+    entry_person: Optional[str] = ""
+    # CASH_IN is pre-trusted credit and lands on current_balance immediately
+    # (see create_cashbook_entry) — only a CASH_OUT (expense) is created
+    # Pending and only debits the book once approved (see approve_cashbook_entry).
+    status: str = "Approved"             # Pending / Approved / Rejected
+    approved_by: Optional[str] = ""
+    approved_at: Optional[str] = ""
+
+
+class CashbookEntryCreate(CashbookEntryBase):
+    @field_validator("type")
+    @classmethod
+    def _valid_type(cls, v):
+        if v not in ("CASH_IN", "CASH_OUT"):
+            raise ValueError("type must be CASH_IN or CASH_OUT")
+        return v
+
+    @field_validator("amount")
+    @classmethod
+    def _positive_amount(cls, v):
+        if v <= 0:
+            raise ValueError("amount must be greater than zero")
+        return v
+
+
+class CashbookEntry(CashbookEntryBase):
+    id: str
+    created_at: str
+
+
+class CashbookEntryApproval(BaseModel):
+    approved: bool
+
+
+class CashbookTopUp(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    amount: float
+    payment_mode: str = "CASH"
+    remark: Optional[str] = ""
+    entry_person: Optional[str] = ""
+
+    @field_validator("amount")
+    @classmethod
+    def _positive_amount(cls, v):
+        if v <= 0:
+            raise ValueError("amount must be greater than zero")
+        return v
+
+
+class CashbookExpense(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    amount: float
+    category: Optional[str] = ""
+    payment_mode: str = "CASH"
+    remark: Optional[str] = ""
+    receipt_url: Optional[str] = ""
+    entry_person: Optional[str] = ""
+
+    @field_validator("amount")
+    @classmethod
+    def _positive_amount(cls, v):
+        if v <= 0:
+            raise ValueError("amount must be greater than zero")
+        return v
+
+
+# ------- Agent tasks (a generic, durable background-job queue — "agent"
+# names the shape borrowed from a reference CRM's task worker, not an AI
+# capability; no LLM is involved anywhere here) -------
+class AgentTaskBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    kind: str                          # free-form, e.g. "followup_reminder" — not an enum
+    subject_type: Optional[str] = ""   # "lead" / "quote" / "sale" / ""
+    subject_id: Optional[str] = ""
+    reason: Optional[str] = ""
+    payload: dict = Field(default_factory=dict)
+    priority: int = 0
+    due_at: Optional[str] = ""         # ISO string, matches now_iso()/today_iso() convention
+    attempts: int = 0
+    max_attempts: int = 3
+    leased_until: Optional[str] = ""
+    leased_by: Optional[str] = ""      # observability only, never load-bearing for correctness
+    started_at: Optional[str] = ""
+    finished_at: Optional[str] = ""
+    outcome: Optional[str] = ""        # "" while open; "done" / "failed" / "abandoned" once finished
+    # Reuses the same {at, by, text, kind} ledger shape as Lead.log/Quote.log
+    # for attempt/error history — one convention, not a second one invented here.
+    log: List[dict] = Field(default_factory=list)
+
+
+class AgentTaskCreate(AgentTaskBase):
+    pass
+
+
+class AgentTask(AgentTaskBase):
+    id: str
+    created_at: str
+
+
+# ------- Agent conversations (durable per-record conversation handle —
+# the "shape" of a Durable Agent Bridge, in-process today; no separate
+# process, no LLM, see backend/agent_bridge.py for why) -------
+class AgentConversationBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    subject_type: str                          # "lead" / "quote" / "sale" / ...
+    subject_id: str
+    status: str = "open"                       # open / awaiting_input / closed
+    pending_question: Optional[dict] = None    # durable HITL record: {id, text, options, asked_at}
+    resume_cursor: Optional[str] = ""          # opaque pointer for a future remote executor
+    # {at, by, by_id, text, kind} — kind: message / tool_call / question / answer.
+    # Same ledger convention as Lead.log/Quote.log/AgentTask.log; this IS the
+    # durable event archive, not a separate collection (see agent_bridge.py).
+    log: List[dict] = Field(default_factory=list)
+
+
+class AgentConversationCreate(AgentConversationBase):
+    pass
+
+
+class AgentConversation(AgentConversationBase):
+    id: str
+    created_at: str
+
+
+# ------- Record contacts (a lightweight many-to-many "people on this
+# record" join, e.g. a lead's site engineer or decision maker, beyond the
+# single customer/assigned_to string fields Lead/Quote/Sale already carry) -------
+class RecordContactBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    subject_type: str              # "lead" / "quote" / "sale" / "project"
+    subject_id: Optional[str] = "" # "" is valid at request time — the create
+                                    # endpoint fills it in via resolve_phone
+                                    # when the caller only knows a phone number
+    contact_name: str
+    contact_phone: Optional[str] = ""
+    role: Optional[str] = ""       # free text, e.g. "Decision Maker", "Site Engineer"
+
+
+class RecordContactCreate(RecordContactBase):
+    @field_validator("contact_name")
+    @classmethod
+    def _name_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Contact name is required")
+        return v
+
+
+class RecordContact(RecordContactBase):
+    id: str
+    created_at: str
+
+
 # ------- Attendance -------
 class AttendanceCheckIn(BaseModel):
     lat: float
@@ -457,6 +732,11 @@ class ProjectBase(BaseModel):
     target_date: Optional[str] = ""
     remarks: Optional[str] = ""
     quote_ref: Optional[str] = ""
+    sale_id: Optional[str] = ""           # links back to the sales order it was generated from
+    lead_id: Optional[str] = ""           # lineage back to the originating lead
+    requirement_id: Optional[str] = ""    # set when started from a Requirement, before any quote exists
+    milestones: List[dict] = Field(default_factory=list)  # [{name, status, completed_at}]
+    log: List[dict] = Field(default_factory=list)  # [{at, by, by_id, text, confidence_level, kind}]
 
 
 class ProjectCreate(ProjectBase):
@@ -511,8 +791,17 @@ class DWOpeningBase(BaseModel):
     frame: str = "uPVC"
     glass: str = "Single"
     mesh: bool = False
+    handle_position: Optional[str] = ""  # "" (N/A) | "RHS" | "LHS"
     notes: Optional[str] = ""
     image_url: Optional[str] = ""
+
+    @field_validator("handle_position")
+    @classmethod
+    def _valid_handle_position(cls, v):
+        v = str(v or "")
+        if v not in ("", "RHS", "LHS"):
+            raise ValueError("handle_position must be RHS, LHS, or blank (N/A)")
+        return v
 
 
 # ── Recovered parity models (D&W surveys, payments, stock ledger, quote lines) ──
@@ -606,3 +895,318 @@ class DWOpeningCreate(DWOpeningBase):
 
 class QuoteLineCreate(QuoteLineBase):
     pass
+
+
+# ------- Commission rules (architect / sales-rep payout rates) -------
+class CommissionRuleBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    payee_type: str = "architect"       # architect / user
+    payee: Optional[str] = ""           # "" = applies to every payee of that type
+    rate_pct: float = 0
+    flat_amount: float = 0
+    division: Optional[str] = ""        # "" = all divisions
+    active: bool = True
+    remarks: Optional[str] = ""
+
+
+class CommissionRuleCreate(CommissionRuleBase):
+    pass
+
+
+class CommissionRule(CommissionRuleBase):
+    id: str
+    created_at: str
+
+
+# ------- Commission payouts (approved, persisted snapshot of a computed
+# commission — the live /analytics/commissions computation is re-run every
+# request, but once a manager approves a row it's frozen here so a later
+# rule change or extra payment doesn't silently move an already-approved
+# number) -------
+class CommissionPayoutBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    period: str                         # "YYYY-MM"
+    payee: str
+    payee_type: str = "user"            # user / architect — mirrors CommissionRule
+    division: Optional[str] = ""
+    base_amount: float = 0              # sum of cleared (received) payments the payout is computed from
+    rate_pct: float = 0
+    flat_amount: float = 0
+    commission_amount: float = 0
+    status: str = "Approved"            # Approved / Paid — a row only exists once approved
+    approved_by: Optional[str] = ""
+    remarks: Optional[str] = ""
+
+
+class CommissionPayoutCreate(CommissionPayoutBase):
+    pass
+
+
+class CommissionPayout(CommissionPayoutBase):
+    id: str
+    created_at: str
+
+
+# ------- Requirements (structured need captured before a quote) -------
+class RequirementBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    lead_id: str
+    project_id: Optional[str] = ""
+    customer: str
+    phone: Optional[str] = ""
+    division: str = "Furniture"
+    title: str = ""
+    items: List[dict] = []   # [{space, item, qty, w, h, notes, budget}]
+    budget: float = 0
+    priority: str = "Medium"  # Low / Medium / High
+    status: str = "Open"      # Open / Configured / Quoted
+    site_address: Optional[str] = ""
+    by_user: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class RequirementCreate(RequirementBase):
+    pass
+
+
+class Requirement(RequirementBase):
+    id: str
+    created_at: str
+
+
+# ------- Product Configurations (the "Configurator") -------
+class ProductConfigBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    requirement_id: str
+    quote_id: Optional[str] = ""
+    name: str = ""
+    division: str = "Furniture"
+    inputs: dict = {}              # raw configurator selections
+    line_items: List[dict] = []    # computed via lc.calc_line, same shape as quote lines
+    subtotal: float = 0
+    discount: float = 0
+    tax_pct: float = GST_DEFAULT
+    tax_total: float = 0
+    grand_total: float = 0
+    version: int = 1
+    status: str = "Draft"          # Draft / Quoted
+    by_user: Optional[str] = ""
+
+
+class ProductConfigCreate(ProductConfigBase):
+    pass
+
+
+class ProductConfig(ProductConfigBase):
+    id: str
+    created_at: str
+
+
+# ------- Customers (post-sale lifecycle record) -------
+class CustomerBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    phone: str
+    email: Optional[str] = ""
+    address: Optional[str] = ""
+    gstin: Optional[str] = ""
+    division: str = "Furniture"
+    stage: str = "Prospect"        # Prospect / Active / Dormant — see tenancy.DEFAULT_WORKFLOWS["customer"]
+    lead_id: Optional[str] = ""
+    first_sale_id: Optional[str] = ""
+    customer_since: Optional[str] = ""
+    lifetime_value: float = 0
+    balance: float = 0
+    remarks: Optional[str] = ""
+    confidence_level: Optional[float] = None  # 0-100
+    team_id: Optional[str] = ""           # direct team link for reporting
+    gender: Optional[str] = ""
+    maps_url: Optional[str] = ""     # Google Maps location link
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    alt_contact_name: Optional[str] = ""
+    alt_phone: Optional[str] = ""
+    custom_fields: dict = Field(default_factory=dict)  # key (CustomFieldDef.key) -> value
+
+
+class CustomerCreate(CustomerBase):
+    @field_validator("name")
+    @classmethod
+    def _valid_name(cls, v):
+        return lc.validate_person_name(v)
+
+    @field_validator("phone")
+    @classmethod
+    def _phone_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Phone number is required")
+        return v
+
+
+class Customer(CustomerBase):
+    id: str
+    created_at: str
+
+
+# ------- Teams -------
+class TeamBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    description: Optional[str] = ""
+    active: bool = True
+
+
+class TeamCreate(TeamBase):
+    pass
+
+
+class Team(TeamBase):
+    id: str
+    created_at: str
+
+
+# ------- Roles & permissions (P2) -------
+# Deliberately flat: module x {view,create,edit,delete,approve,export} x a
+# single scope (own/team/all) — no field-level rules, no permission
+# hierarchies. `role == "admin"` on the user itself remains the absolute,
+# unconfigurable bypass (see permissions.py) so a role can never be
+# misconfigured into locking the tenant out of itself.
+class ModulePermission(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    module: str
+    view: bool = False
+    create: bool = False
+    edit: bool = False
+    delete: bool = False
+    approve: bool = False
+    export: bool = False
+    scope: str = "own"  # "own" | "team" | "all"
+
+    @field_validator("scope")
+    @classmethod
+    def _valid_scope(cls, v):
+        if v not in ("own", "team", "all"):
+            raise ValueError("scope must be own, team, or all")
+        return v
+
+
+class RoleBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    permissions: List[ModulePermission] = Field(default_factory=list)
+    active: bool = True
+
+
+class RoleCreate(RoleBase):
+    pass
+
+
+class Role(RoleBase):
+    id: str
+    created_at: str
+
+
+# ------- Saved views (per-user or shared filter presets on a list page) -------
+class SavedViewBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    entity: str                    # "leads" / "customers" / ... — matches the frontend page's own key
+    name: str
+    filters: dict = Field(default_factory=dict)   # opaque — replayed as-is into the page's filter state
+    shared: bool = False           # visible to the whole tenant, not just the creator
+
+
+class SavedViewCreate(SavedViewBase):
+    @field_validator("name")
+    @classmethod
+    def _name_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Name is required")
+        return v
+
+
+class SavedView(SavedViewBase):
+    id: str
+    created_by: Optional[str] = ""
+    created_by_id: Optional[str] = ""
+    created_at: str
+
+
+# ------- Custom field definitions (admin-configurable extra fields per
+# entity; values live directly on the entity's own document as a
+# custom_fields dict, not in a separate collection) -------
+class CustomFieldDefBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    entity: str                    # "lead" / "customer"
+    key: str                       # server-assigned slug of label, immutable
+    label: str
+    type: str = "text"             # text / number / date / select / boolean
+    options: List[str] = Field(default_factory=list)   # for type == "select"
+    show_table: bool = False
+    show_filter: bool = False
+    show_detail: bool = True
+    order: int = 0
+    active: bool = True
+
+    @field_validator("type")
+    @classmethod
+    def _valid_type(cls, v):
+        if v not in ("text", "number", "date", "select", "boolean"):
+            raise ValueError("type must be text, number, date, select, or boolean")
+        return v
+
+
+class CustomFieldDefCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    entity: str
+    label: str
+    type: str = "text"
+    options: List[str] = Field(default_factory=list)
+    show_table: bool = False
+    show_filter: bool = False
+    show_detail: bool = True
+
+    @field_validator("label")
+    @classmethod
+    def _label_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Label is required")
+        return v
+
+    @field_validator("type")
+    @classmethod
+    def _valid_type(cls, v):
+        if v not in ("text", "number", "date", "select", "boolean"):
+            raise ValueError("type must be text, number, date, select, or boolean")
+        return v
+
+
+class CustomFieldDefUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    label: Optional[str] = None
+    options: Optional[List[str]] = None
+    show_table: Optional[bool] = None
+    show_filter: Optional[bool] = None
+    show_detail: Optional[bool] = None
+    order: Optional[int] = None
+    active: Optional[bool] = None
+
+
+class CustomFieldDef(CustomFieldDefBase):
+    id: str
+    created_at: str
+
+
+# ------- Audit log (P2) -------
+class AuditLogBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    action: str   # role_created | role_changed | permission_changed |
+                  # user_role_assigned | user_team_assigned | user_activated | user_deactivated
+    by_user: str
+    by_id: str
+    detail: str = ""
+
+
+class AuditLog(AuditLogBase):
+    id: str
+    created_at: str

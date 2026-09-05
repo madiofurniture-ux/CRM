@@ -9,6 +9,7 @@ import { shrinkImage, dataUrlKb } from "@/lib/image";
 const TYPES = ["Window", "Door", "Sliding", "French Door", "Ventilator", "Partition"];
 const FRAMES = ["uPVC", "Aluminium", "Wood", "MS", "WPC"];
 const GLASS = ["Single", "Double (DGU)", "Toughened", "Frosted", "Tinted", "None"];
+const HANDLE_POSITIONS = ["", "RHS", "LHS"];   // "" = N/A (e.g. fixed/ventilator openings)
 
 // W and H captured in INCHES; area is square feet.
 const area = (o) => {
@@ -94,7 +95,7 @@ export default function DWSurvey() {
     if (addingOpening) return;
     setAddingOpening(true);
     try {
-      const { data } = await api.post("/dw-openings", { survey_id: openId, room: "", type: "Window", w: 0, h: 0, qty: 1, frame: "uPVC", glass: "Single", mesh: false });
+      const { data } = await api.post("/dw-openings", { survey_id: openId, room: "", type: "Window", w: 0, h: 0, qty: 1, frame: "uPVC", glass: "Single", mesh: false, handle_position: "" });
       setOpenings((p) => [...p, data]);
     } catch { toast.error("Could not add opening"); }
     finally { setAddingOpening(false); }
@@ -229,6 +230,7 @@ export default function DWSurvey() {
                     <th className="text-right font-semibold px-3 py-2">Sqft</th>
                     <th className="text-left font-semibold px-3 py-2">Frame</th>
                     <th className="text-left font-semibold px-3 py-2">Glass</th>
+                    <th className="text-left font-semibold px-3 py-2">Handle</th>
                     <th className="text-left font-semibold px-3 py-2">Notes</th>
                     <th className="text-center font-semibold px-3 py-2">Photo</th>
                     <th className="w-8"></th>
@@ -245,6 +247,11 @@ export default function DWSurvey() {
                       <td className="px-3 py-2 text-right font-mono">{(o.area || 0).toFixed(2)}</td>
                       <td className="px-3 py-2"><Sel v={o.frame} opts={FRAMES} oc={(v) => patchOpening(o, { frame: v })} /></td>
                       <td className="px-3 py-2"><Sel v={o.glass} opts={GLASS} oc={(v) => patchOpening(o, { glass: v })} /></td>
+                      <td className="px-3 py-2">
+                        <select value={o.handle_position || ""} onChange={(e) => patchOpening(o, { handle_position: e.target.value })} className="w-full px-2 py-1 rounded border border-[var(--border)] bg-white text-xs">
+                          {HANDLE_POSITIONS.map((h) => <option key={h} value={h}>{h || "N/A"}</option>)}
+                        </select>
+                      </td>
                       <td className="px-3 py-2 min-w-[150px]">
                         <Inp v={o.notes} oc={(v) => patchOpening(o, { notes: v })} />
                       </td>

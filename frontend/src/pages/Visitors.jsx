@@ -6,7 +6,8 @@ import api, { formatApiError } from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
-import { Trash2, X, Phone, Pencil, Sparkles } from "lucide-react";
+import { Trash2, X, Phone, Pencil, Sparkles, CheckCircle2 } from "lucide-react";
+import CustomerResolver from "@/components/CustomerResolver";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost", "Delivered"];
 const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
@@ -21,6 +22,9 @@ export default function Visitors() {
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [leadByVisitor, setLeadByVisitor] = useState({});
+  const [leadsByPhone, setLeadsByPhone] = useState({});
+  const [converting, setConverting] = useState(null);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", customer_type: "Male", location: "",
     reference: "", reference_id: "", phone: "", requirement: "",
@@ -28,7 +32,15 @@ export default function Visitors() {
   };
   const [form, setForm] = useState(empty);
 
-  const load = async () => { const { data } = await api.get("/visitors"); setRows(data); };
+  const load = async () => {
+    const { data } = await api.get("/visitors");
+    setRows(data);
+    const { data: leads } = await api.get("/leads");
+    setLeadByVisitor(Object.fromEntries(leads.filter((l) => l.visitor_id).map((l) => [l.visitor_id, l])));
+    const byPhone = {};
+    for (const l of leads) if (l.phone) byPhone[l.phone] = l;
+    setLeadsByPhone(byPhone);
+  };
   const loadRefs = async () => {
     const [a, s] = await Promise.all([api.get("/architects"), api.get("/staff")]);
     setArchitects(a.data);
@@ -49,6 +61,19 @@ export default function Visitors() {
     label: s.name || s.username,
     sub: s.username && s.username !== s.name ? `@${s.username}` : "",
   })), [staff]);
+
+  const convertToLead = async (v) => {
+    if (converting) return;
+    const dupe = v.phone && leadsByPhone[v.phone];
+    if (dupe && !window.confirm(`A lead with this phone already exists (${dupe.name}). Create another lead for this visitor anyway?`)) return;
+    setConverting(v.id);
+    try {
+      const { data: lead } = await api.post(`/convert/visitor-to-lead/${v.id}`);
+      toast.success(`Linked to Lead — ${lead.name}`);
+      await load();
+    } catch { toast.error("Couldn't convert visitor to lead"); }
+    finally { setConverting(null); }
+  };
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -93,17 +118,6 @@ export default function Visitors() {
     setRows((p) => p.map((x) => x.id === v.id ? { ...x, stage } : x));
   };
   const remove = async (id) => { if (!window.confirm("Delete?")) return; await api.delete(`/visitors/${id}`); load(); };
-  const convertToLead = async (v) => {
-    if (v.converted_lead_id) return;
-    if (!window.confirm(`Convert "${v.name}" to a Lead?`)) return;
-    try {
-      await api.post(`/convert/visitor-to-lead/${v.id}`);
-      toast.success("Converted to Lead");
-      load();
-    } catch (e) {
-      toast.error(formatApiError(e.response?.data?.detail) || "Conversion failed");
-    }
-  };
 
   return (
     <>
@@ -157,10 +171,12 @@ export default function Visitors() {
                     <td className="px-4 py-3 text-right font-mono">{inrFull(v.ticket_value)}</td>
                     <td className="px-2 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        {v.converted_lead_id ? (
-                          <span className="text-[10px] px-2 py-1 rounded-full bg-[var(--moss-soft)] text-[var(--moss)] font-semibold uppercase tracking-wider">Lead</span>
+                        {leadByVisitor[v.id] || v.converted_lead_id ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-[var(--moss-soft)] text-[var(--moss)] font-semibold uppercase tracking-wider" title={leadByVisitor[v.id]?.id}>
+                            <CheckCircle2 size={11} /> {leadByVisitor[v.id] ? `Lead: ${leadByVisitor[v.id].name}` : "Lead"}
+                          </span>
                         ) : (
-                          <button onClick={() => convertToLead(v)} className="p-1.5 rounded-md hover:bg-[var(--brand-soft)] text-[var(--brand)]" title="Convert to Lead" data-testid={`visitor-convert-${v.id}`}><Sparkles size={13} /></button>
+                          <button onClick={() => convertToLead(v)} disabled={converting === v.id} className="p-1.5 rounded-md hover:bg-[var(--brand-soft)] text-[var(--brand)] disabled:opacity-60" title={converting === v.id ? "Converting…" : "Convert to Lead"} data-testid={`visitor-convert-${v.id}`}><Sparkles size={13} /></button>
                         )}
                         <button onClick={() => openEdit(v)} className="p-1.5 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Edit visitor" data-testid={`visitor-edit-${v.id}`}><Pencil size={13} /></button>
                         <button onClick={() => remove(v.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]" title="Delete visitor"><Trash2 size={13} /></button>
@@ -181,6 +197,10 @@ export default function Visitors() {
             <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0 bg-white">
               <h3 className="font-heading font-semibold text-lg">{editing ? "Edit Visitor" : "Log Visitor"}</h3>
               <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+            </div>
+            <div className="px-5 pt-4">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Search Existing Customer</label>
+              <CustomerResolver onSelect={(c) => setForm({ ...form, name: c.name, phone: c.phone })} />
             </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <div className="col-span-2">

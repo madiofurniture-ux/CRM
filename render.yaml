@@ -19,3 +19,26 @@ services:
         generateValue: true
       - key: CORS_ORIGINS       # e.g. https://crm.madiofurniture.com
         sync: false
+
+  # Separate service, separate database — server.py refuses to boot if
+  # APP_ENV=staging but DB_NAME doesn't contain "staging", so this can never
+  # silently point at the production MONGO_URL above.
+  - type: web
+    name: madio-crm-api-staging
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements-prod.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: MONGO_URL          # a DIFFERENT Atlas cluster/DB than production — set in dashboard
+        sync: false
+      - key: DB_NAME
+        value: madio_crm_staging
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS       # the staging frontend's URL
+        sync: false

@@ -5,6 +5,11 @@ import { useAuth } from "@/context/AuthContext";
 import api, { formatApiError } from "@/lib/api";
 import { toast, Toaster } from "sonner";
 
+// Login runs before auth, so it can't know which tenant to brand for yet
+// (tenant-specific branding shows post-login, in Sidebar). This is a
+// deployment-wide product name, overridable per install without a code change.
+const PRODUCT_NAME = process.env.REACT_APP_PRODUCT_NAME || "CRM";
+
 export default function Login() {
   const { user, login } = useAuth();
   const nav = useNavigate();
@@ -93,7 +98,7 @@ export default function Login() {
           <div className="flex items-center gap-3 mb-6">
             <div className="w-11 h-11 rounded-xl bg-[var(--brand)] flex items-center justify-center font-heading font-bold text-lg">M</div>
             <div>
-              <div className="font-heading text-xl font-bold tracking-tight">MADIO CRM</div>
+              <div className="font-heading text-xl font-bold tracking-tight">{PRODUCT_NAME}</div>
               <div className="text-[11px] uppercase tracking-[0.2em] text-white/70">Furniture · Paints · D&W</div>
             </div>
           </div>
@@ -109,13 +114,13 @@ export default function Login() {
 
       {/* Right: login */}
       <div className="flex-1 flex items-center justify-center p-6 lg:p-12 relative">
-        <div className="madio-blob w-72 h-72 bg-[var(--brand-soft)] top-10 right-10" />
-        <div className="madio-blob w-64 h-64 bg-[var(--moss-soft)] bottom-20 left-10" />
+        <div className="brand-blob w-72 h-72 bg-[var(--brand-soft)] top-10 right-10" />
+        <div className="brand-blob w-64 h-64 bg-[var(--moss-soft)] bottom-20 left-10" />
 
         <div className="w-full max-w-md relative z-10">
           <div className="lg:hidden mb-8 flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold">M</div>
-            <div className="font-heading text-lg font-bold">MADIO CRM</div>
+            <div className="font-heading text-lg font-bold">{PRODUCT_NAME}</div>
           </div>
 
           {!selected ? (
