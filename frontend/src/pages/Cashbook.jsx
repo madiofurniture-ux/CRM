@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "qrcode";
 import Topbar from "@/components/Topbar";
 import KpiCard from "@/components/KpiCard";
 import api, { formatApiError } from "@/lib/api";
@@ -8,17 +9,29 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import {
   Plus, ArrowDownCircle, ArrowUpCircle, Download, Trash2, X, Wallet,
-  Check, Ban, Briefcase,
+  Check, Ban, Briefcase, Smartphone,
 } from "lucide-react";
 
 const CATEGORIES = ["Hardware", "Fuel", "Refreshments", "Transport", "Advances", "Other"];
 const MODES = ["CASH", "UPI", "ONLINE"];
+const IS_TOUCH_DEVICE = typeof window !== "undefined" && ("ontouchstart" in window || navigator.maxTouchPoints > 0);
 
-const emptyEntry = { amount: "", category: CATEGORIES[0], payment_mode: "CASH", remark: "", receipt_url: "", entry_person: "" };
+// Standard UPI intent — pn is the tenant's own name per the literal spec, even
+// though that puts the payer's name in the "paying to" slot most UPI apps
+// show; tn omits the project segment when the wallet has none.
+function buildUpiUri({ upiId, amount, tenantName, projectId, category }) {
+  const tn = [projectId, category].filter(Boolean).join("-") || "Petty Cash";
+  const params = new URLSearchParams({
+    pa: upiId, pn: tenantName || "MADIO CRM", am: Number(amount || 0).toFixed(2), tn,
+  });
+  return `upi://pay?${params.toString()}`;
+}
+
+const emptyEntry = { amount: "", category: CATEGORIES[0], payment_mode: "CASH", remark: "", receipt_url: "", entry_person: "", custodian_upi_id: "" };
 const emptyBook = { book_name: "", description: "", initial_balance: "", project_id: "", imprest_limit: "", strict_overdraft: false };
 
 export default function Cashbook() {
-  const { user } = useAuth();
+  const { user, tenant } = useAuth();
   const isAdmin = user?.role === "admin";
   const [books, setBooks] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -34,6 +47,11 @@ export default function Cashbook() {
   const [categoryFilter, setCategoryFilter] = useState("All");
   const [projectFilter, setProjectFilter] = useState("All");
   const [pendingTotal, setPendingTotal] = useState(0);
+  const [payReview, setPayReview] = useState(null); // pending entry under review, or null
+  const [reviewUpiId, setReviewUpiId] = useState("");
+  const [reviewUtr, setReviewUtr] = useState("");
+  const [deciding, setDeciding] = useState(false);
+  const qrCanvasRef = useRef(null);
 
   const loadBooks = async () => {
     // skipCache: this refetches right after top-up/expense/approve/reject/
@@ -130,6 +148,7 @@ export default function Cashbook() {
         await api.post(`/cashbooks/${selectedId}/expense`, {
           amount, category: entryForm.category, payment_mode: entryForm.payment_mode,
           remark: entryForm.remark, receipt_url: entryForm.receipt_url, entry_person: entryForm.entry_person,
+          custodian_upi_id: entryForm.custodian_upi_id,
         });
         toast.success("Expense logged — awaiting approval");
       }
@@ -139,12 +158,38 @@ export default function Cashbook() {
     finally { setSaving(false); }
   };
 
-  const decideEntry = async (entry, approved) => {
+  const decideEntry = async (entry, approved, utrNumber = "") => {
+    setDeciding(true);
     try {
-      await api.post(`/cashbook-entries/${entry.id}/approve`, { approved });
+      await api.post(`/cashbook-entries/${entry.id}/approve`, { approved, utr_number: utrNumber });
       toast.success(approved ? "Expense approved" : "Expense rejected");
+      setPayReview(null);
       await Promise.all([loadBooks(), loadEntries(selectedId)]);
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+    finally { setDeciding(false); }
+  };
+
+  const openPayReview = (entry) => {
+    setReviewUpiId(entry.custodian_upi_id || "");
+    setReviewUtr("");
+    setPayReview(entry);
+  };
+
+  const upiUri = payReview ? buildUpiUri({
+    upiId: reviewUpiId, amount: payReview.amount,
+    tenantName: tenant?.display_name || tenant?.short_name,
+    projectId: projectLabel(book?.project_id), category: payReview.category,
+  }) : "";
+  const upiIdValid = /^[\w.\-]+@[\w.\-]+$/.test(reviewUpiId.trim());
+
+  useEffect(() => {
+    if (!payReview || IS_TOUCH_DEVICE || !upiIdValid || !qrCanvasRef.current) return;
+    QRCode.toCanvas(qrCanvasRef.current, upiUri, { width: 180, margin: 1 }).catch(() => {});
+  }, [payReview, upiUri, upiIdValid]);
+
+  const payViaUpi = () => {
+    if (!upiIdValid) return;
+    if (IS_TOUCH_DEVICE) window.location.href = upiUri;
   };
 
   const removeEntry = async (entry) => {
@@ -271,7 +316,7 @@ export default function Cashbook() {
                         <td className="px-4 py-3 text-right whitespace-nowrap">
                           {isAdmin && e.status === "Pending" ? (
                             <span className="inline-flex gap-1">
-                              <button onClick={() => decideEntry(e, true)} title="Approve" className="p-1 rounded hover:bg-emerald-100 text-emerald-700"><Check size={13} /></button>
+                              <button onClick={() => openPayReview(e)} title="Review & Approve" className="p-1 rounded hover:bg-emerald-100 text-emerald-700"><Check size={13} /></button>
                               <button onClick={() => decideEntry(e, false)} title="Reject" className="p-1 rounded hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Ban size={13} /></button>
                             </span>
                           ) : (
@@ -357,6 +402,10 @@ export default function Cashbook() {
               </div>
               <Field label="Note" value={entryForm.remark} onChange={(v) => setEntryForm({ ...entryForm, remark: v })} />
               {drawer === "CASH_OUT" && (
+                <Field label="Payee UPI ID (optional)" value={entryForm.custodian_upi_id}
+                  onChange={(v) => setEntryForm({ ...entryForm, custodian_upi_id: v })} />
+              )}
+              {drawer === "CASH_OUT" && (
                 <div>
                   <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Receipt (optional)</label>
                   <input type="file" accept="image/*" capture="environment" onChange={(e) => uploadReceipt(e.target.files?.[0])} className="text-xs" />
@@ -370,6 +419,50 @@ export default function Cashbook() {
               data-testid="save-entry">
               {saving ? "Saving…" : drawer === "CASH_IN" ? "Record Top Up" : "Log Expense (needs approval)"}
             </button>
+          </div>
+        </div>
+      )}
+
+      {payReview && (
+        <div className="fixed inset-0 bg-black/40 z-[70] flex items-end sm:items-center justify-center sm:p-4" onClick={() => setPayReview(null)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl w-full max-w-sm p-5 max-h-[92vh] overflow-y-auto" data-testid="pay-review-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-heading font-semibold">Review & Pay</h3>
+              <button onClick={() => setPayReview(null)}><X size={16} /></button>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[var(--ink-2)]">{payReview.category || "Expense"} · {payReview.entry_person || "—"}</span>
+                <span className="font-mono font-semibold text-lg">{inrFull(payReview.amount)}</span>
+              </div>
+              {payReview.remark && <div className="text-xs text-[var(--ink-3)]">{payReview.remark}</div>}
+              <Field label="Payee UPI ID" value={reviewUpiId} onChange={setReviewUpiId} />
+
+              {upiIdValid && (
+                IS_TOUCH_DEVICE ? (
+                  <button onClick={payViaUpi} className="btn-primary w-full justify-center" data-testid="pay-via-upi">
+                    <Smartphone size={15} /> Pay via UPI
+                  </button>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 py-2">
+                    <canvas ref={qrCanvasRef} data-testid="upi-qr-canvas" />
+                    <div className="text-[11px] text-[var(--ink-3)]">Scan with any UPI app to pay {inrFull(payReview.amount)}</div>
+                  </div>
+                )
+              )}
+
+              <Field label="UTR Reference (optional)" value={reviewUtr} onChange={setReviewUtr} />
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => decideEntry(payReview, false)} disabled={deciding}
+                className="btn-ghost flex-1 justify-center !border-[var(--danger)] !text-[var(--danger)] disabled:opacity-60">
+                Reject
+              </button>
+              <button onClick={() => decideEntry(payReview, true, reviewUtr)} disabled={deciding}
+                className="btn-primary flex-1 justify-center disabled:opacity-60" data-testid="approve-mark-paid">
+                {deciding ? "Saving…" : "Approve & Mark Paid"}
+              </button>
+            </div>
           </div>
         </div>
       )}

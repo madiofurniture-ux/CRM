@@ -1524,6 +1524,8 @@ async def cashbook_entry_approve(entry_id: str, payload: CashbookEntryApproval, 
         "approved_by": user.get("name", ""),
         "approved_at": now_iso(),
     }
+    if payload.approved and payload.utr_number:
+        updates["payout_utr"] = payload.utr_number
     if payload.approved:
         # The debit lands only now — check strict_overdraft against the
         # balance as it stands at approval time, not at creation time.

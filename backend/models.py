@@ -520,6 +520,8 @@ class CashbookEntryBase(BaseModel):
     remark: Optional[str] = ""
     receipt_url: Optional[str] = ""
     entry_person: Optional[str] = ""
+    custodian_upi_id: Optional[str] = ""  # payee VPA, e.g. user@okhdfcbank — for the UPI pay deep-link
+    payout_utr: Optional[str] = ""        # bank UTR reference, set once the payout is confirmed
     # CASH_IN is pre-trusted credit and lands on current_balance immediately
     # (see create_cashbook_entry) — only a CASH_OUT (expense) is created
     # Pending and only debits the book once approved (see approve_cashbook_entry).
@@ -551,6 +553,7 @@ class CashbookEntry(CashbookEntryBase):
 
 class CashbookEntryApproval(BaseModel):
     approved: bool
+    utr_number: Optional[str] = ""  # bank UTR once the payout is actually made
 
 
 class CashbookTopUp(BaseModel):
@@ -576,6 +579,7 @@ class CashbookExpense(BaseModel):
     remark: Optional[str] = ""
     receipt_url: Optional[str] = ""
     entry_person: Optional[str] = ""
+    custodian_upi_id: Optional[str] = ""  # payee VPA, captured at expense-logging time if known
 
     @field_validator("amount")
     @classmethod

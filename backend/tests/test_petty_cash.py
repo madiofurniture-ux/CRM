@@ -66,6 +66,37 @@ def test_expense_does_not_change_balance_until_approved():
     asyncio.run(run())
 
 
+def test_custodian_upi_id_persists_from_expense_creation():
+    async def run():
+        await _make_book()
+        entry = await server.cashbook_expense(
+            "b1", CashbookExpense(amount=200, category="Fuel", custodian_upi_id="vendor@okhdfcbank"), user=ADMIN)
+        assert entry["custodian_upi_id"] == "vendor@okhdfcbank"
+        stored = await server.db.cashbook_entries.find_one({"id": entry["id"]})
+        assert stored["custodian_upi_id"] == "vendor@okhdfcbank"
+    asyncio.run(run())
+
+
+def test_approval_with_utr_number_stores_payout_utr():
+    async def run():
+        await _make_book()
+        entry = await server.cashbook_expense("b1", CashbookExpense(amount=200), user=ADMIN)
+        result = await server.cashbook_entry_approve(
+            entry["id"], CashbookEntryApproval(approved=True, utr_number="UTR123456789"), user=ADMIN)
+        assert result["payout_utr"] == "UTR123456789"
+        assert result["status"] == "Approved"
+    asyncio.run(run())
+
+
+def test_approval_without_utr_number_leaves_payout_utr_empty():
+    async def run():
+        await _make_book()
+        entry = await server.cashbook_expense("b1", CashbookExpense(amount=200), user=ADMIN)
+        result = await server.cashbook_entry_approve(entry["id"], CashbookEntryApproval(approved=True), user=ADMIN)
+        assert result.get("payout_utr", "") == ""
+    asyncio.run(run())
+
+
 def test_rejected_expense_leaves_balance_untouched():
     async def run():
         await _make_book()
