@@ -73,6 +73,13 @@ db = client[db_name]
 app = FastAPI(title="MADIO CRM")
 app.state.db = db
 
+# kind -> async def handler(db, task) -> str (outcome text). Defined here,
+# before any route/hook code below registers into it, so a handler can be
+# added right next to the make_crud call it belongs to (e.g.
+# lead_followup_reminder next to the leads make_crud call) instead of all
+# being listed in one place far from what schedules them.
+_TASK_HANDLERS: dict = {}
+
 @app.get("/")
 async def app_root():
     return {
@@ -1092,9 +1099,43 @@ async def _notify_order_confirmed(doc: dict, user: dict):
                         customer_name=doc.get("customer", ""), ref_type="sale", ref_id=doc.get("sale_no", ""))
 
 
+async def _schedule_lead_followup_reminder(doc: dict, user: dict):
+    """Phase 3 of the agent-task-queue rollout: the first real consumer,
+    proving the queue end-to-end with low blast radius. Only fires when the
+    rep didn't already set an explicit follow-up date at creation — nothing
+    to remind about otherwise."""
+    if doc.get("follow_up_date"):
+        return
+    from datetime import datetime, timedelta, timezone
+    due = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat()
+    await agent_tasks.schedule_task(db, user, kind="lead_followup_reminder", subject_type="lead",
+                                     subject_id=doc["id"], due_at=due)
+
+
+async def _handle_lead_followup_reminder(db, task: dict) -> str:
+    """Reuses the Lead's own log[] ledger — the same {at, by, text, kind}
+    follow-up-history convention already used for rep-entered notes — rather
+    than stretching notifications.py's customer-facing contract for an
+    internal reminder that was never meant to reach the customer."""
+    lead = await db.leads.find_one({"id": task.get("subject_id", "")}, {"_id": 0})
+    if not lead:
+        return "lead not found"
+    if lead.get("stage") in ("Won", "Lost"):
+        return "lead already closed"
+    if lead.get("follow_up_date") or lead.get("log"):
+        return "already followed up"
+    entry = {"at": now_iso(), "by": "System", "by_id": "",
+             "text": "No follow-up logged since creation — reminder raised.", "kind": "reminder"}
+    await db.leads.update_one({"id": lead["id"]}, {"$push": {"log": entry}})
+    return "reminder logged"
+
+
+_TASK_HANDLERS["lead_followup_reminder"] = _handle_lead_followup_reminder
+
+
 make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, module="visitors")
 make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task,
-          module="leads", owner_field="assigned_to")
+          module="leads", owner_field="assigned_to", on_create=_schedule_lead_followup_reminder)
 make_crud(api, "architects", "architects", ArchitectCreate, Architect, module="architects")
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user",
           on_create=_notify_quote_created)
@@ -2890,8 +2931,10 @@ app.add_middleware(
 
 # ------- Agent task dispatch loop (generic background-job queue; see
 # agent_tasks.py — no LLM, no separate worker process, just a fixed-
-# interval in-process poll appropriate for a single-uvicorn-process app) -------
-_TASK_HANDLERS: dict = {}   # kind -> async def handler(db, task) -> str (outcome text); empty until Phase 3
+# interval in-process poll appropriate for a single-uvicorn-process app).
+# _TASK_HANDLERS itself is defined near the top of the file (before any
+# make_crud/handler registration code runs) — see the "kind -> handler"
+# registrations sprinkled through this file, e.g. lead_followup_reminder.
 _dispatch_task = None
 
 
