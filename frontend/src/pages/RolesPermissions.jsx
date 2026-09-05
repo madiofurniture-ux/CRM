@@ -9,7 +9,7 @@ import { Save, Plus, Trash2 } from "lucide-react";
 const MODULES = [
   "leads", "customers", "quotes", "sales", "inventory",
   "visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
-  "commissions", "cashbook",
+  "commissions", "cashbook", "record-contacts",
 ];
 const ACTIONS = ["view", "create", "edit", "delete", "approve", "export"];
 const SCOPES = ["own", "team", "all"];

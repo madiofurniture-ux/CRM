@@ -37,6 +37,7 @@ from models import (
     MeetCreate, Meet,
     PettyCashCreate, PettyCash,
     CashbookCreate, Cashbook, CashbookEntryCreate, CashbookEntry,
+    RecordContactCreate, RecordContact,
     AttendanceCheckIn, OfficeSettings,
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
     TeamCreate, Team, RoleCreate, Role,
@@ -623,6 +624,7 @@ ALL_MODULE_IDS = [
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
+    "record-contacts",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -1810,26 +1812,26 @@ DEFAULT_ROLES = [
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
                   "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
-                  "commissions", "cashbook")
+                  "commissions", "cashbook", "record-contacts")
     ]},
     {"name": "Management", "permissions": [
         {"module": m, "view": True, "create": False, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
                   "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
-                  "commissions", "cashbook")
+                  "commissions", "cashbook", "record-contacts")
     ]},
     {"name": "Sales Manager", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": True, "export": False, "scope": "team"}
         for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
-                  "tasks", "meetplan", "requirements")
+                  "tasks", "meetplan", "requirements", "record-contacts")
     ]},
     {"name": "Salesperson", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": False, "export": False, "scope": "own"}
         for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
-                  "tasks", "meetplan", "requirements")
+                  "tasks", "meetplan", "requirements", "record-contacts")
     ]},
     {"name": "Inventory", "permissions": [
         {"module": "inventory", "view": True, "create": True, "edit": True,
@@ -2756,6 +2758,80 @@ async def list_agent_conversations(phone: str = "", user: dict = Depends(get_cur
         return []
     q = tenancy.scope({"subject_type": "lead", "subject_id": {"$in": lead_ids}}, "agent_conversations", user)
     return await db.agent_conversations.find(q, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
+# ------- Record contacts: a lightweight many-to-many "people on this
+# record" join. No owner concept exists on a join row, so — same
+# documented limitation as Customer's scope handling elsewhere in this
+# file — "own"/"team" scope currently behaves like "all" here. -------
+@api.get("/record-contacts")
+async def list_record_contacts(subject_type: str = "", subject_id: str = "", phone: str = "",
+                                user: dict = Depends(get_current_user)):
+    await _require_permission("record-contacts", "view", user)
+    if phone and not subject_id:
+        leads = await db.leads.find(tenancy.scope({"phone": phone}, "leads", user), {"_id": 0, "id": 1}).to_list(200)
+        lead_ids = [l["id"] for l in leads]
+        if not lead_ids:
+            return []
+        q = tenancy.scope({"subject_type": "lead", "subject_id": {"$in": lead_ids}}, "record_contacts", user)
+        return await db.record_contacts.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+    q: dict = {}
+    if subject_type:
+        q["subject_type"] = subject_type
+    if subject_id:
+        q["subject_id"] = subject_id
+    return await db.record_contacts.find(tenancy.scope(q, "record_contacts", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(200)
+
+
+@api.post("/record-contacts")
+async def create_record_contact(payload: RecordContactCreate, resolve_phone: str = "",
+                                 user: dict = Depends(get_current_user)):
+    """`resolve_phone` is a convenience for phone-centric UIs (e.g.
+    JourneyDrawer): the *customer's* phone number, used only when the
+    caller doesn't already know a specific lead id — resolved to that
+    phone's most recently created lead. Not to be confused with
+    contact_phone on the payload, which is the new contact PERSON's own
+    number and has nothing to do with which record they're attached to."""
+    await _require_permission("record-contacts", "create", user)
+    doc = payload.model_dump()
+    if not doc.get("subject_id") and doc.get("subject_type") == "lead":
+        if not resolve_phone:
+            raise HTTPException(status_code=400, detail="subject_id or resolve_phone is required")
+        lead = await db.leads.find(tenancy.scope({"phone": resolve_phone}, "leads", user),
+                                    {"_id": 0, "id": 1}).sort("created_at", -1).to_list(1)
+        if not lead:
+            raise HTTPException(status_code=400, detail="No matching lead found to attach this contact to")
+        doc["subject_id"] = lead[0]["id"]
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    tenancy.stamp(doc, "record_contacts", user)
+    await db.record_contacts.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/record-contacts/{item_id}")
+async def update_record_contact(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    await _require_permission("record-contacts", "edit", user)
+    payload.pop("id", None)
+    payload.pop("_id", None)
+    payload.pop("tenant_id", None)
+    owned = tenancy.scope({"id": item_id}, "record_contacts", user)
+    res = await db.record_contacts.update_one(owned, {"$set": payload})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await db.record_contacts.find_one(owned, {"_id": 0})
+
+
+@api.delete("/record-contacts/{item_id}")
+async def delete_record_contact(item_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("record-contacts", "delete", user)
+    owned = tenancy.scope({"id": item_id}, "record_contacts", user)
+    res = await db.record_contacts.delete_one(owned)
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
 
 
 @api.get("/journey/{phone}")

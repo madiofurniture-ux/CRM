@@ -537,6 +537,34 @@ class AgentConversation(AgentConversationBase):
     created_at: str
 
 
+# ------- Record contacts (a lightweight many-to-many "people on this
+# record" join, e.g. a lead's site engineer or decision maker, beyond the
+# single customer/assigned_to string fields Lead/Quote/Sale already carry) -------
+class RecordContactBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    subject_type: str              # "lead" / "quote" / "sale" / "project"
+    subject_id: Optional[str] = "" # "" is valid at request time — the create
+                                    # endpoint fills it in via resolve_phone
+                                    # when the caller only knows a phone number
+    contact_name: str
+    contact_phone: Optional[str] = ""
+    role: Optional[str] = ""       # free text, e.g. "Decision Maker", "Site Engineer"
+
+
+class RecordContactCreate(RecordContactBase):
+    @field_validator("contact_name")
+    @classmethod
+    def _name_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Contact name is required")
+        return v
+
+
+class RecordContact(RecordContactBase):
+    id: str
+    created_at: str
+
+
 # ------- Attendance -------
 class AttendanceCheckIn(BaseModel):
     lat: float

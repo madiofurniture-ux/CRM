@@ -46,6 +46,7 @@ TENANT_COLLECTIONS = {
     "settings", "workflows", "attendance", "commission_rules", "commission_payouts",
     "requirements", "product_configs", "teams", "roles", "audit_log", "notification_logs",
     "cashbooks", "cashbook_entries", "agent_tasks", "agent_conversations",
+    "record_contacts",
 }
 
 SYSTEM_TENANT = "system"          # reserved; never assigned to a business
