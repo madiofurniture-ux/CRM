@@ -18,9 +18,10 @@ export default function JourneyDrawer({ phone, name, onClose }) {
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState("timeline");
   const [notifs, setNotifs] = useState([]);
+  const [conversations, setConversations] = useState([]);
 
   useEffect(() => {
-    if (!phone) { setData(null); setNotifs([]); return; }
+    if (!phone) { setData(null); setNotifs([]); setConversations([]); return; }
     setLoading(true);
     api.get(`/journey/${encodeURIComponent(phone)}`)
       .then((r) => setData(r.data))
@@ -29,6 +30,9 @@ export default function JourneyDrawer({ phone, name, onClose }) {
     api.get(`/notifications?phone=${encodeURIComponent(phone)}`)
       .then((r) => setNotifs(r.data))
       .catch(() => setNotifs([]));
+    api.get(`/agent-conversations?phone=${encodeURIComponent(phone)}`)
+      .then((r) => setConversations(r.data))
+      .catch(() => setConversations([]));
   }, [phone]);
 
   const { tenant } = useAuth();
@@ -82,6 +86,10 @@ export default function JourneyDrawer({ phone, name, onClose }) {
                 className={`text-[11px] font-semibold uppercase tracking-wider pb-2 -mb-px border-b-2 ${tab === "notifications" ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-[var(--ink-3)]"}`}>
                 Notification Log{notifs.length ? ` (${notifs.length})` : ""}
               </button>
+              <button onClick={() => setTab("agent")} data-testid="journey-tab-agent"
+                className={`text-[11px] font-semibold uppercase tracking-wider pb-2 -mb-px border-b-2 ${tab === "agent" ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-[var(--ink-3)]"}`}>
+                Agent{conversations.length ? ` (${conversations.length})` : ""}
+              </button>
             </div>
 
             {tab === "timeline" && (
@@ -120,6 +128,31 @@ export default function JourneyDrawer({ phone, name, onClose }) {
                     </div>
                     <div className="text-xs text-[var(--ink-2)]">{n.message}</div>
                     <div className="text-[10px] text-[var(--ink-3)] mt-1">{fmtDate(n.created_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {tab === "agent" && (
+              <div className="space-y-3" data-testid="journey-agent-tab">
+                {conversations.length === 0 && <div className="text-sm text-[var(--ink-3)] py-4">No agent conversations yet.</div>}
+                {conversations.map((c) => (
+                  <div key={c.id} className="p-3 rounded-lg border border-[var(--border-light)] bg-[var(--surface-2)]">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] uppercase tracking-wide font-semibold text-[var(--ink-3)]">{c.subject_type} · {fmtDate(c.created_at)}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${c.status === "closed" ? "bg-[var(--surface-2)] text-[var(--ink-3)]" : "bg-[var(--brand-soft)] text-[var(--brand)]"}`}>{c.status}</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {(c.log || []).map((e, i) => (
+                        <div key={i} className="text-xs">
+                          <span className="font-semibold text-[var(--ink-2)]">{e.by}: </span>
+                          <span className="text-[var(--ink-2)]">{e.text}</span>
+                        </div>
+                      ))}
+                      {c.status === "awaiting_input" && c.pending_question && (
+                        <div className="text-xs text-[var(--warn)] italic mt-1">Waiting on: {c.pending_question.text}</div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

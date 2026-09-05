@@ -2740,6 +2740,24 @@ async def list_notifications(phone: str = "", user: dict = Depends(get_current_u
         .sort("created_at", -1).to_list(200)
 
 
+@api.get("/agent-conversations")
+async def list_agent_conversations(phone: str = "", user: dict = Depends(get_current_user)):
+    """The Agent tab on the Customer 360 drawer. Conversations are keyed by
+    (subject_type, subject_id), not phone, so this resolves phone -> lead
+    ids first (the only subject_type anything currently creates
+    conversations for) then looks up conversations for those leads —
+    same two-step shape as _notify_order_confirmed resolving a sale's phone
+    through its source quote."""
+    if not phone:
+        return []
+    leads = await db.leads.find(tenancy.scope({"phone": phone}, "leads", user), {"_id": 0, "id": 1}).to_list(200)
+    lead_ids = [l["id"] for l in leads]
+    if not lead_ids:
+        return []
+    q = tenancy.scope({"subject_type": "lead", "subject_id": {"$in": lead_ids}}, "agent_conversations", user)
+    return await db.agent_conversations.find(q, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
 @api.get("/journey/{phone}")
 async def journey(phone: str, user: dict = Depends(get_current_user)):
     leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
