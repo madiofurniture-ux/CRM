@@ -107,6 +107,30 @@ async def stream_csv_rows(db, entity: str, user: dict, owners: Optional[list] = 
         yield buf.getvalue()
 
 
+CASHBOOK_ENTRY_FIELDS = [
+    "id", "created_at", "cashbook_id", "type", "amount", "category",
+    "payment_mode", "remark", "receipt_url", "entry_person",
+    "status", "approved_by", "approved_at",
+]
+
+
+async def stream_cashbook_entries_csv(db, user: dict) -> AsyncGenerator[str, None]:
+    """Export-only — deliberately no import counterpart. A generic CSV
+    import would insert_one straight into cashbook_entries and skip the
+    $inc balance/approval side effects that cashbook_top_up/expense/approve
+    enforce, silently corrupting a book's running balance."""
+    header_buf = io.StringIO()
+    csv.writer(header_buf).writerow(CASHBOOK_ENTRY_FIELDS)
+    yield header_buf.getvalue()
+
+    cursor = db.cashbook_entries.find(
+        tenancy.scope({}, "cashbook_entries", user), {"_id": 0}).sort("created_at", -1).batch_size(500)
+    async for doc in cursor:
+        buf = io.StringIO()
+        csv.writer(buf).writerow([lc.csv_cell(doc.get(f)) for f in CASHBOOK_ENTRY_FIELDS])
+        yield buf.getvalue()
+
+
 def suggest_mapping(headers: list[str], base_fields: list[str], custom_defs: list[dict]) -> dict[str, str]:
     """Case-insensitive match of each CSV header to a base field or a custom
     field's key/label; unmatched headers map to "" (skip)."""

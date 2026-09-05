@@ -40,6 +40,7 @@ from models import (
     MeetCreate, Meet,
     PettyCashCreate, PettyCash,
     CashbookCreate, Cashbook, CashbookEntryCreate, CashbookEntry,
+    CashbookEntryApproval, CashbookTopUp, CashbookExpense,
     RecordContactCreate, RecordContact,
     AttendanceCheckIn, OfficeSettings,
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
@@ -1219,6 +1220,114 @@ async def delete_cashbook_entry(entry_id: str, user: dict = Depends(get_current_
     book_owned = tenancy.scope({"id": entry["cashbook_id"]}, "cashbooks", user)
     await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": delta}})
     return {"ok": True}
+
+
+# ------- Cashbook top-up / expense / approval — dedicated routes for the
+# wallet UI. Unlike the generic create_cashbook_entry above (kept as-is for
+# backward compatibility), an expense here is created Pending and only
+# debits the book's balance once approved; a top-up is pre-trusted credit
+# and lands immediately, same as before. -------
+@api.post("/cashbooks/{cashbook_id}/top-up")
+async def cashbook_top_up(cashbook_id: str, payload: CashbookTopUp, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "create", user)
+    owned = tenancy.scope({"id": cashbook_id}, "cashbooks", user)
+    book = await db.cashbooks.find_one(owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Cashbook not found")
+    if book.get("status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Cashbook is archived")
+
+    doc = payload.model_dump()
+    doc.update(cashbook_id=cashbook_id, type="CASH_IN", status="Approved",
+                id=new_id(), created_at=now_iso())
+    doc["entry_person"] = doc.get("entry_person") or user.get("name", "")
+    tenancy.stamp(doc, "cashbook_entries", user)
+    await db.cashbook_entries.insert_one(dict(doc))
+    doc.pop("_id", None)
+    await db.cashbooks.update_one(owned, {"$inc": {"current_balance": doc["amount"]}})
+    return doc
+
+
+@api.post("/cashbooks/{cashbook_id}/expense")
+async def cashbook_expense(cashbook_id: str, payload: CashbookExpense, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "create", user)
+    owned = tenancy.scope({"id": cashbook_id}, "cashbooks", user)
+    book = await db.cashbooks.find_one(owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Cashbook not found")
+    if book.get("status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Cashbook is archived")
+
+    doc = payload.model_dump()
+    doc.update(cashbook_id=cashbook_id, type="CASH_OUT", status="Pending",
+                id=new_id(), created_at=now_iso())
+    doc["entry_person"] = doc.get("entry_person") or user.get("name", "")
+    tenancy.stamp(doc, "cashbook_entries", user)
+    await db.cashbook_entries.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc  # no balance change yet — see cashbook_entry_approve
+
+
+@api.post("/cashbook-entries/{entry_id}/approve")
+async def cashbook_entry_approve(entry_id: str, payload: CashbookEntryApproval, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "approve", user)
+    owned = tenancy.scope({"id": entry_id}, "cashbook_entries", user)
+    entry = await db.cashbook_entries.find_one(owned, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.get("status") != "Pending":
+        raise HTTPException(status_code=400, detail="Entry is not pending approval")
+
+    book_owned = tenancy.scope({"id": entry["cashbook_id"]}, "cashbooks", user)
+    book = await db.cashbooks.find_one(book_owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Cashbook not found")
+
+    updates = {
+        "status": "Approved" if payload.approved else "Rejected",
+        "approved_by": user.get("name", ""),
+        "approved_at": now_iso(),
+    }
+    if payload.approved:
+        # The debit lands only now — check strict_overdraft against the
+        # balance as it stands at approval time, not at creation time.
+        if book.get("strict_overdraft") and book["current_balance"] < entry["amount"]:
+            raise HTTPException(status_code=400, detail="Approving this would overdraw the cashbook")
+        await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": -entry["amount"]}})
+    await db.cashbook_entries.update_one(owned, {"$set": updates})
+    return await db.cashbook_entries.find_one(owned, {"_id": 0})
+
+
+@api.get("/projects/{project_id}/petty-cash/summary")
+async def project_petty_cash_summary(project_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    books = await db.cashbooks.find(
+        tenancy.scope({"project_id": project_id}, "cashbooks", user), {"_id": 0}).to_list(200)
+    book_ids = [b["id"] for b in books]
+    balance_total = sum(b.get("current_balance", 0) for b in books)
+
+    burn_total = pending_total = 0.0
+    if book_ids:
+        entries = await db.cashbook_entries.find(
+            tenancy.scope({"cashbook_id": {"$in": book_ids}, "type": "CASH_OUT"}, "cashbook_entries", user),
+            {"_id": 0}).to_list(5000)
+        burn_total = sum(e["amount"] for e in entries if e.get("status") == "Approved")
+        pending_total = sum(e["amount"] for e in entries if e.get("status") == "Pending")
+
+    return {
+        "project_id": project_id, "wallet_count": len(books),
+        "balance_total": balance_total, "burn_total": burn_total, "pending_total": pending_total,
+    }
+
+
+@api.get("/cashbook-entries/export.csv")
+async def cashbook_entries_export(user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "export", user)
+    return StreamingResponse(
+        csv_engine.stream_cashbook_entries_csv(db, user),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="cashbook_entries_{lc.today_iso()}.csv"'},
+    )
 
 
 # ---------- Dated, multi-entry follow-up/remarks ledger ----------

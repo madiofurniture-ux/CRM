@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import LogTimeline from "@/components/LogTimeline";
+import PettyCashBurnWidget from "@/components/PettyCashBurnWidget";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2, MessageSquare } from "lucide-react";
@@ -466,7 +467,8 @@ export default function Projects() {
               <h3 className="font-heading font-semibold text-lg">Follow-ups — {logProject.project_no}</h3>
               <button onClick={() => setLogProject(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
-            <div className="p-5">
+            <div className="p-5 space-y-4">
+              <PettyCashBurnWidget projectId={logProject.id} />
               <LogTimeline
                 entity="project" itemId={logProject.id} entries={logProject.log || []}
                 onAppended={(log) => {

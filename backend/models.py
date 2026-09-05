@@ -431,6 +431,9 @@ class CashbookBase(BaseModel):
     initial_balance: float = 0
     current_balance: float = 0
     status: str = "ACTIVE"  # ACTIVE / ARCHIVED
+    project_id: Optional[str] = ""        # "" = not linked to a project
+    imprest_limit: Optional[float] = 0    # 0 = no limit; shown as a balance-vs-limit bar
+    strict_overdraft: bool = False        # when true, an expense can't be approved past current_balance
 
 
 class CashbookCreate(CashbookBase):
@@ -457,6 +460,12 @@ class CashbookEntryBase(BaseModel):
     remark: Optional[str] = ""
     receipt_url: Optional[str] = ""
     entry_person: Optional[str] = ""
+    # CASH_IN is pre-trusted credit and lands on current_balance immediately
+    # (see create_cashbook_entry) — only a CASH_OUT (expense) is created
+    # Pending and only debits the book once approved (see approve_cashbook_entry).
+    status: str = "Approved"             # Pending / Approved / Rejected
+    approved_by: Optional[str] = ""
+    approved_at: Optional[str] = ""
 
 
 class CashbookEntryCreate(CashbookEntryBase):
@@ -478,6 +487,42 @@ class CashbookEntryCreate(CashbookEntryBase):
 class CashbookEntry(CashbookEntryBase):
     id: str
     created_at: str
+
+
+class CashbookEntryApproval(BaseModel):
+    approved: bool
+
+
+class CashbookTopUp(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    amount: float
+    payment_mode: str = "CASH"
+    remark: Optional[str] = ""
+    entry_person: Optional[str] = ""
+
+    @field_validator("amount")
+    @classmethod
+    def _positive_amount(cls, v):
+        if v <= 0:
+            raise ValueError("amount must be greater than zero")
+        return v
+
+
+class CashbookExpense(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    amount: float
+    category: Optional[str] = ""
+    payment_mode: str = "CASH"
+    remark: Optional[str] = ""
+    receipt_url: Optional[str] = ""
+    entry_person: Optional[str] = ""
+
+    @field_validator("amount")
+    @classmethod
+    def _positive_amount(cls, v):
+        if v <= 0:
+            raise ValueError("amount must be greater than zero")
+        return v
 
 
 # ------- Agent tasks (a generic, durable background-job queue — "agent"
