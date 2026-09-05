@@ -110,7 +110,7 @@ async def stream_csv_rows(db, entity: str, user: dict, owners: Optional[list] = 
 CASHBOOK_ENTRY_FIELDS = [
     "id", "created_at", "cashbook_id", "type", "amount", "category",
     "payment_mode", "remark", "receipt_url", "entry_person",
-    "status", "approved_by", "approved_at",
+    "status", "approved_by", "approved_at", "custodian_upi_id", "payout_utr",
 ]
 
 
