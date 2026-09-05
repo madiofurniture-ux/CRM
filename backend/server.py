@@ -2937,13 +2937,23 @@ def _csv_entity(entity: str) -> str:
     return entity
 
 
+async def _read_capped(file: UploadFile) -> bytes:
+    """Reads at most MAX_IMPORT_BYTES+1 — enforces the cap during the read
+    itself rather than buffering an unbounded upload before checking it."""
+    raw = await file.read(csv_engine.MAX_IMPORT_BYTES + 1)
+    if len(raw) > csv_engine.MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=400, detail="File too large")
+    return raw
+
+
 @api.get("/{entity}/export.csv")
 async def csv_export(entity: str, user: dict = Depends(get_current_user)):
     entity = _csv_entity(entity)
-    await _require_permission(entity, "export", user)
+    roles = await _require_permission(entity, "export", user)
+    owners = await _scope_owners(user, roles, entity)
     filename = f"{entity}_{lc.today_iso()}.csv"
     return StreamingResponse(
-        csv_engine.stream_csv_rows(db, entity, user),
+        csv_engine.stream_csv_rows(db, entity, user, owners=owners),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -2954,9 +2964,7 @@ async def csv_import_preview(entity: str, file: UploadFile = File(...),
                               user: dict = Depends(get_current_user)):
     entity = _csv_entity(entity)
     await _require_permission(entity, "create", user)
-    raw = await file.read()
-    if len(raw) > csv_engine.MAX_IMPORT_BYTES:
-        raise HTTPException(status_code=400, detail="File too large")
+    raw = await _read_capped(file)
     return await csv_engine.preview_import(db, entity, user, raw.decode("utf-8", errors="replace"))
 
 
@@ -2964,15 +2972,19 @@ async def csv_import_preview(entity: str, file: UploadFile = File(...),
 async def csv_import_commit(entity: str, file: UploadFile = File(...), mapping: str = Form(...),
                              user: dict = Depends(get_current_user)):
     entity = _csv_entity(entity)
+    # Import can both create and update existing rows, so both permissions
+    # are required up front — a create-only grant must not be able to
+    # overwrite existing records via a CSV's id column.
     await _require_permission(entity, "create", user)
-    raw = await file.read()
-    if len(raw) > csv_engine.MAX_IMPORT_BYTES:
-        raise HTTPException(status_code=400, detail="File too large")
+    roles = await _require_permission(entity, "edit", user)
+    owners = await _scope_owners(user, roles, entity)
+    raw = await _read_capped(file)
     try:
         mapping_dict = json.loads(mapping)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="mapping must be a JSON object")
-    return await csv_engine.commit_import(db, entity, user, raw.decode("utf-8", errors="replace"), mapping_dict)
+    return await csv_engine.commit_import(
+        db, entity, user, raw.decode("utf-8", errors="replace"), mapping_dict, owners=owners)
 
 
 @api.get("/journey/{phone}")

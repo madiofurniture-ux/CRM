@@ -135,3 +135,47 @@ def test_commit_import_ignores_a_client_supplied_tenant_id_column():
         doc = await db.leads.find_one({"phone": "9990001111"})
         assert doc["tenant_id"] == "acme"  # stamped from the caller's own tenant, never the CSV
     asyncio.run(run())
+
+
+# ── owner-scope enforcement (own/team permission scope, matches make_crud) ──
+def test_stream_csv_rows_excludes_leads_outside_the_callers_owner_scope():
+    async def run():
+        db = _db()
+        await db.leads.insert_one({"id": "L1", "tenant_id": "acme", "name": "Mine", "phone": "1", "assigned_to": "u1"})
+        await db.leads.insert_one({"id": "L2", "tenant_id": "acme", "name": "Not Mine", "phone": "2", "assigned_to": "u2"})
+        chunks = await _collect(csv_engine.stream_csv_rows(db, "leads", ACME, owners=["u1"]))
+        text = "".join(chunks)
+        assert "Mine" in text
+        assert "Not Mine" not in text
+    asyncio.run(run())
+
+
+def test_stream_csv_rows_owners_none_means_unrestricted():
+    async def run():
+        db = _db()
+        await db.leads.insert_one({"id": "L1", "tenant_id": "acme", "name": "Rep One", "phone": "1", "assigned_to": "u1"})
+        await db.leads.insert_one({"id": "L2", "tenant_id": "acme", "name": "Rep Two", "phone": "2", "assigned_to": "u2"})
+        chunks = await _collect(csv_engine.stream_csv_rows(db, "leads", ACME, owners=None))
+        text = "".join(chunks)
+        assert "Rep One" in text and "Rep Two" in text
+    asyncio.run(run())
+
+
+def test_commit_import_out_of_scope_id_is_treated_as_not_found():
+    async def run():
+        db = _db()
+        await db.leads.insert_one({
+            "id": "L1", "tenant_id": "acme", "date": "2026-01-01", "name": "Not Mine",
+            "phone": "9990001111", "source": "Walk-in", "reference": "Ref", "stage": "New",
+            "assigned_to": "u2",
+        })
+        csv_text = "Id,Date,Name,Phone,Source,Reference\nL1,2026-01-01,Hijacked,9990001111,Walk-in,Ref\n"
+        mapping = {"Id": "id", "Date": "date", "Name": "name", "Phone": "phone", "Source": "source", "Reference": "reference"}
+        # Caller is scoped to only u1's own records — L1 belongs to u2.
+        result = await csv_engine.commit_import(db, "leads", ACME, csv_text, mapping, owners=["u1"])
+        assert result["updated"] == 0
+        # Falls through to insert-as-new rather than silently updating someone else's row.
+        assert result["imported"] == 1
+        doc = await db.leads.find_one({"id": "L1"})
+        assert doc["name"] == "Not Mine"  # the out-of-scope row itself is untouched
+    asyncio.run(run())

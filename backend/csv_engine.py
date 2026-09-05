@@ -15,13 +15,16 @@ from __future__ import annotations
 
 import csv
 import io
-from typing import Any, AsyncGenerator
+import logging
+from typing import Any, AsyncGenerator, Optional
 
 from pydantic import ValidationError
 
 import lifecycle as lc
 import tenancy
 from models import LeadCreate, CustomerCreate, new_id, now_iso
+
+logger = logging.getLogger("madio")
 
 # ponytail: fixed caps — raise or move to chunked/background processing if a
 # real import ever needs more than this in one file.
@@ -33,6 +36,9 @@ ENTITY_CONFIG = {
         "collection": "leads",
         "custom_entity": "lead",
         "create_model": LeadCreate,
+        # Mirrors make_crud(api, "leads", ..., owner_field="assigned_to") —
+        # a caller scoped to "own"/"team" must not export/import outside it.
+        "owner_field": "assigned_to",
         "base_fields": [
             "id", "created_at", "date", "name", "phone", "source", "reference",
             "stage", "follow_up_date", "remarks", "assigned_to", "attended_by",
@@ -43,6 +49,9 @@ ENTITY_CONFIG = {
         "collection": "customers",
         "custom_entity": "customer",
         "create_model": CustomerCreate,
+        # No owner_field on make_crud's customers registration either — "own"/
+        # "team" scope already behaves like "all" for customers app-wide.
+        "owner_field": None,
         "base_fields": [
             "id", "created_at", "name", "phone", "email", "address", "gstin",
             "division", "stage", "lead_id", "first_sale_id", "customer_since",
@@ -51,6 +60,16 @@ ENTITY_CONFIG = {
         ],
     },
 }
+
+
+def _owner_scoped(query: dict, cfg: dict, owners: Optional[list]) -> dict:
+    """Add the "own"/"team" permission-scope filter to a query — same
+    restriction make_crud's _list/_update apply via owner_field/_scope_owners.
+    `owners=None` means no restriction ("all" scope, or the entity has no
+    owner_field); a list restricts to those owner-field values."""
+    if owners is not None and cfg.get("owner_field"):
+        query[cfg["owner_field"]] = {"$in": owners}
+    return query
 
 
 async def _custom_defs(db, entity: str, user: dict) -> list[dict]:
@@ -70,7 +89,7 @@ def _row_values(doc: dict, fields: list[str], custom_keys: set[str]) -> list[str
     return [lc.csv_cell(custom.get(f) if f in custom_keys else doc.get(f)) for f in fields]
 
 
-async def stream_csv_rows(db, entity: str, user: dict) -> AsyncGenerator[str, None]:
+async def stream_csv_rows(db, entity: str, user: dict, owners: Optional[list] = None) -> AsyncGenerator[str, None]:
     cfg = ENTITY_CONFIG[entity]
     defs = await _custom_defs(db, entity, user)
     custom_keys = {d["key"] for d in defs}
@@ -80,8 +99,8 @@ async def stream_csv_rows(db, entity: str, user: dict) -> AsyncGenerator[str, No
     csv.writer(header_buf).writerow(fields)
     yield header_buf.getvalue()
 
-    cursor = db[cfg["collection"]].find(
-        tenancy.scope({}, cfg["collection"], user), {"_id": 0}).batch_size(500)
+    q = _owner_scoped(tenancy.scope({}, cfg["collection"], user), cfg, owners)
+    cursor = db[cfg["collection"]].find(q, {"_id": 0}).batch_size(500)
     async for doc in cursor:
         buf = io.StringIO()
         csv.writer(buf).writerow(_row_values(doc, fields, custom_keys))
@@ -122,7 +141,8 @@ async def preview_import(db, entity: str, user: dict, csv_text: str) -> dict:
     }
 
 
-async def commit_import(db, entity: str, user: dict, csv_text: str, mapping: dict[str, str]) -> dict:
+async def commit_import(db, entity: str, user: dict, csv_text: str, mapping: dict[str, str],
+                         owners: Optional[list] = None) -> dict:
     cfg = ENTITY_CONFIG[entity]
     defs = await _custom_defs(db, entity, user)
     custom_keys = {d["key"] for d in defs}
@@ -153,14 +173,16 @@ async def commit_import(db, entity: str, user: dict, csv_text: str, mapping: dic
         try:
             existing = None
             if row_id:
-                existing = await db[cfg["collection"]].find_one(
-                    tenancy.scope({"id": row_id}, cfg["collection"], user))
+                # Out-of-scope id reads as "not found" — same 404-not-403
+                # convention make_crud's _update uses, so a caller can't
+                # probe which ids exist outside their own scope.
+                owned = _owner_scoped(tenancy.scope({"id": row_id}, cfg["collection"], user), cfg, owners)
+                existing = await db[cfg["collection"]].find_one(owned)
             if existing:
                 merged = {**existing, **record}
                 validated = cfg["create_model"](**merged).model_dump()
                 updates = {k: validated[k] for k in record if k in validated}
-                await db[cfg["collection"]].update_one(
-                    tenancy.scope({"id": row_id}, cfg["collection"], user), {"$set": updates})
+                await db[cfg["collection"]].update_one(owned, {"$set": updates})
                 updated += 1
             else:
                 validated = cfg["create_model"](**record).model_dump()
@@ -173,8 +195,9 @@ async def commit_import(db, entity: str, user: dict, csv_text: str, mapping: dic
             failed += 1
             msg = "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors())
             errors.append({"row": i, "error": msg})
-        except Exception as e:  # noqa: BLE001 — one bad row must never abort the batch
+        except Exception:  # noqa: BLE001 — one bad row must never abort the batch
+            logger.exception("csv_engine.commit_import: row %d failed", i)
             failed += 1
-            errors.append({"row": i, "error": str(e)})
+            errors.append({"row": i, "error": "Import failed — see server log"})
 
     return {"imported": imported, "updated": updated, "failed": failed, "errors": errors}
