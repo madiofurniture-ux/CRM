@@ -1,14 +1,20 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
-import StageBadge from "@/components/StageBadge";
 import JourneyDrawer from "@/components/JourneyDrawer";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
+import EmptyState from "@/components/EmptyState";
+import { Skeleton } from "@/components/ui/skeleton";
 import useCustomFields from "@/hooks/useCustomFields";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
-import { Compass, X, Pencil } from "lucide-react";
+import { Compass, X, Pencil, Phone, MessageCircle, Contact } from "lucide-react";
+
+const waLink = (phone, text = "") => {
+  const ph = String(phone || "").replace(/\D/g, "").slice(-10);
+  return ph ? `https://wa.me/91${ph}?text=${encodeURIComponent(text)}` : null;
+};
 
 const emptyForm = {
   name: "", phone: "", email: "", address: "", gstin: "", division: "Furniture",
@@ -18,6 +24,7 @@ const emptyForm = {
 
 export default function Customers() {
   const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [fStage, setFStage] = useState("All");
   const [jny, setJny] = useState(null);
@@ -29,7 +36,15 @@ export default function Customers() {
   const { defs: customFieldDefs } = useCustomFields("customer");
   const [customFilters, setCustomFilters] = useState({});
 
-  const load = async () => { const { data } = await api.get("/customers"); setRows(data); };
+  const load = async () => {
+    setLoading(true);
+    try { const { data } = await api.get("/customers"); setRows(data); }
+    finally { setLoading(false); }
+  };
+  const updateStage = async (c, stage) => {
+    await api.put(`/customers/${c.id}`, { ...c, stage });
+    setRows((p) => p.map((x) => x.id === c.id ? { ...x, stage } : x));
+  };
   useEffect(() => {
     load();
     api.get("/teams").then(({ data }) => setTeams(data)).catch(() => setTeams([]));
@@ -121,30 +136,55 @@ export default function Customers() {
               <thead className="bg-[var(--surface-2)]">
                 <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
                   <th className="px-4 py-3">Name</th>
-                  <th className="px-4 py-3">Phone</th>
+                  <th className="hidden md:table-cell px-4 py-3">Phone</th>
                   <th className="px-4 py-3">Stage</th>
-                  <th className="px-4 py-3">Customer since</th>
-                  <th className="px-4 py-3 text-right">Lifetime value</th>
-                  <th className="px-4 py-3 text-right">Balance</th>
+                  <th className="hidden lg:table-cell px-4 py-3">Customer since</th>
+                  <th className="hidden md:table-cell px-4 py-3 text-right">Lifetime value</th>
+                  <th className="hidden lg:table-cell px-4 py-3 text-right">Balance</th>
                   {customFieldDefs.filter((d) => d.show_table).map((d) => (
-                    <th key={d.key} className="px-4 py-3 text-left">{d.label}</th>
+                    <th key={d.key} className="hidden lg:table-cell px-4 py-3 text-left">{d.label}</th>
                   ))}
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((c) => (
+                {loading && Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="border-t border-[var(--border-light)]">
+                    <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
+                    <td className="hidden md:table-cell px-4 py-3"><Skeleton className="h-4 w-24" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-6 w-20" /></td>
+                    <td className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                    <td className="hidden md:table-cell px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                    <td className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                    {customFieldDefs.filter((d) => d.show_table).map((d) => (
+                      <td key={d.key} className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-16" /></td>
+                    ))}
+                    <td className="px-4 py-3"><Skeleton className="h-6 w-20 ml-auto" /></td>
+                  </tr>
+                ))}
+                {!loading && filtered.map((c) => (
                   <tr key={c.id} className="border-t border-[var(--border-light)] hover:bg-[var(--surface-hover)]" data-testid={`customer-${c.id}`}>
                     <td className="px-4 py-3 font-medium text-[var(--ink)]">{c.name}</td>
-                    <td className="px-4 py-3 font-mono text-[var(--ink-2)]">{c.phone}</td>
-                    <td className="px-4 py-3"><StageBadge stage={c.stage} /></td>
-                    <td className="px-4 py-3 text-[var(--ink-2)]">{fmtDate(c.customer_since)}</td>
-                    <td className="px-4 py-3 text-right font-mono">{inrFull(c.lifetime_value)}</td>
-                    <td className="px-4 py-3 text-right font-mono">{inrFull(c.balance)}</td>
+                    <td className="hidden md:table-cell px-4 py-3 font-mono text-[var(--ink-2)]">{c.phone}</td>
+                    <td className="px-4 py-3">
+                      <select value={c.stage || ""} onChange={(e) => updateStage(c, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs" data-testid={`customer-stage-${c.id}`}>
+                        {c.stage && !stages.includes(c.stage) && <option value={c.stage}>{c.stage}</option>}
+                        {stages.filter((s) => s !== "All").map((s) => <option key={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{fmtDate(c.customer_since)}</td>
+                    <td className="hidden md:table-cell px-4 py-3 text-right font-mono">{inrFull(c.lifetime_value)}</td>
+                    <td className="hidden lg:table-cell px-4 py-3 text-right font-mono">{inrFull(c.balance)}</td>
                     {customFieldDefs.filter((d) => d.show_table).map((d) => (
-                      <td key={d.key} className="px-4 py-3 text-[var(--ink-2)]">{String((c.custom_fields || {})[d.key] ?? "")}</td>
+                      <td key={d.key} className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{String((c.custom_fields || {})[d.key] ?? "")}</td>
                     ))}
                     <td className="px-4 py-3 text-right flex items-center justify-end gap-1">
+                      {c.phone && (
+                        <a href={`tel:${c.phone}`} title="Call" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`customer-call-${c.id}`}><Phone size={14} /></a>
+                      )}
+                      {waLink(c.phone) && (
+                        <a href={waLink(c.phone)} target="_blank" rel="noreferrer" title="WhatsApp" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`customer-wa-${c.id}`}><MessageCircle size={14} /></a>
+                      )}
                       <button
                         onClick={() => openEdit(c)}
                         title="Edit customer"
@@ -164,8 +204,10 @@ export default function Customers() {
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && (
-                  <tr><td colSpan={7 + customFieldDefs.filter((d) => d.show_table).length} className="text-center py-12 text-[var(--ink-3)]">No customers yet</td></tr>
+                {!loading && filtered.length === 0 && (
+                  <tr><td colSpan={7 + customFieldDefs.filter((d) => d.show_table).length}>
+                    <EmptyState icon={Contact} title="No customers yet" hint="Customers created from a won lead or added manually will show up here." />
+                  </td></tr>
                 )}
               </tbody>
             </table>
@@ -174,8 +216,8 @@ export default function Customers() {
       </div>
 
       {show && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShow(false)}>
-          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setShow(false)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl border border-[var(--border)] w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">{editing ? "Edit Customer" : "New Customer"}</h3>
               <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>

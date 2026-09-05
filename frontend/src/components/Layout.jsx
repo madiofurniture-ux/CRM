@@ -1,4 +1,5 @@
 import Sidebar from "@/components/Sidebar";
+import BottomNav from "@/components/BottomNav";
 import { SidebarProvider } from "@/context/SidebarContext";
 
 const IS_STAGING = process.env.REACT_APP_ENV === "staging";
@@ -13,8 +14,9 @@ export default function Layout({ children }) {
       )}
       <div className={`flex min-h-screen bg-[var(--bg)] ${IS_STAGING ? "pt-6" : ""}`}>
         <Sidebar />
-        <main className="flex-1 min-w-0">{children}</main>
+        <main className="flex-1 min-w-0 pb-16 lg:pb-0">{children}</main>
       </div>
+      <BottomNav />
     </SidebarProvider>
   );
 }

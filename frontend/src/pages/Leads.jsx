@@ -5,17 +5,25 @@ import LogTimeline from "@/components/LogTimeline";
 import CustomerResolver from "@/components/CustomerResolver";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
+import EmptyState from "@/components/EmptyState";
+import { Skeleton } from "@/components/ui/skeleton";
 import useCustomFields from "@/hooks/useCustomFields";
 import api from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { toast } from "sonner";
-import { Phone, Calendar, X, Trash2, MessageSquare } from "lucide-react";
+import { Phone, Calendar, X, Trash2, MessageSquare, MessageCircle, Sparkles } from "lucide-react";
+
+const waLink = (phone, text = "") => {
+  const ph = String(phone || "").replace(/\D/g, "").slice(-10);
+  return ph ? `https://wa.me/91${ph}?text=${encodeURIComponent(text)}` : null;
+};
 
 const STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 
 export default function Leads() {
   const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [fStage, setFStage] = useState("All");
   const [show, setShow] = useState(false);
@@ -33,7 +41,11 @@ export default function Leads() {
   };
   const [form, setForm] = useState(empty);
 
-  const load = async () => { const { data } = await api.get("/leads"); setRows(data); };
+  const load = async () => {
+    setLoading(true);
+    try { const { data } = await api.get("/leads"); setRows(data); }
+    finally { setLoading(false); }
+  };
   useEffect(() => {
     load();
     api.get("/users/directory").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
@@ -109,55 +121,82 @@ export default function Leads() {
             <table className="w-full text-sm">
               <thead className="bg-[var(--surface-2)]">
                 <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
-                  <th className="text-left font-semibold px-4 py-2.5">Date</th>
+                  <th className="hidden lg:table-cell text-left font-semibold px-4 py-2.5">Date</th>
                   <th className="text-left font-semibold px-4 py-2.5">Name</th>
-                  <th className="text-left font-semibold px-4 py-2.5">Phone</th>
-                  <th className="text-left font-semibold px-4 py-2.5">Source</th>
-                  <th className="text-left font-semibold px-4 py-2.5">Reference</th>
+                  <th className="hidden md:table-cell text-left font-semibold px-4 py-2.5">Phone</th>
+                  <th className="hidden lg:table-cell text-left font-semibold px-4 py-2.5">Source</th>
+                  <th className="hidden lg:table-cell text-left font-semibold px-4 py-2.5">Reference</th>
                   <th className="text-left font-semibold px-4 py-2.5">Stage</th>
-                  <th className="text-left font-semibold px-4 py-2.5">Follow up</th>
-                  <th className="text-left font-semibold px-4 py-2.5">Attended by</th>
+                  <th className="hidden md:table-cell text-left font-semibold px-4 py-2.5">Follow up</th>
+                  <th className="hidden lg:table-cell text-left font-semibold px-4 py-2.5">Attended by</th>
                   <th className="text-right font-semibold px-4 py-2.5">Value</th>
                   {customFieldDefs.filter((d) => d.show_table).map((d) => (
-                    <th key={d.key} className="text-left font-semibold px-4 py-2.5">{d.label}</th>
+                    <th key={d.key} className="hidden lg:table-cell text-left font-semibold px-4 py-2.5">{d.label}</th>
                   ))}
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((l) => {
+                {loading && Array.from({ length: 6 }).map((_, i) => (
+                  <tr key={i} className="border-t border-[var(--border-light)]">
+                    <td className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-16" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
+                    <td className="hidden md:table-cell px-4 py-3"><Skeleton className="h-4 w-24" /></td>
+                    <td className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                    <td className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-6 w-20" /></td>
+                    <td className="hidden md:table-cell px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                    <td className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-4 w-16 ml-auto" /></td>
+                    {customFieldDefs.filter((d) => d.show_table).map((d) => (
+                      <td key={d.key} className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-16" /></td>
+                    ))}
+                    <td className="px-2 py-3"><Skeleton className="h-6 w-14" /></td>
+                  </tr>
+                ))}
+                {!loading && filtered.map((l) => {
                   const overdue = l.follow_up_date && l.follow_up_date < today && !["Won", "Lost"].includes(l.stage);
                   return (
                     <tr key={l.id} className="border-t border-[var(--border-light)] hover:bg-[var(--surface-2)]/50">
-                      <td className="px-4 py-3 text-[var(--ink-2)] whitespace-nowrap">{fmtDate(l.date)}</td>
+                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)] whitespace-nowrap">{fmtDate(l.date)}</td>
                       <td className="px-4 py-3 font-medium">{l.name}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-[var(--ink-2)]">
+                      <td className="hidden md:table-cell px-4 py-3 font-mono text-xs text-[var(--ink-2)]">
                         {l.phone && <span className="inline-flex items-center gap-1"><Phone size={11} className="text-[var(--ink-3)]" />{l.phone}</span>}
                       </td>
-                      <td className="px-4 py-3 text-[var(--ink-2)]">{l.source}</td>
-                      <td className="px-4 py-3 text-[var(--ink-2)]">{l.reference}</td>
+                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{l.source}</td>
+                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{l.reference}</td>
                       <td className="px-4 py-3">
                         <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs" title={!isKnownStage(l.stage) ? "Legacy/imported value — pick a stage to normalize it" : undefined}>
                           {l.stage && !isKnownStage(l.stage) && <option value={l.stage}>{l.stage} (unrecognized)</option>}
                           {STAGES.map((s) => <option key={s}>{s}</option>)}
                         </select>
                       </td>
-                      <td className={`px-4 py-3 whitespace-nowrap ${overdue ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-2)]"}`}>
+                      <td className={`hidden md:table-cell px-4 py-3 whitespace-nowrap ${overdue ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-2)]"}`}>
                         <span className="inline-flex items-center gap-1"><Calendar size={11} />{fmtDate(l.follow_up_date)}</span>
                       </td>
-                      <td className="px-4 py-3 text-[var(--ink-2)]">{userName(l.attended_by) || l.assigned_to}</td>
+                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{userName(l.attended_by) || l.assigned_to}</td>
                       <td className="px-4 py-3 text-right font-mono">{inrFull(l.value)}</td>
                       {customFieldDefs.filter((d) => d.show_table).map((d) => (
-                        <td key={d.key} className="px-4 py-3 text-[var(--ink-2)]">{String((l.custom_fields || {})[d.key] ?? "")}</td>
+                        <td key={d.key} className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{String((l.custom_fields || {})[d.key] ?? "")}</td>
                       ))}
                       <td className="px-2 py-3 flex items-center gap-1">
+                        {l.phone && (
+                          <a href={`tel:${l.phone}`} title="Call" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-call-${l.id}`}><Phone size={13} /></a>
+                        )}
+                        {waLink(l.phone) && (
+                          <a href={waLink(l.phone)} target="_blank" rel="noreferrer" title="WhatsApp" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-wa-${l.id}`}><MessageCircle size={13} /></a>
+                        )}
                         <button onClick={() => setLogLead(l)} title="Follow-up timeline" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-log-${l.id}`}><MessageSquare size={13} /></button>
-                        <button onClick={() => remove(l.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
+                        <button onClick={() => remove(l.id)} title="Delete" className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
                       </td>
                     </tr>
                   );
                 })}
-                {filtered.length === 0 && <tr><td colSpan={10 + customFieldDefs.filter((d) => d.show_table).length} className="text-center py-10 text-[var(--ink-3)]">No leads</td></tr>}
+                {!loading && filtered.length === 0 && (
+                  <tr><td colSpan={10 + customFieldDefs.filter((d) => d.show_table).length}>
+                    <EmptyState icon={Sparkles} title="No leads yet" hint="New leads you add or capture will show up here." />
+                  </td></tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -165,8 +204,8 @@ export default function Leads() {
       </div>
 
       {show && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShow(false)}>
-          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setShow(false)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">New Lead</h3>
               <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
@@ -223,8 +262,8 @@ export default function Leads() {
       )}
 
       {logLead && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setLogLead(null)}>
-          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setLogLead(null)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">Follow-ups — {logLead.name}</h3>
               <button onClick={() => setLogLead(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
