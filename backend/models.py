@@ -479,6 +479,39 @@ class CashbookEntry(CashbookEntryBase):
     created_at: str
 
 
+# ------- Agent tasks (a generic, durable background-job queue — "agent"
+# names the shape borrowed from a reference CRM's task worker, not an AI
+# capability; no LLM is involved anywhere here) -------
+class AgentTaskBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    kind: str                          # free-form, e.g. "followup_reminder" — not an enum
+    subject_type: Optional[str] = ""   # "lead" / "quote" / "sale" / ""
+    subject_id: Optional[str] = ""
+    reason: Optional[str] = ""
+    payload: dict = Field(default_factory=dict)
+    priority: int = 0
+    due_at: Optional[str] = ""         # ISO string, matches now_iso()/today_iso() convention
+    attempts: int = 0
+    max_attempts: int = 3
+    leased_until: Optional[str] = ""
+    leased_by: Optional[str] = ""      # observability only, never load-bearing for correctness
+    started_at: Optional[str] = ""
+    finished_at: Optional[str] = ""
+    outcome: Optional[str] = ""        # "" while open; "done" / "failed" / "abandoned" once finished
+    # Reuses the same {at, by, text, kind} ledger shape as Lead.log/Quote.log
+    # for attempt/error history — one convention, not a second one invented here.
+    log: List[dict] = Field(default_factory=list)
+
+
+class AgentTaskCreate(AgentTaskBase):
+    pass
+
+
+class AgentTask(AgentTaskBase):
+    id: str
+    created_at: str
+
+
 # ------- Attendance -------
 class AttendanceCheckIn(BaseModel):
     lat: float

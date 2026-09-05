@@ -21,6 +21,7 @@ from pymongo import ReturnDocument
 import tenancy
 import permissions as perm
 import notifications as notif
+import agent_tasks
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -2887,8 +2888,42 @@ app.add_middleware(
 )
 
 
+# ------- Agent task dispatch loop (generic background-job queue; see
+# agent_tasks.py — no LLM, no separate worker process, just a fixed-
+# interval in-process poll appropriate for a single-uvicorn-process app) -------
+_TASK_HANDLERS: dict = {}   # kind -> async def handler(db, task) -> str (outcome text); empty until Phase 3
+_dispatch_task = None
+
+
+async def _dispatch_tick():
+    claimed = await agent_tasks.claim_batch(db, n=10, worker_id="inline")
+    for task in claimed:
+        handler = _TASK_HANDLERS.get(task["kind"])
+        if not handler:
+            # No handler registered for this kind — leave it leased; it'll
+            # be reclaimed once the lease expires. Not a failure: a kind can
+            # be scheduled before its handler ships (see rollout Phase 1-3).
+            continue
+        try:
+            outcome = await handler(db, task)
+        except Exception as e:
+            outcome = f"error: {e}"
+        await agent_tasks.complete_task(db, task["id"], outcome)
+
+
+async def _agent_task_dispatch_loop():
+    while True:
+        try:
+            await _dispatch_tick()
+        except Exception:
+            logger.exception("agent_task dispatch tick failed")
+        await asyncio.sleep(15)
+
+
 @app.on_event("startup")
 async def startup():
+    global _dispatch_task
+    _dispatch_task = asyncio.create_task(_agent_task_dispatch_loop())
     try:
         await db.users.create_index("username", unique=True)
         await seed_all(db)
@@ -2930,4 +2965,6 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    if _dispatch_task:
+        _dispatch_task.cancel()
     client.close()
