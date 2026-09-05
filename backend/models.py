@@ -512,6 +512,31 @@ class AgentTask(AgentTaskBase):
     created_at: str
 
 
+# ------- Agent conversations (durable per-record conversation handle —
+# the "shape" of a Durable Agent Bridge, in-process today; no separate
+# process, no LLM, see backend/agent_bridge.py for why) -------
+class AgentConversationBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    subject_type: str                          # "lead" / "quote" / "sale" / ...
+    subject_id: str
+    status: str = "open"                       # open / awaiting_input / closed
+    pending_question: Optional[dict] = None    # durable HITL record: {id, text, options, asked_at}
+    resume_cursor: Optional[str] = ""          # opaque pointer for a future remote executor
+    # {at, by, by_id, text, kind} — kind: message / tool_call / question / answer.
+    # Same ledger convention as Lead.log/Quote.log/AgentTask.log; this IS the
+    # durable event archive, not a separate collection (see agent_bridge.py).
+    log: List[dict] = Field(default_factory=list)
+
+
+class AgentConversationCreate(AgentConversationBase):
+    pass
+
+
+class AgentConversation(AgentConversationBase):
+    id: str
+    created_at: str
+
+
 # ------- Attendance -------
 class AttendanceCheckIn(BaseModel):
     lat: float
