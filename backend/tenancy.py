@@ -46,8 +46,12 @@ TENANT_COLLECTIONS = {
     "settings", "workflows", "attendance", "commission_rules", "commission_payouts",
     "requirements", "product_configs", "teams", "roles", "audit_log", "notification_logs",
     "cashbooks", "cashbook_entries", "agent_tasks", "agent_conversations",
-    "record_contacts",
+    "record_contacts", "saved_views", "custom_field_defs",
 }
+
+# Entities a tenant can define custom fields for. Values live on the record's
+# own document (Lead.custom_fields / Customer.custom_fields), not here.
+CUSTOM_FIELD_ENTITIES = ["lead", "customer"]
 
 SYSTEM_TENANT = "system"          # reserved; never assigned to a business
 

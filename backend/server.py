@@ -41,6 +41,7 @@ from models import (
     AttendanceCheckIn, OfficeSettings,
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
     TeamCreate, Team, RoleCreate, Role,
+    SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
 )
 from seed import seed_all
 
@@ -624,7 +625,7 @@ ALL_MODULE_IDS = [
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
-    "record-contacts",
+    "record-contacts", "custom-fields",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -2829,6 +2830,97 @@ async def delete_record_contact(item_id: str, user: dict = Depends(get_current_u
     await _require_permission("record-contacts", "delete", user)
     owned = tenancy.scope({"id": item_id}, "record_contacts", user)
     res = await db.record_contacts.delete_one(owned)
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+# ------- Saved views: per-user or shared filter presets on a list page.
+# Personal convenience, not a governed business entity — no Role-matrix
+# permission check, any authenticated user can save/read their own +
+# shared views for their tenant. -------
+@api.get("/saved-views")
+async def list_saved_views(entity: str, user: dict = Depends(get_current_user)):
+    q = tenancy.scope({"entity": entity, "$or": [
+        {"created_by_id": user.get("id")}, {"shared": True},
+    ]}, "saved_views", user)
+    return await db.saved_views.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@api.post("/saved-views")
+async def create_saved_view(payload: SavedViewCreate, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_by"] = user.get("name") or user.get("username") or ""
+    doc["created_by_id"] = user.get("id")
+    doc["created_at"] = now_iso()
+    tenancy.stamp(doc, "saved_views", user)
+    await db.saved_views.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/saved-views/{item_id}")
+async def delete_saved_view(item_id: str, user: dict = Depends(get_current_user)):
+    owned = tenancy.scope({"id": item_id}, "saved_views", user)
+    if user.get("role") != "admin":
+        owned["created_by_id"] = user.get("id")
+    res = await db.saved_views.delete_one(owned)
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"ok": True}
+
+
+# ------- Custom field definitions: admin-configurable extra fields per
+# entity. Values live directly on the entity's own document (custom_fields
+# dict), so they ride through the existing /leads and /customers CRUD
+# routes untouched — only the definitions need routes here. -------
+@api.get("/custom-fields")
+async def list_custom_field_defs(entity: str, user: dict = Depends(get_current_user)):
+    q = tenancy.scope({"entity": entity, "active": True}, "custom_field_defs", user)
+    return await db.custom_field_defs.find(q, {"_id": 0}).sort("order", 1).to_list(200)
+
+
+@api.post("/custom-fields")
+async def create_custom_field_def(payload: CustomFieldDefCreate, user: dict = Depends(require_admin)):
+    if payload.entity not in tenancy.CUSTOM_FIELD_ENTITIES:
+        raise HTTPException(status_code=400, detail=f"entity must be one of {tenancy.CUSTOM_FIELD_ENTITIES}")
+    doc = payload.model_dump()
+    key = tenancy.stage_key(payload.label)
+    existing = await db.custom_field_defs.find_one(
+        tenancy.scope({"entity": payload.entity, "key": key}, "custom_field_defs", user))
+    if existing:
+        raise HTTPException(status_code=400, detail="A field with this label already exists for this entity")
+    count = await db.custom_field_defs.count_documents(
+        tenancy.scope({"entity": payload.entity}, "custom_field_defs", user))
+    doc["id"] = new_id()
+    doc["key"] = key
+    doc["order"] = count
+    doc["active"] = True
+    doc["created_at"] = now_iso()
+    tenancy.stamp(doc, "custom_field_defs", user)
+    await db.custom_field_defs.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/custom-fields/{item_id}")
+async def update_custom_field_def(item_id: str, payload: CustomFieldDefUpdate,
+                                   user: dict = Depends(require_admin)):
+    owned = tenancy.scope({"id": item_id}, "custom_field_defs", user)
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        return await db.custom_field_defs.find_one(owned, {"_id": 0})
+    res = await db.custom_field_defs.update_one(owned, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await db.custom_field_defs.find_one(owned, {"_id": 0})
+
+
+@api.delete("/custom-fields/{item_id}")
+async def delete_custom_field_def(item_id: str, user: dict = Depends(require_admin)):
+    owned = tenancy.scope({"id": item_id}, "custom_field_defs", user)
+    res = await db.custom_field_defs.delete_one(owned)
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}

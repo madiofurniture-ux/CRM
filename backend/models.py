@@ -113,6 +113,7 @@ class LeadBase(BaseModel):
     # Dated, multi-entry audit trail: [{at, by, by_id, text, confidence_level, kind}].
     # `remarks` above stays a plain string (unmigrated) — old screens still read it.
     log: List[dict] = Field(default_factory=list)
+    custom_fields: dict = Field(default_factory=dict)  # key (CustomFieldDef.key) -> value
 
 
 class LeadCreate(LeadBase):
@@ -921,6 +922,7 @@ class CustomerBase(BaseModel):
     lng: Optional[float] = None
     alt_contact_name: Optional[str] = ""
     alt_phone: Optional[str] = ""
+    custom_fields: dict = Field(default_factory=dict)  # key (CustomFieldDef.key) -> value
 
 
 class CustomerCreate(CustomerBase):
@@ -996,6 +998,96 @@ class RoleCreate(RoleBase):
 
 
 class Role(RoleBase):
+    id: str
+    created_at: str
+
+
+# ------- Saved views (per-user or shared filter presets on a list page) -------
+class SavedViewBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    entity: str                    # "leads" / "customers" / ... — matches the frontend page's own key
+    name: str
+    filters: dict = Field(default_factory=dict)   # opaque — replayed as-is into the page's filter state
+    shared: bool = False           # visible to the whole tenant, not just the creator
+
+
+class SavedViewCreate(SavedViewBase):
+    @field_validator("name")
+    @classmethod
+    def _name_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Name is required")
+        return v
+
+
+class SavedView(SavedViewBase):
+    id: str
+    created_by: Optional[str] = ""
+    created_by_id: Optional[str] = ""
+    created_at: str
+
+
+# ------- Custom field definitions (admin-configurable extra fields per
+# entity; values live directly on the entity's own document as a
+# custom_fields dict, not in a separate collection) -------
+class CustomFieldDefBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    entity: str                    # "lead" / "customer"
+    key: str                       # server-assigned slug of label, immutable
+    label: str
+    type: str = "text"             # text / number / date / select / boolean
+    options: List[str] = Field(default_factory=list)   # for type == "select"
+    show_table: bool = False
+    show_filter: bool = False
+    show_detail: bool = True
+    order: int = 0
+    active: bool = True
+
+    @field_validator("type")
+    @classmethod
+    def _valid_type(cls, v):
+        if v not in ("text", "number", "date", "select", "boolean"):
+            raise ValueError("type must be text, number, date, select, or boolean")
+        return v
+
+
+class CustomFieldDefCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    entity: str
+    label: str
+    type: str = "text"
+    options: List[str] = Field(default_factory=list)
+    show_table: bool = False
+    show_filter: bool = False
+    show_detail: bool = True
+
+    @field_validator("label")
+    @classmethod
+    def _label_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Label is required")
+        return v
+
+    @field_validator("type")
+    @classmethod
+    def _valid_type(cls, v):
+        if v not in ("text", "number", "date", "select", "boolean"):
+            raise ValueError("type must be text, number, date, select, or boolean")
+        return v
+
+
+class CustomFieldDefUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    label: Optional[str] = None
+    options: Optional[List[str]] = None
+    show_table: Optional[bool] = None
+    show_filter: Optional[bool] = None
+    show_detail: Optional[bool] = None
+    order: Optional[int] = None
+    active: Optional[bool] = None
+
+
+class CustomFieldDef(CustomFieldDefBase):
     id: str
     created_at: str
 

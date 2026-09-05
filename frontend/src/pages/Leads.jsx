@@ -3,6 +3,9 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import LogTimeline from "@/components/LogTimeline";
 import CustomerResolver from "@/components/CustomerResolver";
+import SavedViewsBar from "@/components/SavedViewsBar";
+import CustomFieldInput from "@/components/CustomFieldInput";
+import useCustomFields from "@/hooks/useCustomFields";
 import api from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { toast } from "sonner";
@@ -20,10 +23,13 @@ export default function Leads() {
   const [users, setUsers] = useState([]);
   const [teams, setTeams] = useState([]);
   const [logLead, setLogLead] = useState(null);
+  const { defs: customFieldDefs } = useCustomFields("lead");
+  const [customFilters, setCustomFilters] = useState({});
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", phone: "", source: "Walk-in",
     reference: "", attended_by: "", confidence_level: "", team_id: "",
     stage: "New", follow_up_date: "", remarks: "", assigned_to: "", value: 0,
+    custom_fields: {},
   };
   const [form, setForm] = useState(empty);
 
@@ -39,10 +45,15 @@ export default function Leads() {
     const q = search.toLowerCase();
     return rows.filter((r) => {
       const stage = String(r.stage || "New").trim().toLowerCase();
-      return (fStage === "All" || stage === fStage.toLowerCase()) &&
-        (!q || (r.name || "").toLowerCase().includes(q) || (r.remarks || "").toLowerCase().includes(q));
+      if (fStage !== "All" && stage !== fStage.toLowerCase()) return false;
+      if (q && !(r.name || "").toLowerCase().includes(q) && !(r.remarks || "").toLowerCase().includes(q)) return false;
+      for (const [key, val] of Object.entries(customFilters)) {
+        if (!val) continue;
+        if (String((r.custom_fields || {})[key] ?? "") !== String(val)) return false;
+      }
+      return true;
     });
-  }, [rows, search, fStage]);
+  }, [rows, search, fStage, customFilters]);
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -66,12 +77,31 @@ export default function Leads() {
     <>
       <Topbar title="Leads" subtitle={`${filtered.length} leads · pipeline ${inrFull(filtered.reduce((a, b) => a + (b.value || 0), 0))}`} onAdd={() => { setForm(empty); setShow(true); }} addLabel="Add Lead" />
       <div className="p-6" data-testid="leads-page">
-        <div className="flex flex-wrap gap-2 mb-4">
+        <div className="flex flex-wrap gap-2 mb-3">
           <input placeholder="Search lead, remarks…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="leads-search" />
           <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             <option value="All">All</option>
             {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+          {customFieldDefs.filter((d) => d.show_filter).map((d) => (
+            <select key={d.key} value={customFilters[d.key] || ""} title={d.label}
+                    onChange={(e) => setCustomFilters((p) => ({ ...p, [d.key]: e.target.value }))}
+                    className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
+              <option value="">{d.label}: All</option>
+              {d.type === "select"
+                ? (d.options || []).map((o) => <option key={o} value={o}>{o}</option>)
+                : d.type === "boolean"
+                  ? ["true", "false"].map((o) => <option key={o} value={o}>{o}</option>)
+                  : null}
+            </select>
+          ))}
+        </div>
+        <div className="mb-4">
+          <SavedViewsBar
+            entity="leads"
+            filters={{ search, fStage, customFilters }}
+            onApply={(f) => { setSearch(f.search || ""); setFStage(f.fStage || "All"); setCustomFilters(f.customFilters || {}); }}
+          />
         </div>
 
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
@@ -88,6 +118,9 @@ export default function Leads() {
                   <th className="text-left font-semibold px-4 py-2.5">Follow up</th>
                   <th className="text-left font-semibold px-4 py-2.5">Attended by</th>
                   <th className="text-right font-semibold px-4 py-2.5">Value</th>
+                  {customFieldDefs.filter((d) => d.show_table).map((d) => (
+                    <th key={d.key} className="text-left font-semibold px-4 py-2.5">{d.label}</th>
+                  ))}
                   <th></th>
                 </tr>
               </thead>
@@ -114,6 +147,9 @@ export default function Leads() {
                       </td>
                       <td className="px-4 py-3 text-[var(--ink-2)]">{userName(l.attended_by) || l.assigned_to}</td>
                       <td className="px-4 py-3 text-right font-mono">{inrFull(l.value)}</td>
+                      {customFieldDefs.filter((d) => d.show_table).map((d) => (
+                        <td key={d.key} className="px-4 py-3 text-[var(--ink-2)]">{String((l.custom_fields || {})[d.key] ?? "")}</td>
+                      ))}
                       <td className="px-2 py-3 flex items-center gap-1">
                         <button onClick={() => setLogLead(l)} title="Follow-up timeline" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-log-${l.id}`}><MessageSquare size={13} /></button>
                         <button onClick={() => remove(l.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
@@ -121,7 +157,7 @@ export default function Leads() {
                     </tr>
                   );
                 })}
-                {filtered.length === 0 && <tr><td colSpan="10" className="text-center py-10 text-[var(--ink-3)]">No leads</td></tr>}
+                {filtered.length === 0 && <tr><td colSpan={10 + customFieldDefs.filter((d) => d.show_table).length} className="text-center py-10 text-[var(--ink-3)]">No leads</td></tr>}
               </tbody>
             </table>
           </div>
@@ -169,6 +205,14 @@ export default function Leads() {
               </div>
               <Fld l="Value" t="number" v={form.value} oc={(v) => setForm({ ...form, value: parseFloat(v) || 0 })} />
               <Fld l="Remarks" v={form.remarks} oc={(v) => setForm({ ...form, remarks: v })} cls="col-span-2" />
+              {customFieldDefs.filter((d) => d.show_detail).map((d) => (
+                <CustomFieldInput
+                  key={d.key}
+                  def={d}
+                  value={form.custom_fields?.[d.key]}
+                  onChange={(v) => setForm({ ...form, custom_fields: { ...form.custom_fields, [d.key]: v } })}
+                />
+              ))}
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>

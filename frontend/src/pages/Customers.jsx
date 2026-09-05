@@ -2,6 +2,9 @@ import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import JourneyDrawer from "@/components/JourneyDrawer";
+import SavedViewsBar from "@/components/SavedViewsBar";
+import CustomFieldInput from "@/components/CustomFieldInput";
+import useCustomFields from "@/hooks/useCustomFields";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
@@ -10,7 +13,7 @@ import { Compass, X, Pencil } from "lucide-react";
 const emptyForm = {
   name: "", phone: "", email: "", address: "", gstin: "", division: "Furniture",
   gender: "", confidence_level: "", maps_url: "", lat: "", lng: "",
-  alt_contact_name: "", alt_phone: "", team_id: "",
+  alt_contact_name: "", alt_phone: "", team_id: "", custom_fields: {},
 };
 
 export default function Customers() {
@@ -23,6 +26,8 @@ export default function Customers() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [teams, setTeams] = useState([]);
+  const { defs: customFieldDefs } = useCustomFields("customer");
+  const [customFilters, setCustomFilters] = useState({});
 
   const load = async () => { const { data } = await api.get("/customers"); setRows(data); };
   useEffect(() => {
@@ -31,7 +36,7 @@ export default function Customers() {
   }, []);
 
   const openNew = () => { setEditing(null); setForm(emptyForm); setShow(true); };
-  const openEdit = (c) => { setEditing(c); setForm({ ...emptyForm, ...c }); setShow(true); };
+  const openEdit = (c) => { setEditing(c); setForm({ ...emptyForm, ...c, custom_fields: c.custom_fields || {} }); setShow(true); };
 
   const save = async () => {
     if (saving) return;
@@ -64,11 +69,16 @@ export default function Customers() {
   const stages = useMemo(() => ["All", ...new Set(rows.map((r) => r.stage).filter(Boolean))], [rows]);
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) =>
-      (fStage === "All" || r.stage === fStage) &&
-      (!q || (r.name || "").toLowerCase().includes(q) || (r.phone || "").includes(q))
-    );
-  }, [rows, search, fStage]);
+    return rows.filter((r) => {
+      if (fStage !== "All" && r.stage !== fStage) return false;
+      if (q && !(r.name || "").toLowerCase().includes(q) && !(r.phone || "").includes(q)) return false;
+      for (const [key, val] of Object.entries(customFilters)) {
+        if (!val) continue;
+        if (String((r.custom_fields || {})[key] ?? "") !== String(val)) return false;
+      }
+      return true;
+    });
+  }, [rows, search, fStage, customFilters]);
 
   return (
     <>
@@ -84,6 +94,25 @@ export default function Customers() {
           <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             {stages.map((s) => <option key={s}>{s}</option>)}
           </select>
+          {customFieldDefs.filter((d) => d.show_filter).map((d) => (
+            <select key={d.key} value={customFilters[d.key] || ""} title={d.label}
+                    onChange={(e) => setCustomFilters((p) => ({ ...p, [d.key]: e.target.value }))}
+                    className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
+              <option value="">{d.label}: All</option>
+              {d.type === "select"
+                ? (d.options || []).map((o) => <option key={o} value={o}>{o}</option>)
+                : d.type === "boolean"
+                  ? ["true", "false"].map((o) => <option key={o} value={o}>{o}</option>)
+                  : null}
+            </select>
+          ))}
+        </div>
+        <div className="mb-4">
+          <SavedViewsBar
+            entity="customers"
+            filters={{ search, fStage, customFilters }}
+            onApply={(f) => { setSearch(f.search || ""); setFStage(f.fStage || "All"); setCustomFilters(f.customFilters || {}); }}
+          />
         </div>
 
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
@@ -97,6 +126,9 @@ export default function Customers() {
                   <th className="px-4 py-3">Customer since</th>
                   <th className="px-4 py-3 text-right">Lifetime value</th>
                   <th className="px-4 py-3 text-right">Balance</th>
+                  {customFieldDefs.filter((d) => d.show_table).map((d) => (
+                    <th key={d.key} className="px-4 py-3 text-left">{d.label}</th>
+                  ))}
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
@@ -109,6 +141,9 @@ export default function Customers() {
                     <td className="px-4 py-3 text-[var(--ink-2)]">{fmtDate(c.customer_since)}</td>
                     <td className="px-4 py-3 text-right font-mono">{inrFull(c.lifetime_value)}</td>
                     <td className="px-4 py-3 text-right font-mono">{inrFull(c.balance)}</td>
+                    {customFieldDefs.filter((d) => d.show_table).map((d) => (
+                      <td key={d.key} className="px-4 py-3 text-[var(--ink-2)]">{String((c.custom_fields || {})[d.key] ?? "")}</td>
+                    ))}
                     <td className="px-4 py-3 text-right flex items-center justify-end gap-1">
                       <button
                         onClick={() => openEdit(c)}
@@ -130,7 +165,7 @@ export default function Customers() {
                   </tr>
                 ))}
                 {filtered.length === 0 && (
-                  <tr><td colSpan={7} className="text-center py-12 text-[var(--ink-3)]">No customers yet</td></tr>
+                  <tr><td colSpan={7 + customFieldDefs.filter((d) => d.show_table).length} className="text-center py-12 text-[var(--ink-3)]">No customers yet</td></tr>
                 )}
               </tbody>
             </table>
@@ -171,6 +206,14 @@ export default function Customers() {
               <CFld l="Google Maps Location URL" v={form.maps_url} oc={(v) => setForm({ ...form, maps_url: v })} cls="col-span-2" />
               <CFld l="Latitude" t="number" v={form.lat} oc={(v) => setForm({ ...form, lat: v })} />
               <CFld l="Longitude" t="number" v={form.lng} oc={(v) => setForm({ ...form, lng: v })} />
+              {customFieldDefs.filter((d) => d.show_detail).map((d) => (
+                <CustomFieldInput
+                  key={d.key}
+                  def={d}
+                  value={form.custom_fields?.[d.key]}
+                  onChange={(v) => setForm({ ...form, custom_fields: { ...form.custom_fields, [d.key]: v } })}
+                />
+              ))}
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
