@@ -666,7 +666,7 @@ ALL_MODULE_IDS = [
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
-    "record-contacts", "custom-fields", "project-pnl",
+    "record-contacts", "custom-fields", "project-pnl", "daily-planner",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -1202,6 +1202,22 @@ async def normalize_architect(doc: dict, existing: dict | None, user: dict) -> N
             doc["alternate_contacts"] = []
 
 
+async def normalize_task(doc: dict, existing: dict | None, user: dict) -> None:
+    """The legacy Tasks page only ever sets `done`; Daily Planner tasks are
+    written through dedicated /daily-planner routes that set `status`
+    directly and never go through this hook — so here `done` is always the
+    authoritative signal. Reopening (done=False) a rolled-over task keeps it
+    marked Rolled Over rather than resetting it to Pending."""
+    if doc.get("done"):
+        doc["status"] = "Completed"
+        doc["completed_at"] = now_iso()
+    else:
+        current_status = (existing or {}).get("status", "")
+        doc["status"] = current_status if current_status == "Rolled Over" else "Pending"
+        doc["completed_at"] = ""
+    doc["updated_at"] = now_iso()
+
+
 # ---------- Vendors: serial codes + name visible to admin/accountant only ----------
 def _can_see_vendor_names(user: dict) -> bool:
     return (user or {}).get("role") in ("admin", "accountant")
@@ -1385,9 +1401,101 @@ make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="
           on_create=_notify_order_confirmed)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory",
           normalize=normalize_inventory, redact=redact_vendor_field)
-make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to")
+make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to",
+          normalize=normalize_task)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user")
 make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by")
+
+
+# ---------- Daily Task Planner — a date-scoped view over the same `tasks`
+# collection the generic Tasks page uses (see normalize_task above for how
+# `done`/`status` stay in sync between the two UIs). ----------
+@api.get("/daily-planner")
+async def daily_planner_list(date: str = "", user: dict = Depends(get_current_user)):
+    roles = await _require_permission("tasks", "view", user)
+    owners = await _scope_owners(user, roles, "tasks")
+    day = date or lc.today_iso()
+    q = tenancy.scope({"date": day}, "tasks", user)
+    if owners is not None:
+        q["assigned_to"] = {"$in": owners}
+    rows = await db.tasks.find(q, {"_id": 0}).sort("created_at", 1).to_list(500)
+    total = len(rows)
+    completed = sum(1 for r in rows if r.get("status") == "Completed")
+    return {
+        "date": day, "tasks": rows,
+        "stats": {
+            "total": total, "completed": completed, "pending": total - completed,
+            "completion_rate": round((completed / total) * 100, 1) if total else 0.0,
+        },
+    }
+
+
+@api.post("/daily-planner")
+async def daily_planner_create(payload: TaskCreate, user: dict = Depends(get_current_user)):
+    await _require_permission("tasks", "create", user)
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    doc["updated_at"] = now_iso()
+    if not doc.get("date"):
+        doc["date"] = lc.today_iso()
+    if not doc.get("assigned_to"):
+        doc["assigned_to"] = user.get("name", "")
+    doc["status"] = "Completed" if doc.get("done") else "Pending"
+    doc["completed_at"] = now_iso() if doc.get("done") else ""
+    tenancy.stamp(doc, "tasks", user)
+    await db.tasks.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.patch("/daily-planner/{task_id}/toggle")
+async def daily_planner_toggle(task_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("tasks", "edit", user)
+    owned = tenancy.scope({"id": task_id}, "tasks", user)
+    task = await db.tasks.find_one(owned, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    now_done = not task.get("done")
+    updates = {
+        "done": now_done,
+        "status": "Completed" if now_done else "Pending",
+        "completed_at": now_iso() if now_done else "",
+        "updated_at": now_iso(),
+    }
+    await db.tasks.update_one(owned, {"$set": updates})
+    return await db.tasks.find_one(owned, {"_id": 0})
+
+
+@api.post("/daily-planner/rollover")
+async def daily_planner_rollover(user: dict = Depends(get_current_user)):
+    """Copies yesterday's unfinished tasks into today; marks the originals
+    Rolled Over rather than moving them, so the history of what slipped on
+    which day isn't lost or ambiguously merged into today's row."""
+    from datetime import date as _date, timedelta
+    roles = await _require_permission("tasks", "create", user)
+    owners = await _scope_owners(user, roles, "tasks")
+    today = lc.today_iso()
+    yesterday = (_date.fromisoformat(today) - timedelta(days=1)).isoformat()
+    q = tenancy.scope({"date": yesterday, "status": {"$in": ["Pending", "In Progress"]}}, "tasks", user)
+    if owners is not None:
+        q["assigned_to"] = {"$in": owners}
+    stale = await db.tasks.find(q, {"_id": 0}).to_list(500)
+    created = []
+    for t in stale:
+        new_doc = dict(t)
+        new_doc["id"] = new_id()
+        new_doc["created_at"] = now_iso()
+        new_doc["updated_at"] = now_iso()
+        new_doc["date"] = today
+        new_doc["status"] = "Pending"
+        new_doc["done"] = False
+        new_doc["completed_at"] = ""
+        await db.tasks.insert_one(dict(new_doc))
+        new_doc.pop("_id", None)
+        created.append(new_doc)
+        await db.tasks.update_one({"id": t["id"]}, {"$set": {"status": "Rolled Over", "updated_at": now_iso()}})
+    return {"rolled_over": len(created), "tasks": created}
 
 make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty", owner_field="by_user")
 

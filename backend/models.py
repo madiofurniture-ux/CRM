@@ -365,14 +365,26 @@ class InventoryItem(InventoryBase):
 class TaskBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     title: str
-    priority: str = "Medium"  # Low / Medium / High
+    priority: str = "Medium"  # Low / Medium / High / Urgent
     due_date: Optional[str] = ""
     assigned_to: Optional[str] = ""
     category: Optional[str] = "General"
     ref: Optional[str] = ""
     ref_type: Optional[str] = ""  # "" / lead / quote / sale / project — what `ref` points at
+    linked_entity_name: Optional[str] = ""  # display name for ref/ref_type, e.g. the project's customer name
     notes: Optional[str] = ""
     done: bool = False
+    # Daily Planner fields — `date` is the day this task is planned for
+    # (distinct from `due_date`, which is a deadline, not a plan slot).
+    # `status` is the richer state Daily Planner needs; `done` stays the
+    # boolean the original Tasks page reads — normalize_task keeps both in
+    # sync regardless of which UI made the edit.
+    date: Optional[str] = ""
+    time_slot: Optional[str] = ""
+    status: str = "Pending"  # Pending / In Progress / Completed / Rolled Over
+    completed_at: Optional[str] = ""
+    is_recurring: bool = False
+    updated_at: Optional[str] = ""
 
 
 class TaskCreate(TaskBase):

@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server  # noqa: E402
 import csv_engine  # noqa: E402
-from models import CashbookExpense, CashbookEntryApproval  # noqa: E402
+from models import CashbookExpense, CashbookEntryApproval, CashbookTopUp  # noqa: E402
 
 ADMIN = {"id": "u1", "tenant_id": "acme", "name": "Admin", "role": "admin"}
 OTHER_TENANT_ADMIN = {"id": "u3", "tenant_id": "globex", "name": "Globex Admin", "role": "admin"}
@@ -79,6 +79,37 @@ def test_pending_excluded_from_margin_but_counted_in_exposure():
         assert row["pending_petty_cash"] == 8000
         assert pnl["summary"]["pending_exposure"] == 8000
         assert pnl["summary"]["total_field_cash_spent"] == 0
+    asyncio.run(run())
+
+
+def test_recent_entries_include_both_cash_in_and_cash_out():
+    async def run():
+        await _make_project(id="p1", value=100000)
+        await _make_book(id="b1", project_id="p1", current_balance=10000)
+        await server.cashbook_top_up("b1", CashbookTopUp(amount=2000), user=ADMIN)
+        await server.cashbook_expense("b1", CashbookExpense(amount=1500, category="Fuel", entry_person="Ravi"), user=ADMIN)
+
+        pnl = await csv_engine.compute_project_pnl(server.db, ADMIN)
+        recent = pnl["projects"][0]["recent_entries"]
+        assert len(recent) == 2
+        types = {r["type"] for r in recent}
+        assert types == {"CASH_IN", "CASH_OUT"}
+        payout = next(r for r in recent if r["type"] == "CASH_OUT")
+        assert payout["payee"] == "Ravi"
+        assert payout["amount"] == 1500
+    asyncio.run(run())
+
+
+def test_imprest_limit_total_sums_across_project_wallets():
+    async def run():
+        await _make_project(id="p1", value=100000)
+        await _make_book(id="b1", project_id="p1", imprest_limit=5000)
+        await _make_book(id="b2", project_id="p1", imprest_limit=3000)
+
+        pnl = await csv_engine.compute_project_pnl(server.db, ADMIN)
+        row = pnl["projects"][0]
+        assert row["imprest_limit_total"] == 8000
+        assert set(row["wallet_ids"]) == {"b1", "b2"}
     asyncio.run(run())
 
 

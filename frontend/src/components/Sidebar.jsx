@@ -4,7 +4,7 @@ import {
   Sparkles, Building2, Package, BarChart3, ListTodo, Users, LogOut, HardHat, MapPin,
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
   CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
-  SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart,
+  SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -48,6 +48,7 @@ const SECTIONS = [
       { id: "dwsurvey", to: "/dw-survey", label: "D&W Survey", icon: DoorOpen },
       { id: "attendance", to: "/attendance", label: "Attendance", icon: MapPin },
       { id: "tasks", to: "/tasks", label: "Tasks", icon: ListTodo },
+      { id: "daily-planner", to: "/daily-planner", label: "Daily Planner", icon: CalendarCheck2 },
       { id: "meetplan", to: "/meets", label: "Meet Planner", icon: CalendarDays },
     ],
   },

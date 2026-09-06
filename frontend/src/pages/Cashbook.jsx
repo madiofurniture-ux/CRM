@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import QRCode from "qrcode";
 import Topbar from "@/components/Topbar";
 import KpiCard from "@/components/KpiCard";
@@ -33,9 +34,11 @@ const emptyBook = { book_name: "", description: "", initial_balance: "", project
 export default function Cashbook() {
   const { user, tenant } = useAuth();
   const isAdmin = user?.role === "admin";
+  const [searchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
   const [projects, setProjects] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
+  // Preselect from ?book= (e.g. a "View Linked Wallet" deep-link from Project P&L).
+  const [selectedId, setSelectedId] = useState(() => searchParams.get("book") || null);
   const [entries, setEntries] = useState([]);
   const [users, setUsers] = useState([]);
   const [showNewBook, setShowNewBook] = useState(false);
@@ -122,6 +125,11 @@ export default function Cashbook() {
     setEntryForm({ ...emptyEntry, entry_person: user?.name || "" });
     setDrawer(type);
   };
+
+  // "+ Log Site Expense" deep-link from Project P&L: ?book=<id>&openExpense=1.
+  useEffect(() => {
+    if (searchParams.get("openExpense") === "1" && selectedId) openDrawer(selectedId, "CASH_OUT");
+  }, []); // eslint-disable-line
 
   const uploadReceipt = async (file) => {
     if (!file) return;

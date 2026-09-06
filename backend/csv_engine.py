@@ -161,8 +161,10 @@ async def compute_project_pnl(db, user: dict) -> dict:
     book_ids = [b["id"] for b in books if b.get("project_id")]
     entries = []
     if book_ids:
+        # Both CASH_IN and CASH_OUT — the ledger view needs full history,
+        # even though only CASH_OUT feeds the margin/category math below.
         entries = await db.cashbook_entries.find(
-            tenancy.scope({"cashbook_id": {"$in": book_ids}, "type": "CASH_OUT"}, "cashbook_entries", user),
+            tenancy.scope({"cashbook_id": {"$in": book_ids}}, "cashbook_entries", user),
             {"_id": 0}).to_list(20000)
     entries_by_book: dict[str, list[dict]] = {}
     for e in entries:
@@ -174,19 +176,23 @@ async def compute_project_pnl(db, user: dict) -> dict:
         pid = p["id"]
         pbooks = books_by_project.get(pid, [])
         pentries = [e for b in pbooks for e in entries_by_book.get(b["id"], [])]
-        approved = sum(e["amount"] for e in pentries if e.get("status") == "Approved")
-        pending = sum(e["amount"] for e in pentries if e.get("status") == "Pending")
+        pouts = [e for e in pentries if e.get("type") == "CASH_OUT"]
+        approved = sum(e["amount"] for e in pouts if e.get("status") == "Approved")
+        pending = sum(e["amount"] for e in pouts if e.get("status") == "Pending")
         float_balance = sum(b.get("current_balance", 0) for b in pbooks)
+        imprest_limit_total = sum(b.get("imprest_limit", 0) or 0 for b in pbooks)
         revenue = p.get("value", 0) or 0
         gross_profit = revenue - approved
         margin_pct = round((gross_profit / revenue) * 100, 2) if revenue else 0.0
 
         by_category: dict[str, float] = {}
-        for e in pentries:
+        for e in pouts:
             if e.get("status") != "Approved":
                 continue
             cat = e.get("category") or "Other"
             by_category[cat] = by_category.get(cat, 0) + e["amount"]
+
+        recent_entries = sorted(pentries, key=lambda e: e.get("created_at", ""), reverse=True)[:10]
 
         total_revenue += revenue
         total_approved += approved
@@ -198,9 +204,15 @@ async def compute_project_pnl(db, user: dict) -> dict:
             "contract_value": revenue, "approved_petty_cash": approved,
             "gross_profit": gross_profit, "margin_pct": margin_pct,
             "float_balance": float_balance, "pending_petty_cash": pending,
-            "wallet_count": len(pbooks),
+            "wallet_count": len(pbooks), "wallet_ids": [b["id"] for b in pbooks],
+            "imprest_limit_total": imprest_limit_total,
             "category_breakdown": [{"category": k, "amount": v} for k, v in
                                     sorted(by_category.items(), key=lambda kv: -kv[1])],
+            "recent_entries": [{
+                "date": e.get("created_at", ""), "payee": e.get("entry_person", ""),
+                "category": e.get("category", ""), "amount": e.get("amount", 0),
+                "status": e.get("status", ""), "type": e.get("type", ""),
+            } for e in recent_entries],
         })
 
     out.sort(key=lambda r: -r["contract_value"])
