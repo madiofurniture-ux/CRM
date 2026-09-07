@@ -6,6 +6,7 @@ import {
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, ClipboardList, Wand2, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
+  LayoutTemplate,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
@@ -20,6 +21,7 @@ export const NAV = [
   { app: "sell", id: "requirements", to: "/requirements", label: "Requirements", icon: ClipboardList },
   { app: "sell", id: "configurator", to: "/configurator", label: "Configurator", icon: Wand2 },
   { app: "sell", id: "quotes", to: "/quotes", label: "Deals / Quotes", icon: FileText },
+  { app: "sell", id: "quote-builder", to: "/quotes/builder", label: "Quote Builder", icon: LayoutTemplate },
   { app: "sell", id: "quote-followups", to: "/quotes/followups", label: "Follow-ups", icon: PhoneCall },
   { app: "sell", id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
   { app: "sell", id: "visitors", to: "/visitors", label: "Visitors", icon: UserPlus },

@@ -260,6 +260,14 @@ class QuoteBase(BaseModel):
     log: List[dict] = Field(default_factory=list)
     confidence_level: Optional[float] = None   # 0-100 — latest read on close probability
     next_follow_up: Optional[str] = ""         # denormalized from the latest log entry, for dashboard bucketing
+    # ---- Visual drag-and-drop builder (optional — a quote can stay a plain
+    # line-item quote via QuoteWorkspace and never touch these). Same quote
+    # record either way: one id, one quote_no, one stage/approval workflow,
+    # one deal-won path — never a second parallel "quotation" entity.
+    template_id: Optional[str] = ""      # which pre-built industry template this was instantiated from, if any
+    layout_config: Optional[dict] = None  # {section_order: [ids], visible: {id: bool}, column_headers: {...}}
+    sections: Optional[List[dict]] = None  # [{id, type, title, tax_rate, discount_pct, items: [...]}]
+    financial_summary: Optional[dict] = None  # {subtotal, total_discount, total_tax, grand_total}
 
 
 class QuoteCreate(QuoteBase):

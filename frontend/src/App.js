@@ -40,6 +40,7 @@ const ExecutiveDashboard = lazy(() => import("@/pages/ExecutiveDashboard"));
 const Alerts = lazy(() => import("@/pages/Alerts"));
 const DWSurvey = lazy(() => import("@/pages/DWSurvey"));
 const QuoteWorkspace = lazy(() => import("@/pages/QuoteWorkspace"));
+const QuoteBuilder = lazy(() => import("@/pages/QuoteBuilder"));
 const StockLedger = lazy(() => import("@/pages/StockLedger"));
 const DataCentre = lazy(() => import("@/pages/DataCentre"));
 const FinancialYear = lazy(() => import("@/pages/FinancialYear"));
@@ -108,6 +109,8 @@ function App() {
           <Route path="/alerts" element={<ProtectedRoute page="alerts"><Layout><Alerts /></Layout></ProtectedRoute>} />
           <Route path="/dw-survey" element={<ProtectedRoute page="dwsurvey"><Layout><DWSurvey /></Layout></ProtectedRoute>} />
           <Route path="/quotes/ws/:id" element={<ProtectedRoute page="quotes"><Layout><QuoteWorkspace /></Layout></ProtectedRoute>} />
+          <Route path="/quotes/builder" element={<ProtectedRoute page="quote-builder"><Layout><QuoteBuilder /></Layout></ProtectedRoute>} />
+          <Route path="/quotes/builder/:id" element={<ProtectedRoute page="quote-builder"><Layout><QuoteBuilder /></Layout></ProtectedRoute>} />
           <Route path="/stock-ledger" element={<ProtectedRoute page="stock-ledger"><Layout><StockLedger /></Layout></ProtectedRoute>} />
           <Route path="/data-centre" element={<ProtectedRoute page="data-centre"><Layout><DataCentre /></Layout></ProtectedRoute>} />
           <Route path="/admin/financial-year" element={<ProtectedRoute page="financial-year"><Layout><FinancialYear /></Layout></ProtectedRoute>} />

@@ -8,13 +8,14 @@ load_dotenv(ROOT_DIR / ".env")
 import os
 import re
 import json
+import copy
 import logging
 import time
 import asyncio
 from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import ValidationError as PydanticValidationError
 from pymongo.errors import DuplicateKeyError
 from starlette.middleware.cors import CORSMiddleware
@@ -27,6 +28,7 @@ import permissions as perm
 import notifications as notif
 import agent_tasks
 import csv_engine
+import quotation_templates
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -666,7 +668,7 @@ ALL_MODULE_IDS = [
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
-    "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives",
+    "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -1395,8 +1397,163 @@ make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_follow
           module="leads", owner_field="assigned_to", on_create=_schedule_lead_followup_reminder,
           normalize=normalize_lead)
 make_crud(api, "architects", "architects", ArchitectCreate, Architect, module="architects", normalize=normalize_architect)
+
+
+def _price_item(item: dict) -> dict:
+    """Per-line arithmetic for the visual builder's ITEM_GRID rows — tax and
+    discount are per-item here (richer than the legacy flat-quote tax_pct/
+    discount used by QuoteWorkspace's plain line_items), so line_total is
+    always server-recomputed, never trusted from the client."""
+    qty = lc.money(item.get("qty", 1)) or 1
+    rate = lc.money(item.get("unit_rate"))
+    subtotal = round(qty * rate, 2)
+    discount = round(subtotal * lc.money(item.get("discount_pct")) / 100, 2)
+    taxable = subtotal - discount
+    tax = round(taxable * lc.money(item.get("gst_rate")) / 100, 2)
+    item["line_total"] = round(taxable + tax, 2)
+    return item, subtotal, discount, tax
+
+
+def _compute_quote_financials(sections: list) -> dict:
+    total_subtotal = total_discount = total_tax = 0.0
+    for sec in sections:
+        if sec.get("type") != "ITEM_GRID":
+            continue
+        for item in sec.get("items", []):
+            _, subtotal, discount, tax = _price_item(item)
+            total_subtotal += subtotal
+            total_discount += discount
+            total_tax += tax
+    grand_total = total_subtotal - total_discount + total_tax
+    return {
+        "subtotal": round(total_subtotal, 2), "total_discount": round(total_discount, 2),
+        "total_tax": round(total_tax, 2), "grand_total": round(grand_total, 2),
+    }
+
+
+async def normalize_quote_template(doc: dict, existing: dict | None, user: dict) -> None:
+    """Instantiates a pre-built template's sections onto a brand-new quote
+    (create only — never overwrites sections a user is actively editing),
+    then recomputes financial_summary from whatever sections the write
+    carries, so every save's totals are server-derived."""
+    if existing is None and doc.get("template_id") and not doc.get("sections"):
+        template = quotation_templates.get_template(doc["template_id"])
+        if template:
+            doc["sections"] = copy.deepcopy(template["sections"])
+            doc["layout_config"] = {
+                "section_order": [s["id"] for s in doc["sections"]],
+                "visible": {s["id"]: True for s in doc["sections"]},
+            }
+    if doc.get("sections") is not None:
+        doc["financial_summary"] = _compute_quote_financials(doc["sections"])
+        doc["grand_total"] = doc["financial_summary"]["grand_total"]
+
+
+@api.get("/quotation-templates")
+async def quotation_templates_list(user: dict = Depends(get_current_user)):
+    return quotation_templates.list_templates()
+
+
+@api.get("/quotes/{quote_id}")
+async def get_quote(quote_id: str, user: dict = Depends(get_current_user)):
+    owned = tenancy.scope({"id": quote_id}, "quotes", user)
+    quote = await db.quotes.find_one(owned, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return quote
+
+
+def _render_quote_pdf(quote: dict, tenant: dict) -> bytes:
+    """Vector PDF via ReportLab platypus — no native system dependencies
+    (unlike WeasyPrint). "Rs." not "₹": ReportLab's base14 fonts have no
+    Rupee glyph, and embedding a Unicode font is unwarranted complexity for
+    a first version of this endpoint."""
+    from io import BytesIO
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    story = []
+
+    company = tenant.get("display_name") or tenant.get("name") or "MADIO CRM"
+    story.append(Paragraph(company, styles["Title"]))
+    story.append(Paragraph(f"Quotation {quote.get('quote_no', '')}", styles["Heading2"]))
+    story.append(Paragraph(f"Customer: {quote.get('customer', '')} &nbsp;&nbsp; Date: {quote.get('date', '')}", styles["Normal"]))
+    story.append(Spacer(1, 8 * mm))
+
+    grid_style = TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F3F1EC")),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+    ])
+    for sec in quote.get("sections") or []:
+        kind = sec.get("type")
+        if kind == "ITEM_GRID":
+            story.append(Paragraph(sec.get("title", ""), styles["Heading3"]))
+            rows = [["Description", "Dimensions", "Qty", "Rate", "Disc %", "GST %", "Line Total"]]
+            for item in sec.get("items", []):
+                rows.append([
+                    item.get("description", ""), item.get("dimensions", ""), str(item.get("qty", 1)),
+                    f"{item.get('unit_rate', 0):,.2f}", f"{item.get('discount_pct', 0)}%",
+                    f"{item.get('gst_rate', 0)}%", f"{item.get('line_total', 0):,.2f}",
+                ])
+            table = Table(rows, hAlign="LEFT", repeatRows=1)
+            table.setStyle(grid_style)
+            story.append(table)
+            story.append(Spacer(1, 6 * mm))
+        elif kind == "TEXT_BLOCK":
+            story.append(Paragraph(sec.get("title", ""), styles["Heading3"]))
+            story.append(Paragraph(sec.get("text", ""), styles["Normal"]))
+            story.append(Spacer(1, 6 * mm))
+        elif kind == "PAYMENT_MILESTONES":
+            story.append(Paragraph(sec.get("title", "Payment Schedule"), styles["Heading3"]))
+            rows = [["Stage", "%"]] + [[m.get("label", ""), f"{m.get('pct', 0)}%"] for m in sec.get("milestones", [])]
+            table = Table(rows, hAlign="LEFT")
+            table.setStyle(grid_style)
+            story.append(table)
+            story.append(Spacer(1, 6 * mm))
+        elif kind == "TERMS_CONDITIONS":
+            story.append(Paragraph(sec.get("title", "Terms & Conditions"), styles["Heading3"]))
+            story.append(Paragraph(sec.get("text", ""), styles["Normal"]))
+            story.append(Spacer(1, 6 * mm))
+        elif kind == "SIGNATURE_BLOCK":
+            story.append(Spacer(1, 15 * mm))
+            story.append(Paragraph("_" * 30, styles["Normal"]))
+            story.append(Paragraph("Authorized Signatory", styles["Normal"]))
+
+    fs = quote.get("financial_summary") or {}
+    story.append(Spacer(1, 6 * mm))
+    story.append(Paragraph(f"Subtotal: Rs. {fs.get('subtotal', 0):,.2f}", styles["Normal"]))
+    story.append(Paragraph(f"Discount: Rs. {fs.get('total_discount', 0):,.2f}", styles["Normal"]))
+    story.append(Paragraph(f"GST: Rs. {fs.get('total_tax', 0):,.2f}", styles["Normal"]))
+    grand_total = fs.get("grand_total", quote.get("grand_total", 0))
+    story.append(Paragraph(f"<b>Grand Total: Rs. {grand_total:,.2f}</b>", styles["Heading3"]))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+@api.get("/quotes/{quote_id}/pdf")
+async def quote_pdf(quote_id: str, user: dict = Depends(get_current_user)):
+    owned = tenancy.scope({"id": quote_id}, "quotes", user)
+    quote = await db.quotes.find_one(owned, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    tenant = await db.tenants.find_one({"id": tenancy.tenant_of(user)}, {"_id": 0}) or {}
+    pdf_bytes = _render_quote_pdf(quote, tenant)
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{quote.get("quote_no", "quote")}.pdf"'},
+    )
+
+
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user",
-          on_create=_notify_quote_created)
+          on_create=_notify_quote_created, normalize=normalize_quote_template)
 make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user",
           on_create=_notify_order_confirmed)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory",

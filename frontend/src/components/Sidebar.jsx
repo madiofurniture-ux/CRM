@@ -4,7 +4,7 @@ import {
   Sparkles, Building2, Package, BarChart3, ListTodo, Users, LogOut, HardHat, MapPin,
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
   CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
-  SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2, HandCoins,
+  SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2, HandCoins, LayoutTemplate,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -25,6 +25,7 @@ const SECTIONS = [
       { id: "requirements", to: "/requirements", label: "Requirements", icon: ClipboardList },
       { id: "configurator", to: "/configurator", label: "Configurator", icon: Wand2 },
       { id: "quotes", to: "/quotes", label: "Quotations", icon: FileText },
+      { id: "quote-builder", to: "/quotes/builder", label: "Quote Builder", icon: LayoutTemplate },
       { id: "quote-followups", to: "/quotes/followups", label: "Follow-ups", icon: PhoneCall },
       { id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
       { id: "visitors", to: "/visitors", label: "Visitors", icon: UserPlus },
