@@ -191,6 +191,7 @@ export default function Sidebar() {
           onClick={logout}
           className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)] transition shrink-0"
           title="Sign out"
+          aria-label="Sign out"
           data-testid="logout-btn"
         >
           <LogOut size={15} strokeWidth={1.7} />

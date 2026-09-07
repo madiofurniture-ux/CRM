@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Topbar from "@/components/Topbar";
 import EmptyState from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -44,6 +44,12 @@ export default function DailyPlanner() {
   const [rollingOver, setRollingOver] = useState(false);
   const [teams, setTeams] = useState([]);
   const [teammates, setTeammates] = useState([]);
+  const previousFocusRef = useRef(null);
+
+  useEffect(() => {
+    if (showCreate) previousFocusRef.current = document.activeElement;
+    else previousFocusRef.current?.focus?.();
+  }, [showCreate]);
 
   const load = () => {
     setLoading(true);
@@ -116,13 +122,13 @@ export default function DailyPlanner() {
       <div className="p-6 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start" data-testid="daily-planner-page">
       <div className="space-y-6 max-w-3xl">
         <div className="flex flex-wrap items-center gap-2">
-          <button onClick={() => setDate(shiftDate(date, -1))} className="p-2 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-hover)]" data-testid="dp-prev-day">
+          <button onClick={() => setDate(shiftDate(date, -1))} aria-label="Previous day" className="p-2 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-hover)]" data-testid="dp-prev-day">
             <ChevronLeft size={16} />
           </button>
           <button onClick={() => setDate(isoToday())} className="px-3 py-2 rounded-lg border border-[var(--border)] text-sm font-medium hover:bg-[var(--surface-hover)]" data-testid="dp-today">
             Today
           </button>
-          <button onClick={() => setDate(shiftDate(date, 1))} className="p-2 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-hover)]" data-testid="dp-next-day">
+          <button onClick={() => setDate(shiftDate(date, 1))} aria-label="Next day" className="p-2 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-hover)]" data-testid="dp-next-day">
             <ChevronRight size={16} />
           </button>
           <div className="relative">
@@ -179,7 +185,7 @@ export default function DailyPlanner() {
             <div className="space-y-1.5">
               {g.items.map((t) => (
                 <div key={t.id} className="flex items-center gap-3 bg-[var(--surface)] border border-[var(--border)] rounded-lg px-3 py-2.5" data-testid={`dp-task-${t.id}`}>
-                  <button onClick={() => toggle(t)} className="shrink-0 text-[var(--ink-3)] hover:text-[var(--moss)]" data-testid={`dp-toggle-${t.id}`}>
+                  <button onClick={() => toggle(t)} aria-label={t.done ? `Mark "${t.title}" incomplete` : `Mark "${t.title}" complete`} aria-pressed={t.done} className="shrink-0 text-[var(--ink-3)] hover:text-[var(--moss)]" data-testid={`dp-toggle-${t.id}`}>
                     {t.done ? <CheckCircle2 size={20} className="text-[var(--moss)]" /> : <Circle size={20} />}
                   </button>
                   <div className="flex-1 min-w-0">
@@ -238,34 +244,36 @@ export default function DailyPlanner() {
       </div>
 
       {showCreate && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setShowCreate(false)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-xl w-full max-w-sm p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setShowCreate(false)} onKeyDown={(e) => e.key === "Escape" && setShowCreate(false)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="dp-modal-title" className="bg-white rounded-t-2xl sm:rounded-xl w-full max-w-sm p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-heading font-semibold">New Task — {dayLabel(date)}</h3>
-              <button onClick={() => setShowCreate(false)}><X size={16} /></button>
+              <h3 id="dp-modal-title" className="font-heading font-semibold">New Task — {dayLabel(date)}</h3>
+              <button onClick={() => setShowCreate(false)} aria-label="Close"><X size={16} /></button>
             </div>
             <div className="space-y-3">
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Title *</label>
-                <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
+                <label htmlFor="dp-title" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">
+                  Title <span aria-hidden="true">*</span>
+                </label>
+                <input id="dp-title" required aria-required="true" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" data-testid="dp-form-title" />
               </div>
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Priority</label>
-                <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}
+                <label htmlFor="dp-priority" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Priority</label>
+                <select id="dp-priority" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
                   {PRIORITIES.map((p) => <option key={p}>{p}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Time Slot (optional)</label>
-                <input value={form.time_slot} onChange={(e) => setForm({ ...form, time_slot: e.target.value })}
+                <label htmlFor="dp-time-slot" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Time Slot (optional)</label>
+                <input id="dp-time-slot" value={form.time_slot} onChange={(e) => setForm({ ...form, time_slot: e.target.value })}
                   placeholder="e.g. 09:00 - 10:30 or Morning"
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" />
               </div>
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Notes (optional)</label>
-                <input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                <label htmlFor="dp-notes" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Notes (optional)</label>
+                <input id="dp-notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" />
               </div>
             </div>

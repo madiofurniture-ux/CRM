@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Topbar from "@/components/Topbar";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
@@ -13,6 +13,12 @@ export default function Teams() {
   const empty = { name: "", description: "", active: true };
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
+  const previousFocusRef = useRef(null);
+
+  useEffect(() => {
+    if (show) previousFocusRef.current = document.activeElement;
+    else previousFocusRef.current?.focus?.();
+  }, [show]);
 
   const load = async () => {
     const { data } = await api.get("/teams");
@@ -97,8 +103,8 @@ export default function Teams() {
                   </div>
                 </div>
                 <div className="flex gap-1 shrink-0">
-                  <button onClick={() => openEdit(t)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Pencil size={13} /></button>
-                  <button onClick={() => remove(t)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
+                  <button onClick={() => openEdit(t)} aria-label={`Edit ${t.name}`} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Pencil size={13} /></button>
+                  <button onClick={() => remove(t)} aria-label={`Delete ${t.name}`} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
                 </div>
               </div>
             ))}
@@ -108,20 +114,22 @@ export default function Teams() {
       </div>
 
       {show && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShow(false)}>
-          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShow(false)} onKeyDown={(e) => e.key === "Escape" && setShow(false)}>
+          <div role="dialog" aria-modal="true" aria-labelledby="team-modal-title" className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
-              <h3 className="font-heading font-semibold text-lg">{editing ? "Edit Team" : "New Team"}</h3>
-              <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+              <h3 id="team-modal-title" className="font-heading font-semibold text-lg">{editing ? "Edit Team" : "New Team"}</h3>
+              <button onClick={() => setShow(false)} aria-label="Close" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Name *</label>
-                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Sales" className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" />
+                <label htmlFor="team-name" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">
+                  Name <span aria-hidden="true">*</span>
+                </label>
+                <input id="team-name" required aria-required="true" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Sales" className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" />
               </div>
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Description</label>
-                <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" />
+                <label htmlFor="team-description" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Description</label>
+                <input id="team-description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" />
               </div>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} className="accent-[var(--brand)]" />
