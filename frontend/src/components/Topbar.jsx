@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Menu } from "lucide-react";
+import { Search, Plus, Menu, Bell } from "lucide-react";
 import { useSidebar } from "@/context/SidebarContext";
 import api from "@/lib/api";
 
@@ -85,6 +85,10 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
       </div>
 
       {actions}
+
+      <button className="p-2 rounded-full hover:bg-[var(--surface-2)] text-[var(--ink-2)] shrink-0" aria-label="Notifications" data-testid="topbar-notifications">
+        <Bell size={17} strokeWidth={1.7} />
+      </button>
 
       {onAdd && (
         <button onClick={onAdd} className="btn-primary shrink-0 px-3 sm:px-4" data-testid="topbar-add-btn">

@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import Topbar from "@/components/Topbar";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
-import { X, Pencil, Trash2 } from "lucide-react";
+import { X, Pencil, Trash2, Search, Users as UsersIcon } from "lucide-react";
 
 export default function Teams() {
   const [rows, setRows] = useState([]);
   const [users, setUsers] = useState([]);
+  const [q, setQ] = useState("");
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const empty = { name: "", description: "", active: true };
@@ -44,43 +45,64 @@ export default function Teams() {
   };
 
   const memberCount = (teamId) => users.filter((u) => u.team_id === teamId).length;
+  const initials = (name) => name.trim().slice(0, 2).toUpperCase();
+  const activeCount = rows.filter((t) => t.active).length;
+  const visible = rows.filter((t) => t.name.toLowerCase().includes(q.toLowerCase()));
 
   return (
     <>
-      <Topbar title="Teams" subtitle={`${rows.length} teams`} onAdd={openNew} addLabel="New Team" />
-      <div className="p-6" data-testid="teams-page">
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-[var(--surface-2)]">
-                <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
-                  <th className="px-4 py-2.5">Name</th>
-                  <th className="px-4 py-2.5">Description</th>
-                  <th className="px-4 py-2.5">Members</th>
-                  <th className="px-4 py-2.5">Status</th>
-                  <th className="px-4 py-2.5" />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((t) => (
-                  <tr key={t.id} className="border-t border-[var(--border-light)]" data-testid={`team-${t.id}`}>
-                    <td className="px-4 py-3 font-medium">{t.name}</td>
-                    <td className="px-4 py-3 text-[var(--ink-2)]">{t.description}</td>
-                    <td className="px-4 py-3 text-[var(--ink-2)]">{memberCount(t.id)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${t.active ? "bg-[var(--moss-soft)] text-[var(--moss)]" : "bg-[var(--surface-2)] text-[var(--ink-3)]"}`}>
-                        {t.active ? "Active" : "Inactive"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right flex justify-end gap-1">
-                      <button onClick={() => openEdit(t)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Pencil size={13} /></button>
-                      <button onClick={() => remove(t)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
-                    </td>
-                  </tr>
-                ))}
-                {rows.length === 0 && <tr><td colSpan="5" className="text-center py-10 text-[var(--ink-3)]">No teams yet</td></tr>}
-              </tbody>
-            </table>
+      <Topbar title="Teams" subtitle={`${rows.length} teams`} onAdd={openNew} addLabel="Invite Teammate" />
+      <div className="p-6 space-y-6" data-testid="teams-page">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4">
+            <div className="text-[10px] uppercase tracking-widest font-semibold text-[var(--ink-3)]">Active Teams</div>
+            <div className="font-heading font-bold text-2xl text-[var(--ink)] mt-1">{activeCount}</div>
+          </div>
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4">
+            <div className="text-[10px] uppercase tracking-widest font-semibold text-[var(--ink-3)]">Clear Access</div>
+            <div className="text-sm text-[var(--ink-2)] mt-1">Every teammate sees exactly what their role grants — no guesswork.</div>
+          </div>
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4">
+            <div className="text-[10px] uppercase tracking-widest font-semibold text-[var(--ink-3)]">Shared Ownership</div>
+            <div className="text-sm text-[var(--ink-2)] mt-1">Teams keep accounts, deals, and follow-ups visible to the whole group.</div>
+          </div>
+        </div>
+
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h2 className="font-heading font-bold text-[var(--ink)] tracking-tight">Roles and access</h2>
+            <div className="relative w-56">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ink-3)]" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search teams…"
+                className="w-full pl-8 pr-3 py-1.5 rounded-full border border-[var(--border)] bg-[var(--surface-2)] text-sm outline-none focus:border-[var(--brand)]" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {visible.map((t) => (
+              <div key={t.id} className="flex items-start gap-3 border border-[var(--border)] rounded-2xl p-4" data-testid={`team-${t.id}`}>
+                <div className="w-11 h-11 rounded-full bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold text-sm shrink-0">
+                  {initials(t.name)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <div className="font-heading font-semibold text-[var(--ink)] truncate">{t.name}</div>
+                    <span className={`shrink-0 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${t.active ? "bg-blue-600 text-white" : "bg-[var(--surface-2)] text-[var(--ink-3)]"}`}>
+                      {t.active ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                  {t.description && <div className="text-sm text-[var(--ink-2)] mt-0.5">{t.description}</div>}
+                  <div className="flex items-center gap-1 text-xs text-[var(--ink-3)] mt-1.5">
+                    <UsersIcon size={12} /> {memberCount(t.id)} member{memberCount(t.id) === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <div className="flex gap-1 shrink-0">
+                  <button onClick={() => openEdit(t)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Pencil size={13} /></button>
+                  <button onClick={() => remove(t)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
+                </div>
+              </div>
+            ))}
+            {visible.length === 0 && <div className="col-span-2 text-center py-10 text-[var(--ink-3)]">No teams found</div>}
           </div>
         </div>
       </div>

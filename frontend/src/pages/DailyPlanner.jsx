@@ -42,12 +42,18 @@ export default function DailyPlanner() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [rollingOver, setRollingOver] = useState(false);
+  const [teams, setTeams] = useState([]);
+  const [teammates, setTeammates] = useState([]);
 
   const load = () => {
     setLoading(true);
     api.get("/daily-planner", { params: { date } }).then(({ data }) => setData(data)).finally(() => setLoading(false));
   };
   useEffect(load, [date]); // eslint-disable-line
+  useEffect(() => {
+    api.get("/teams").then(({ data }) => setTeams(data)).catch(() => {});
+    api.get("/users/directory").then(({ data }) => setTeammates(data)).catch(() => {});
+  }, []);
 
   const tasks = data?.tasks || [];
   const stats = data?.stats || { total: 0, completed: 0, pending: 0, completion_rate: 0 };
@@ -107,7 +113,8 @@ export default function DailyPlanner() {
   return (
     <>
       <Topbar title="Daily Planner" subtitle={dayLabel(date)} />
-      <div className="p-6 space-y-6 max-w-3xl" data-testid="daily-planner-page">
+      <div className="p-6 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start" data-testid="daily-planner-page">
+      <div className="space-y-6 max-w-3xl">
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={() => setDate(shiftDate(date, -1))} className="p-2 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-hover)]" data-testid="dp-prev-day">
             <ChevronLeft size={16} />
@@ -198,6 +205,36 @@ export default function DailyPlanner() {
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4 lg:sticky lg:top-20">
+        <h2 className="font-heading font-bold text-[var(--ink)] tracking-tight mb-3">Team follow-through</h2>
+        {teammates.length === 0 ? (
+          <div className="text-sm text-[var(--ink-3)]">No teammates yet.</div>
+        ) : (
+          <div className="space-y-3">
+            {teams.filter((t) => t.active).map((team) => {
+              const members = teammates.filter((u) => u.team_id === team.id);
+              if (members.length === 0) return null;
+              return (
+                <div key={team.id}>
+                  <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-1.5">{team.name}</div>
+                  <div className="space-y-1.5">
+                    {members.map((m) => (
+                      <div key={m.id} className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[11px] font-heading font-bold shrink-0" style={{ background: m.color || "#0062D2" }}>
+                          {m.icon || m.name?.[0]}
+                        </div>
+                        <span className="text-sm text-[var(--ink-2)] truncate">{m.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
       </div>
 
       {showCreate && (

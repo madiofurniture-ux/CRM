@@ -51,42 +51,36 @@ export default function Reports() {
           <Kpi label="Collected" value={inrFull(T.collected)} small accent="moss" />
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-[var(--surface-2)]">
-                <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
-                  <th className="text-left font-semibold px-4 py-2.5">Division</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Leads</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Quotes</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Quote Value</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Sales</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Sale Value</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Collected</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Outstanding</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((d) => {
-                  const r = D[d] || {};
-                  const isTotal = d === "TOTAL";
-                  return (
-                    <tr key={d} className={`border-t border-[var(--border-light)] ${isTotal ? "font-semibold border-t-2 border-[var(--border)]" : ""}`}>
-                      <td className="px-4 py-2.5">{ROW_ICON[d]} {d}</td>
-                      <td className="px-4 py-2.5 text-right font-mono">{r.leads || 0}</td>
-                      <td className="px-4 py-2.5 text-right font-mono">{r.quotes || 0}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-[var(--warn)]">{r.qval ? inrFull(r.qval) : "—"}</td>
-                      <td className="px-4 py-2.5 text-right font-mono">{r.won || 0}</td>
-                      <td className="px-4 py-2.5 text-right font-mono text-[var(--moss)]">{r.wval ? inrFull(r.wval) : "—"}</td>
-                      <td className="px-4 py-2.5 text-right font-mono">{r.collected ? inrFull(r.collected) : "—"}</td>
-                      <td className={`px-4 py-2.5 text-right font-mono ${r.due > 0 ? "text-[var(--danger)]" : "text-[var(--ink-3)]"}`}>{r.due ? inrFull(r.due) : "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        {T.wval > 0 && (
+          <div className="bg-blue-600 rounded-2xl p-5 text-white">
+            <div className="text-[11px] uppercase tracking-widest font-semibold text-blue-100">Coach's Insight</div>
+            <div className="text-lg font-heading font-bold mt-1">
+              {T.won || 0} deal{T.won === 1 ? "" : "s"} won worth {inrFull(T.wval)} — {T.due > 0 ? `${inrFull(T.due)} still outstanding across divisions.` : "fully collected, nothing outstanding."}
+            </div>
+          </div>
+        )}
+
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
+          <h2 className="font-heading font-bold text-[var(--ink)] tracking-tight mb-4">Pipeline Health</h2>
+          <div className="space-y-4">
+            {visibleRows.filter((d) => d !== "TOTAL").map((d) => {
+              const r = D[d] || {};
+              const pct = T.wval > 0 ? Math.round(((r.wval || 0) / T.wval) * 100) : 0;
+              return (
+                <div key={d}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-medium text-[var(--ink)]">{ROW_ICON[d]} {d}</span>
+                    <span className="text-[var(--ink-2)]">{r.won || 0} won · {inrFull(r.wval)}{r.due > 0 && <span className="text-[var(--danger)]"> · {inrFull(r.due)} due</span>}</span>
+                  </div>
+                  <div className="h-2.5 rounded-full bg-[var(--surface-2)] overflow-hidden">
+                    <div className="h-full bg-blue-600 rounded-full" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
+
         <div className="text-[11px] text-[var(--ink-3)]">
           Leads = intake in period · Quotes / Sales = dated in period · Collected = payments + paid on period sales · Outstanding = all-time open balances per division.
         </div>
