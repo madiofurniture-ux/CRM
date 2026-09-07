@@ -77,6 +77,30 @@ def test_normalize_quote_template_skips_instantiation_on_update():
     asyncio.run(run())
 
 
+def test_financial_summary_populated_for_legacy_flat_quote():
+    async def run():
+        # A QuoteWorkspace-shaped quote — no template_id, no sections, only
+        # the pre-existing flat fields that page computes client-side.
+        doc = {
+            "quote_no": "Q-0004", "customer": "Legacy Co", "line_items": [{"description": "Door", "amount": 9000}],
+            "subtotal": 9000, "discount": 500, "tax_total": 1530, "grand_total": 10030,
+        }
+        await server.normalize_quote_template(doc, existing=None, user=ADMIN)
+        assert doc["financial_summary"] == {
+            "subtotal": 9000, "total_discount": 500, "total_tax": 1530, "grand_total": 10030,
+        }
+        assert "sections" not in doc  # stays legacy-shaped, never gains sections
+    asyncio.run(run())
+
+
+def test_normalize_quote_template_skips_unrelated_partial_updates():
+    async def run():
+        doc = {"stage": "Sent"}  # e.g. a stage-only PUT, no financial fields touched
+        await server.normalize_quote_template(doc, existing={"id": "q1", "grand_total": 5000}, user=ADMIN)
+        assert "financial_summary" not in doc  # must not fabricate one from an unrelated write
+    asyncio.run(run())
+
+
 def test_line_item_arithmetic_aggregates_discount_and_gst_correctly():
     async def run():
         sections = [{
@@ -142,6 +166,24 @@ def test_quote_pdf_returns_valid_pdf_bytes():
         response = await server.quote_pdf("q2", user=ADMIN)
         assert response.media_type == "application/pdf"
         assert response.body.startswith(b"%PDF")
+    asyncio.run(run())
+
+
+def test_quote_pdf_renders_legacy_line_items_quote():
+    async def run():
+        doc = {
+            "line_items": [{"description": "Main Door", "w": 3, "h": 7, "qty": 1, "rate": 8000, "sft": 21, "amount": 8000}],
+            "subtotal": 8000, "discount": 0, "tax_total": 1440, "grand_total": 9440,
+        }
+        await server.normalize_quote_template(doc, existing=None, user=ADMIN)
+        await _make_quote(id="q_legacy", **doc)
+
+        response = await server.quote_pdf("q_legacy", user=ADMIN)
+        assert response.media_type == "application/pdf"
+        assert response.body.startswith(b"%PDF")
+        # A real item table + financial summary render meaningfully more
+        # bytes than a near-blank page (header + zeroed summary only).
+        assert len(response.body) > 1500
     asyncio.run(run())
 
 

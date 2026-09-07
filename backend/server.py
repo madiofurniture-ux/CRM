@@ -1447,6 +1447,16 @@ async def normalize_quote_template(doc: dict, existing: dict | None, user: dict)
     if doc.get("sections") is not None:
         doc["financial_summary"] = _compute_quote_financials(doc["sections"])
         doc["grand_total"] = doc["financial_summary"]["grand_total"]
+    elif "line_items" in doc or "subtotal" in doc or "grand_total" in doc:
+        # Legacy flat-quote shape (QuoteWorkspace) — same financial_summary
+        # contract, derived from the fields that path already computes
+        # client-side and trusts, not recomputed from line_items here (that
+        # would duplicate QuoteWorkspace's own w/h/qty/sft/rate math and
+        # could silently disagree with it).
+        doc["financial_summary"] = {
+            "subtotal": doc.get("subtotal", 0), "total_discount": doc.get("discount", 0),
+            "total_tax": doc.get("tax_total", 0), "grand_total": doc.get("grand_total", 0),
+        }
 
 
 @api.get("/quotation-templates")
@@ -1491,6 +1501,21 @@ def _render_quote_pdf(quote: dict, tenant: dict) -> bytes:
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F3F1EC")),
         ("FONTSIZE", (0, 0), (-1, -1), 8),
     ])
+    if not quote.get("sections") and quote.get("line_items"):
+        # Legacy flat-quote shape (QuoteWorkspace) — same QuoteLineBase
+        # fields that page already displays, rendered as a single table so
+        # a pre-existing quote's PDF isn't left blank.
+        rows = [["Description", "W", "H", "Qty", "Rate", "Sqft", "Amount"]]
+        for item in quote["line_items"]:
+            rows.append([
+                item.get("description", ""), str(item.get("w", "") or ""), str(item.get("h", "") or ""),
+                str(item.get("qty", 1)), f"{item.get('rate', 0):,.2f}",
+                str(item.get("sft", "") or ""), f"{item.get('amount', 0):,.2f}",
+            ])
+        table = Table(rows, hAlign="LEFT", repeatRows=1)
+        table.setStyle(grid_style)
+        story.append(table)
+        story.append(Spacer(1, 6 * mm))
     for sec in quote.get("sections") or []:
         kind = sec.get("type")
         if kind == "ITEM_GRID":
