@@ -3,6 +3,9 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import SearchSelect from "@/components/SearchSelect";
 import LogTimeline from "@/components/LogTimeline";
+import LinkedTasksPanel from "@/components/LinkedTasksPanel";
+import StageProgressBar from "@/components/StageProgressBar";
+import { leadLifecycleStages } from "@/lib/lifecycle";
 import CustomerResolver from "@/components/CustomerResolver";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
@@ -405,7 +408,8 @@ export default function Leads() {
               <h3 className="font-heading font-semibold text-lg">Follow-ups — {logLead.name}</h3>
               <button onClick={() => setLogLead(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
-            <div className="p-5">
+            <div className="p-5 space-y-4">
+              <StageProgressBar stages={leadLifecycleStages(logLead)} />
               <LogTimeline
                 entity="lead" itemId={logLead.id} entries={logLead.log || []}
                 onAppended={(log) => {
@@ -413,6 +417,7 @@ export default function Leads() {
                   setRows((p) => p.map((x) => x.id === logLead.id ? { ...x, log } : x));
                 }}
               />
+              <LinkedTasksPanel refId={logLead.id} refType="lead" entityName={logLead.name} />
             </div>
           </div>
         </div>

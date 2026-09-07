@@ -55,6 +55,7 @@ const Configurator = lazy(() => import("@/pages/Configurator"));
 const Customers = lazy(() => import("@/pages/Customers"));
 const QuoteFollowups = lazy(() => import("@/pages/QuoteFollowups"));
 const ProjectPnL = lazy(() => import("@/pages/ProjectPnL"));
+const Incentives = lazy(() => import("@/pages/Incentives"));
 
 function PageLoader() {
   return (
@@ -120,6 +121,7 @@ function App() {
           <Route path="/customers" element={<ProtectedRoute page="customers"><Layout><Customers /></Layout></ProtectedRoute>} />
           <Route path="/quotes/followups" element={<ProtectedRoute page="quote-followups"><Layout><QuoteFollowups /></Layout></ProtectedRoute>} />
           <Route path="/reports/project-pnl" element={<ProtectedRoute page="project-pnl"><Layout><ProjectPnL /></Layout></ProtectedRoute>} />
+          <Route path="/incentives" element={<ProtectedRoute page="incentives"><Layout><Incentives /></Layout></ProtectedRoute>} />
         </Routes>
         </Suspense>
       </BrowserRouter>

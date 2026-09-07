@@ -666,7 +666,7 @@ ALL_MODULE_IDS = [
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
-    "record-contacts", "custom-fields", "project-pnl", "daily-planner",
+    "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -2085,11 +2085,11 @@ async def analytics_revenue(user: dict = Depends(get_current_user)):
     }
 
 
-def _match_commission_rule(rules: List[dict], payee: str, division: str) -> Optional[dict]:
-    """Most specific active "user" rule wins: an exact payee match beats the
+def _match_commission_rule(rules: List[dict], payee: str, division: str, payee_type: str = "user") -> Optional[dict]:
+    """Most specific active rule wins: an exact payee match beats the
     payee=="" wildcard, and (independently) an exact division match beats
     the division=="" wildcard."""
-    candidates = [r for r in rules if r.get("active", True) and r.get("payee_type") == "user"
+    candidates = [r for r in rules if r.get("active", True) and r.get("payee_type") == payee_type
                   and (not r.get("payee") or r.get("payee") == payee)
                   and (not r.get("division") or r.get("division") == division)]
     if not candidates:
@@ -2140,6 +2140,14 @@ async def analytics_commissions(period: str = "", user: dict = Depends(get_curre
             "commission_amount": round(base_amount * rate_pct / 100 + flat_amount, 2),
             "status": "Draft" if rule else "No Rule",
         })
+    # Architect payouts have no live "cleared payments" computation above (no
+    # per-sale architect attribution to group by) — surface whatever's
+    # already been persisted for this period instead, e.g. auto-provisioned
+    # at deal-won time by _provision_project_wallet_and_incentives.
+    seen_ids = {r["id"] for r in rows if r["id"]}
+    for e in existing:
+        if e.get("payee_type") == "architect" and e["id"] not in seen_ids:
+            rows.append(e)
     return sorted(rows, key=lambda r: -r["commission_amount"])
 
 
@@ -2163,6 +2171,27 @@ async def approve_commission(payload: dict, user: dict = Depends(get_current_use
     await db.commission_payouts.insert_one(dict(doc))
     doc.pop("_id", None)
     return doc
+
+
+@api.patch("/commission-payouts/{payout_id}/approve")
+async def approve_existing_commission_payout(payout_id: str, user: dict = Depends(get_current_user)):
+    """Transitions an already-persisted payout (e.g. auto-provisioned Earned
+    at deal-won time) forward a step — Earned -> Approved -> Paid. Distinct
+    from /analytics/commissions/approve above, which creates a new row from
+    a live-computed draft rather than updating one that already exists."""
+    await _require_permission("commissions", "approve", user)
+    owned = tenancy.scope({"id": payout_id}, "commission_payouts", user)
+    payout = await db.commission_payouts.find_one(owned, {"_id": 0})
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    next_status = {"Earned": "Approved", "Approved": "Paid"}.get(payout.get("status", ""))
+    if not next_status:
+        raise HTTPException(status_code=400, detail=f"Cannot advance a payout in status {payout.get('status')!r}")
+    updates = {"status": next_status, "approved_by": user.get("name", "")}
+    if next_status == "Paid":
+        updates["paid_at"] = now_iso()
+    await db.commission_payouts.update_one(owned, {"$set": updates})
+    return await db.commission_payouts.find_one(owned, {"_id": 0})
 
 
 # ------- Projects Execution Endpoints -------
@@ -2572,6 +2601,94 @@ async def quote_save_total(quote_id: str, payload: dict,
     return out
 
 
+DEFAULT_SALES_REP_INCENTIVE_PCT = 2
+DEFAULT_ARCHITECT_INCENTIVE_PCT = 3
+
+
+async def _provision_project_wallet_and_incentives(project: dict, quote: dict, user: dict) -> dict:
+    """Deal-won side effects: an imprest Cashbook wallet and Earned
+    CommissionPayout rows for the sales rep and (if attributed via the
+    originating lead) the referring architect. Idempotent on project_id —
+    safe to call from every return path through
+    _generate_sales_order_and_project, including retries after a partial
+    failure, without ever double-provisioning."""
+    value = project.get("value", 0) or 0
+    architect_id = ""
+    lead_id = project.get("lead_id", "")
+    if lead_id:
+        lead = await db.leads.find_one(tenancy.scope({"id": lead_id}, "leads", user), {"_id": 0})
+        if lead:
+            architect_id = lead.get("architect_id", "")
+
+    sales_rep = quote.get("by_user", "") or project.get("sales_rep_id", "")
+    budgeted = round(value * 0.10, 2) or 25000
+
+    updates = {
+        "quote_id": quote.get("id", ""), "sales_rep_id": sales_rep,
+        "architect_id": architect_id, "budgeted_petty_cash": budgeted,
+    }
+    owned = tenancy.scope({"id": project["id"]}, "projects", user)
+    await db.projects.update_one(owned, {"$set": updates})
+    project.update(updates)
+
+    existing_wallet = await db.cashbooks.find_one(
+        tenancy.scope({"project_id": project["id"]}, "cashbooks", user), {"_id": 0})
+    if not existing_wallet:
+        wallet = {
+            "id": new_id(), "created_at": now_iso(),
+            "book_name": f"{project.get('customer', '')} — {project.get('project_no', '')} Imprest Float",
+            "description": "Auto-provisioned on deal-won", "assigned_users": [],
+            "initial_balance": 0, "current_balance": 0, "status": "ACTIVE",
+            "project_id": project["id"], "imprest_limit": budgeted, "strict_overdraft": False,
+        }
+        tenancy.stamp(wallet, "cashbooks", user)
+        await db.cashbooks.insert_one(dict(wallet))
+
+    existing_payouts = await db.commission_payouts.find(
+        tenancy.scope({"project_id": project["id"]}, "commission_payouts", user), {"_id": 0}).to_list(20)
+    have_types = {p["payee_type"] for p in existing_payouts}
+    rules = await db.commission_rules.find(tenancy.scope({}, "commission_rules", user), {"_id": 0}).to_list(500)
+    period = now_iso()[:7]
+    division = project.get("division", "")
+
+    incentive_total = sum(p.get("commission_amount", 0) for p in existing_payouts)
+    new_payouts = []
+    if sales_rep and "user" not in have_types:
+        rule = _match_commission_rule(rules, sales_rep, division, payee_type="user")
+        pct = rule.get("rate_pct") if rule else DEFAULT_SALES_REP_INCENTIVE_PCT
+        flat = rule.get("flat_amount", 0) if rule else 0
+        new_payouts.append({
+            "id": new_id(), "created_at": now_iso(), "period": period, "payee": sales_rep,
+            "payee_type": "user", "division": division, "base_amount": value,
+            "rate_pct": pct, "flat_amount": flat, "commission_amount": round(value * pct / 100 + flat, 2),
+            "status": "Earned", "project_id": project["id"], "quote_id": quote.get("id", ""),
+        })
+    if architect_id and "architect" not in have_types:
+        architect = await db.architects.find_one(tenancy.scope({"id": architect_id}, "architects", user), {"_id": 0})
+        architect_name = architect.get("name", "") if architect else ""
+        if architect_name:
+            rule = _match_commission_rule(rules, architect_name, division, payee_type="architect")
+            pct = rule.get("rate_pct") if rule else DEFAULT_ARCHITECT_INCENTIVE_PCT
+            flat = rule.get("flat_amount", 0) if rule else 0
+            new_payouts.append({
+                "id": new_id(), "created_at": now_iso(), "period": period, "payee": architect_name,
+                "payee_type": "architect", "division": division, "base_amount": value,
+                "rate_pct": pct, "flat_amount": flat, "commission_amount": round(value * pct / 100 + flat, 2),
+                "status": "Earned", "project_id": project["id"], "quote_id": quote.get("id", ""),
+            })
+
+    for p in new_payouts:
+        tenancy.stamp(p, "commission_payouts", user)
+        await db.commission_payouts.insert_one(dict(p))
+        incentive_total += p["commission_amount"]
+
+    if new_payouts:
+        await db.projects.update_one(owned, {"$set": {"incentive_total": round(incentive_total, 2)}})
+        project["incentive_total"] = round(incentive_total, 2)
+
+    return project
+
+
 async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[dict, dict]:
     """
     Auto-conversion on quote approval: snapshot the quote into a sales order
@@ -2589,6 +2706,7 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
             tenancy.scope({"sale_id": existing_sale["id"]}, "projects", user), {"_id": 0})
         if project:
             project = await _ensure_project_artifacts(project, user)
+            project = await _provision_project_wallet_and_incentives(project, quote, user)
         return existing_sale, project or {}
 
     lines = [lc.calc_line(dict(l)) for l in await _quote_lines(quote_id, user)
@@ -2628,6 +2746,7 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         await db.projects.update_one(owned, {"$set": patch})
         project = await db.projects.find_one(owned, {"_id": 0})
         project = await _ensure_project_artifacts(project, user)
+        project = await _provision_project_wallet_and_incentives(project, quote, user)
         return sale, project
 
     existing_projects = await db.projects.find(
@@ -2647,6 +2766,7 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
     await db.projects.insert_one(dict(project))
     project.pop("_id", None)
     project = await _ensure_project_artifacts(project, user)
+    project = await _provision_project_wallet_and_incentives(project, quote, user)
 
     return sale, project
 

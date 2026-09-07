@@ -150,6 +150,8 @@ async def compute_project_pnl(db, user: dict) -> dict:
     approval backlog is visible before it lands."""
     projects = await db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000)
     books = await db.cashbooks.find(tenancy.scope({}, "cashbooks", user), {"_id": 0}).to_list(5000)
+    payouts = await db.commission_payouts.find(
+        tenancy.scope({"project_id": {"$ne": ""}}, "commission_payouts", user), {"_id": 0}).to_list(20000)
 
     books_by_project: dict[str, list[dict]] = {}
     for b in books:
@@ -157,6 +159,10 @@ async def compute_project_pnl(db, user: dict) -> dict:
         if not pid:
             continue
         books_by_project.setdefault(pid, []).append(b)
+
+    payouts_by_project: dict[str, list[dict]] = {}
+    for pay in payouts:
+        payouts_by_project.setdefault(pay.get("project_id", ""), []).append(pay)
 
     book_ids = [b["id"] for b in books if b.get("project_id")]
     entries = []
@@ -172,6 +178,7 @@ async def compute_project_pnl(db, user: dict) -> dict:
 
     out = []
     total_revenue = total_approved = total_pending = 0.0
+    total_approved_incentives = total_pending_incentives = 0.0
     for p in projects:
         pid = p["id"]
         pbooks = books_by_project.get(pid, [])
@@ -194,15 +201,24 @@ async def compute_project_pnl(db, user: dict) -> dict:
 
         recent_entries = sorted(pentries, key=lambda e: e.get("created_at", ""), reverse=True)[:10]
 
+        ppayouts = payouts_by_project.get(pid, [])
+        approved_incentives = sum(pay["commission_amount"] for pay in ppayouts if pay.get("status") in ("Approved", "Paid"))
+        pending_incentives = sum(pay["commission_amount"] for pay in ppayouts if pay.get("status") == "Earned")
+        net_margin = revenue - approved - approved_incentives
+
         total_revenue += revenue
         total_approved += approved
         total_pending += pending
+        total_approved_incentives += approved_incentives
+        total_pending_incentives += pending_incentives
 
         out.append({
             "project_id": pid, "project_no": p.get("project_no", ""),
             "customer": p.get("customer", ""), "stage": p.get("stage", ""),
             "contract_value": revenue, "approved_petty_cash": approved,
             "gross_profit": gross_profit, "margin_pct": margin_pct,
+            "net_margin": net_margin,
+            "approved_incentives": approved_incentives, "pending_incentives": pending_incentives,
             "float_balance": float_balance, "pending_petty_cash": pending,
             "wallet_count": len(pbooks), "wallet_ids": [b["id"] for b in pbooks],
             "imprest_limit_total": imprest_limit_total,
@@ -213,6 +229,11 @@ async def compute_project_pnl(db, user: dict) -> dict:
                 "category": e.get("category", ""), "amount": e.get("amount", 0),
                 "status": e.get("status", ""), "type": e.get("type", ""),
             } for e in recent_entries],
+            "incentive_payouts": [{
+                "id": pay.get("id", ""), "payee": pay.get("payee", ""),
+                "payee_type": pay.get("payee_type", ""), "amount": pay.get("commission_amount", 0),
+                "status": pay.get("status", ""),
+            } for pay in ppayouts],
         })
 
     out.sort(key=lambda r: -r["contract_value"])
@@ -223,6 +244,8 @@ async def compute_project_pnl(db, user: dict) -> dict:
             "total_field_cash_spent": total_approved,
             "aggregate_margin_pct": aggregate_margin,
             "pending_exposure": total_pending,
+            "total_approved_incentives": total_approved_incentives,
+            "total_pending_incentives": total_pending_incentives,
         },
         "projects": out,
     }

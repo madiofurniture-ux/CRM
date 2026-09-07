@@ -73,6 +73,7 @@ export default function ProjectPnL() {
                   <th className="text-left font-semibold px-4 py-2.5">Project / Deal</th>
                   <th className="text-right font-semibold px-4 py-2.5">Contract Value</th>
                   <th className="text-right font-semibold px-4 py-2.5">Approved Petty Cash</th>
+                  <th className="text-right font-semibold px-4 py-2.5">Incentives Provisioned</th>
                   <th className="text-right font-semibold px-4 py-2.5">Gross Profit</th>
                   <th className="text-center font-semibold px-4 py-2.5">Margin %</th>
                   <th className="text-right font-semibold px-4 py-2.5">Float Balance</th>
@@ -84,6 +85,7 @@ export default function ProjectPnL() {
                   <tr key={i} className="border-t border-[var(--border-light)]">
                     <td className="px-2 py-3"></td>
                     <td className="px-4 py-3"><Skeleton className="h-4 w-32" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-4 w-20 ml-auto" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-4 w-20 ml-auto" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-4 w-20 ml-auto" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-4 w-20 ml-auto" /></td>
@@ -109,6 +111,10 @@ export default function ProjectPnL() {
                         </td>
                         <td className="px-4 py-3 text-right font-mono">{inrFull(p.contract_value)}</td>
                         <td className="px-4 py-3 text-right font-mono">{inrFull(p.approved_petty_cash)}</td>
+                        <td className="px-4 py-3 text-right font-mono">
+                          {inrFull(p.approved_incentives + p.pending_incentives)}
+                          {p.pending_incentives > 0 && <div className="text-[10px] text-[var(--warn,#B45309)]">{inrFull(p.pending_incentives)} pending</div>}
+                        </td>
                         <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(p.gross_profit)}</td>
                         <td className="px-4 py-3 text-center">
                           <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${tone.bg} ${tone.text}`} data-testid={`pnl-margin-${p.project_id}`}>
@@ -121,7 +127,7 @@ export default function ProjectPnL() {
                       {isOpen && (
                         <tr className="border-t border-[var(--border-light)] bg-[var(--surface-2)]/30">
                           <td></td>
-                          <td colSpan={7} className="px-4 py-4">
+                          <td colSpan={8} className="px-4 py-4">
                             {burnPct != null && (
                               <div className="mb-4">
                                 <div className="flex justify-between text-[11px] text-[var(--ink-3)] mb-1">
@@ -135,11 +141,11 @@ export default function ProjectPnL() {
                             )}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                               <div>
-                                <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Category Breakdown (Approved)</div>
+                                <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Cashbook Spend</div>
                                 {p.category_breakdown.length === 0 ? (
                                   <div className="text-xs text-[var(--ink-3)]">No approved expenses yet.</div>
                                 ) : (
-                                  <div className="space-y-2">
+                                  <div className="space-y-2 mb-3">
                                     {p.category_breakdown.map((c) => {
                                       const pct = Math.round((c.amount / totalCategorySpend) * 100);
                                       return (
@@ -157,17 +163,12 @@ export default function ProjectPnL() {
                                   </div>
                                 )}
                                 {p.pending_petty_cash > 0 && (
-                                  <div className="text-xs mt-3 text-[var(--warn,#B45309)] font-medium">
+                                  <div className="text-xs mb-3 text-[var(--warn,#B45309)] font-medium">
                                     {inrFull(p.pending_petty_cash)} awaiting approval
                                   </div>
                                 )}
-                              </div>
-                              <div>
-                                <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Recent Ledger Entries</div>
-                                {p.recent_entries.length === 0 ? (
-                                  <div className="text-xs text-[var(--ink-3)]">No entries yet.</div>
-                                ) : (
-                                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                                {p.recent_entries.length > 0 && (
+                                  <div className="space-y-1.5 max-h-40 overflow-y-auto border-t border-[var(--border-light)] pt-2">
                                     {p.recent_entries.map((e, i) => (
                                       <div key={i} className="flex justify-between text-xs">
                                         <span className="text-[var(--ink-2)] truncate pr-2">
@@ -181,8 +182,31 @@ export default function ProjectPnL() {
                                   </div>
                                 )}
                               </div>
+                              <div>
+                                <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Commission & Incentives</div>
+                                {p.incentive_payouts.length === 0 ? (
+                                  <div className="text-xs text-[var(--ink-3)]">No incentives provisioned yet.</div>
+                                ) : (
+                                  <div className="space-y-1.5">
+                                    {p.incentive_payouts.map((pay) => (
+                                      <div key={pay.id} className="flex items-center justify-between text-xs">
+                                        <span className="text-[var(--ink-2)] truncate pr-2">
+                                          {pay.payee} <span className="text-[10px] text-[var(--ink-3)] uppercase">({pay.payee_type === "architect" ? "Architect" : "Sales Rep"})</span>
+                                        </span>
+                                        <span className="flex items-center gap-1.5 shrink-0">
+                                          <span className="font-mono font-semibold">{inrFull(pay.amount)}</span>
+                                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
+                                            pay.status === "Earned" ? "bg-amber-100 text-amber-700"
+                                              : pay.status === "Approved" ? "bg-[var(--brand-soft)] text-[var(--brand)]"
+                                              : "bg-emerald-100 text-emerald-700"}`}>{pay.status}</span>
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                               <div className="space-y-2">
-                                <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Quick Actions</div>
+                                <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Active Wallets & Quick Actions</div>
                                 <button
                                   disabled={!firstWallet}
                                   onClick={() => navigate(`/cashbook?book=${firstWallet}&openExpense=1`)}
@@ -190,6 +214,14 @@ export default function ProjectPnL() {
                                   data-testid={`pnl-log-expense-${p.project_id}`}
                                 >
                                   <Plus size={12} /> Log Site Expense
+                                </button>
+                                <button
+                                  disabled={!firstWallet}
+                                  onClick={() => navigate(`/cashbook?book=${firstWallet}&openTopUp=1`)}
+                                  className="w-full flex items-center justify-center gap-1.5 text-xs py-1.5 rounded-lg border border-[var(--border)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
+                                  data-testid={`pnl-top-up-${p.project_id}`}
+                                >
+                                  <Plus size={12} /> Top Up Float
                                 </button>
                                 <button
                                   disabled={!firstWallet}
@@ -209,7 +241,7 @@ export default function ProjectPnL() {
                   );
                 })}
                 {!loading && projects.length === 0 && (
-                  <tr><td colSpan={8}>
+                  <tr><td colSpan={9}>
                     <EmptyState icon={LineChart} title="No project P&L data yet" hint="Link a Cashbook wallet to a project to start tracking margin." />
                   </td></tr>
                 )}

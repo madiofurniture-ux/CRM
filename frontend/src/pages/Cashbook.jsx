@@ -126,9 +126,11 @@ export default function Cashbook() {
     setDrawer(type);
   };
 
-  // "+ Log Site Expense" deep-link from Project P&L: ?book=<id>&openExpense=1.
+  // Deep-links from Project P&L: ?book=<id>&openExpense=1 or &openTopUp=1.
   useEffect(() => {
-    if (searchParams.get("openExpense") === "1" && selectedId) openDrawer(selectedId, "CASH_OUT");
+    if (!selectedId) return;
+    if (searchParams.get("openExpense") === "1") openDrawer(selectedId, "CASH_OUT");
+    else if (searchParams.get("openTopUp") === "1") openDrawer(selectedId, "CASH_IN");
   }, []); // eslint-disable-line
 
   const uploadReceipt = async (file) => {

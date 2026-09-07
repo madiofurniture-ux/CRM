@@ -4,7 +4,7 @@ import {
   Sparkles, Building2, Package, BarChart3, ListTodo, Users, LogOut, HardHat, MapPin,
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
   CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
-  SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2,
+  SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2, HandCoins,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -59,6 +59,7 @@ const SECTIONS = [
       { id: "petty", to: "/petty-cash", label: "Petty Cash", icon: IndianRupee },
       { id: "outstanding", to: "/outstanding", label: "Outstanding", icon: AlertTriangle },
       { id: "project-pnl", to: "/reports/project-pnl", label: "Project P&L", icon: LineChart },
+      { id: "incentives", to: "/incentives", label: "Incentives", icon: HandCoins },
     ],
   },
   {

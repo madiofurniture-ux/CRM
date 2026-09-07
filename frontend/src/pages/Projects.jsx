@@ -3,6 +3,9 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import LogTimeline from "@/components/LogTimeline";
 import PettyCashBurnWidget from "@/components/PettyCashBurnWidget";
+import LinkedTasksPanel from "@/components/LinkedTasksPanel";
+import StageProgressBar from "@/components/StageProgressBar";
+import { projectLifecycleStages } from "@/lib/lifecycle";
 import api from "@/lib/api";
 import { inrFull, fmtDate, marginTone } from "@/lib/format";
 import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2, MessageSquare } from "lucide-react";
@@ -492,6 +495,7 @@ export default function Projects() {
               <button onClick={() => setLogProject(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
+              <StageProgressBar stages={projectLifecycleStages(logProject, pnlByProject[logProject.id])} />
               <PettyCashBurnWidget projectId={logProject.id} />
               <LogTimeline
                 entity="project" itemId={logProject.id} entries={logProject.log || []}
@@ -500,6 +504,7 @@ export default function Projects() {
                   setRows((p) => p.map((x) => x.id === logProject.id ? { ...x, log } : x));
                 }}
               />
+              <LinkedTasksPanel refId={logProject.id} refType="project" entityName={logProject.customer} />
             </div>
           </div>
         </div>

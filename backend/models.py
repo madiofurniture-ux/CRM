@@ -748,11 +748,19 @@ class ProjectBase(BaseModel):
     target_date: Optional[str] = ""
     remarks: Optional[str] = ""
     quote_ref: Optional[str] = ""
+    quote_id: Optional[str] = ""          # the deal this project was won from (lineage)
     sale_id: Optional[str] = ""           # links back to the sales order it was generated from
     lead_id: Optional[str] = ""           # lineage back to the originating lead
     requirement_id: Optional[str] = ""    # set when started from a Requirement, before any quote exists
     milestones: List[dict] = Field(default_factory=list)  # [{name, status, completed_at}]
     log: List[dict] = Field(default_factory=list)  # [{at, by, by_id, text, confidence_level, kind}]
+    # Incentive-pipeline lineage, set once at deal-won provisioning time —
+    # sales_rep_id is a display name, matching the by_user/assigned_to
+    # convention used everywhere else in this codebase, not a true user id.
+    budgeted_petty_cash: Optional[float] = 0
+    sales_rep_id: Optional[str] = ""
+    architect_id: Optional[str] = ""
+    incentive_total: Optional[float] = 0
 
 
 class ProjectCreate(ProjectBase):
@@ -950,9 +958,15 @@ class CommissionPayoutBase(BaseModel):
     rate_pct: float = 0
     flat_amount: float = 0
     commission_amount: float = 0
-    status: str = "Approved"            # Approved / Paid — a row only exists once approved
+    # Earned = auto-provisioned at deal-won time, not yet reviewed;
+    # Approved / Paid — a manually-approved row could also be created
+    # directly (the pre-existing /analytics/commissions/approve flow).
+    status: str = "Approved"            # Earned / Approved / Paid
     approved_by: Optional[str] = ""
+    paid_at: Optional[str] = ""
     remarks: Optional[str] = ""
+    project_id: Optional[str] = ""      # set when auto-provisioned from a won deal
+    quote_id: Optional[str] = ""
 
 
 class CommissionPayoutCreate(CommissionPayoutBase):
