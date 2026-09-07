@@ -157,10 +157,10 @@ export default function Sidebar() {
                     onClick={() => setOpen(false)}
                     title={collapsed ? it.label : undefined}
                     className={({ isActive }) =>
-                      `flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-colors mb-0.5 ${
+                      `flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-sm transition-colors mb-0.5 ${
                         isActive
-                          ? "bg-white text-[var(--ink)] shadow-[0_1px_2px_rgba(26,29,26,0.04)] border border-[var(--border-light)]"
-                          : "text-[var(--ink-2)] hover:bg-white/60 hover:text-[var(--ink)]"
+                          ? "bg-blue-600 text-white font-medium shadow-sm"
+                          : "text-slate-600 hover:bg-slate-100/60 hover:text-slate-900"
                       }`
                     }
                     data-testid={`nav-${it.id}`}

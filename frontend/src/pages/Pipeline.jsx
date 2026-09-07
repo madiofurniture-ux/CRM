@@ -8,10 +8,10 @@ import { GripVertical, X, Trash2, Pencil } from "lucide-react";
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 const DIVISIONS = ["Furniture", "MAP", "D&W"];
 const STAGE_TINTS = {
-  New: "border-t-[var(--ink-3)]",
-  Qualified: "border-t-blue-500",
-  Quoted: "border-t-[var(--warn)]",
-  Negotiation: "border-t-[var(--brand)]",
+  New: "border-t-blue-400",
+  Qualified: "border-t-blue-600",
+  Quoted: "border-t-amber-500",
+  Negotiation: "border-t-indigo-800",
   Won: "border-t-[var(--moss)]",
   Lost: "border-t-[var(--danger)]",
 };
@@ -129,16 +129,16 @@ export default function Pipeline() {
                 key={s}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={() => onDrop(s)}
-                className="w-[300px] shrink-0 bg-[var(--surface-2)] rounded-xl p-3 min-h-[400px]"
+                className="w-[300px] shrink-0 bg-[var(--surface-2)] rounded-2xl p-3 min-h-[400px]"
                 data-testid={`kanban-col-${s}`}
               >
                 <div className="flex items-center justify-between px-1 mb-3">
                   <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${
-                      s === "New" ? "bg-[var(--ink-3)]" :
-                      s === "Qualified" ? "bg-blue-500" :
-                      s === "Quoted" ? "bg-[var(--warn)]" :
-                      s === "Negotiation" ? "bg-[var(--brand)]" :
+                      s === "New" ? "bg-blue-400" :
+                      s === "Qualified" ? "bg-blue-600" :
+                      s === "Quoted" ? "bg-amber-500" :
+                      s === "Negotiation" ? "bg-indigo-800" :
                       s === "Won" ? "bg-[var(--moss)]" : "bg-[var(--danger)]"
                     }`} />
                     <span className="font-heading font-semibold text-[var(--ink)] text-sm">{s}</span>
@@ -153,7 +153,7 @@ export default function Pipeline() {
                       draggable
                       onDragStart={() => setDragId(q.id)}
                       onDragEnd={() => setDragId(null)}
-                      className={`group relative bg-[var(--surface)] border border-[var(--border)] border-t-2 ${STAGE_TINTS[s]} rounded-lg p-3 cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${dragId === q.id ? "kanban-card-dragging" : ""}`}
+                      className={`group relative bg-[var(--surface)] border border-[var(--border)] border-t-2 ${STAGE_TINTS[s]} rounded-2xl p-3 cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${dragId === q.id ? "kanban-card-dragging" : ""}`}
                       data-testid={`kanban-card-${q.id}`}
                     >
                       <div className="absolute top-2 right-2 hidden group-hover:flex items-center gap-1 bg-[var(--surface)] rounded-md">

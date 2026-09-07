@@ -3,6 +3,7 @@ import Topbar from "@/components/Topbar";
 import KpiCard from "@/components/KpiCard";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { inr, inrFull, fmtDate } from "@/lib/format";
 import { TrendingUp, Receipt, Package, Users, Calendar, AlertTriangle, IndianRupee } from "lucide-react";
 import {
@@ -12,7 +13,15 @@ import {
 
 const DIVISION_COLORS = ["#C85A32", "#4A5D4E", "#D48B30", "#8A8C8A", "#B24040"];
 
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
 export default function Dashboard() {
+  const { user } = useAuth();
   const [stats, setStats] = useState(null);
   const [quotes, setQuotes] = useState([]);
   const [leads, setLeads] = useState([]);
@@ -46,6 +55,14 @@ export default function Dashboard() {
     <>
       <Topbar title="Dashboard" subtitle="Live snapshot of your business" />
       <div className="p-6 space-y-6 max-w-[1600px]" data-testid="dashboard-page">
+        {/* Momentum banner */}
+        <div className="bg-blue-600 rounded-2xl px-6 py-5 text-white">
+          <div className="text-xs font-semibold uppercase tracking-wider text-blue-100">
+            {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} · This week's momentum
+          </div>
+          <div className="font-heading font-bold text-2xl mt-1">{greeting()}, {user?.name || "there"}</div>
+        </div>
+
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
           <KpiCard label="Pipeline" value={inr(stats?.pipeline_value)} hint="Open quotes" accent="brand" icon={TrendingUp} testid="kpi-pipeline" />

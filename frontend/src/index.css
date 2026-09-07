@@ -5,46 +5,46 @@
 @tailwind utilities;
 
 :root {
-  /* Brand palette — earthy, terracotta, deep moss */
-  --bg: #f8f7f4;
-  --surface: #fdfdfd;
-  --surface-2: #f4f3ee;
-  --surface-hover: #f2f0eb;
-  --ink: #1a1d1a;
-  --ink-2: #5c5f5c;
-  --ink-3: #8a8c8a;
-  --brand: #c85a32;
-  --brand-hover: #a84a28;
-  --brand-soft: #f7ebe6;
-  --moss: #4a5d4e;
-  --moss-soft: #edf2ee;
-  --warn: #d48b30;
-  --warn-soft: #fdf4e7;
-  --danger: #b24040;
-  --danger-soft: #f8eaea;
-  --border: #e2e0d9;
-  --border-light: #ebe9e4;
+  /* Brand palette — Aura Blue executive workspace */
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --surface-hover: #eff6ff;
+  --ink: #0f172a;
+  --ink-2: #475569;
+  --ink-3: #94a3b8;
+  --brand: #0062d2;
+  --brand-hover: #0055d6;
+  --brand-soft: #eff6ff;
+  --moss: #16a34a;
+  --moss-soft: #f0fdf4;
+  --warn: #d97706;
+  --warn-soft: #fffbeb;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --border: #e2e8f0;
+  --border-light: #eef2f7;
 
-  --background: 41 14% 96%;
-  --foreground: 60 5% 11%;
-  --card: 0 0% 99%;
-  --card-foreground: 60 5% 11%;
-  --popover: 0 0% 99%;
-  --popover-foreground: 60 5% 11%;
-  --primary: 18 60% 49%;
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 214 100% 41%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 40 13% 94%;
-  --secondary-foreground: 60 5% 11%;
-  --muted: 40 13% 94%;
-  --muted-foreground: 60 3% 37%;
-  --accent: 40 13% 94%;
-  --accent-foreground: 60 5% 11%;
-  --destructive: 0 47% 47%;
+  --secondary: 214 100% 97%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --accent: 214 100% 97%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
-  --border: 47 17% 86%;
-  --input: 47 17% 86%;
-  --ring: 18 60% 49%;
-  --radius: 0.625rem;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 214 100% 41%;
+  --radius: 1rem;
 }
 
 html, body, #root {
@@ -88,7 +88,7 @@ body {
 
 /* selection */
 ::selection {
-  background: rgba(200, 90, 50, 0.18);
+  background: rgba(0, 98, 210, 0.18);
   color: var(--ink);
 }
 
@@ -128,7 +128,7 @@ body {
   background: var(--brand);
   color: white;
   font-weight: 600;
-  border-radius: 8px;
+  border-radius: 0.75rem;
   padding: 0.55rem 1rem;
   font-size: 0.875rem;
   transition: all 0.15s ease;
@@ -145,7 +145,7 @@ body {
   color: var(--ink);
   border: 1px solid var(--border);
   font-weight: 500;
-  border-radius: 8px;
+  border-radius: 0.75rem;
   padding: 0.5rem 0.9rem;
   font-size: 0.875rem;
   transition: all 0.15s ease;
