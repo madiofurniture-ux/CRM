@@ -245,7 +245,7 @@ async def users_directory(user: dict = Depends(get_current_user)):
     /auth/users admin listing (roles, page grants, pin hashes) to everyone."""
     tid = tenancy.tenant_of(user) or "__no_tenant__"
     return await db.users.find(
-        {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+        {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1, "team_id": 1, "icon": 1, "color": 1}).to_list(200)
 
 
 @api.post("/auth/users")

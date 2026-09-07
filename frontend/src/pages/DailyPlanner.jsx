@@ -209,8 +209,8 @@ export default function DailyPlanner() {
 
       <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4 lg:sticky lg:top-20">
         <h2 className="font-heading font-bold text-[var(--ink)] tracking-tight mb-3">Team follow-through</h2>
-        {teammates.length === 0 ? (
-          <div className="text-sm text-[var(--ink-3)]">No teammates yet.</div>
+        {teammates.length === 0 || !teams.some((t) => t.active && teammates.some((u) => u.team_id === t.id)) ? (
+          <div className="text-sm text-[var(--ink-3)]">No teammates assigned to a team yet.</div>
         ) : (
           <div className="space-y-3">
             {teams.filter((t) => t.active).map((team) => {
