@@ -6,6 +6,7 @@ import StageBadge from "@/components/StageBadge";
 import EmptyState from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
+import { useBusinessProfile } from "@/context/BusinessProfileContext";
 import api from "@/lib/api";
 import { inr, inrFull, fmtDate, marginTone } from "@/lib/format";
 import {
@@ -20,6 +21,7 @@ export default function ProjectPnL() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
   const [divisionFilter, setDivisionFilter] = useState("All");
+  const { divisions } = useBusinessProfile();
 
   useEffect(() => {
     setLoading(true);
@@ -76,9 +78,9 @@ export default function ProjectPnL() {
             data-testid="pnl-division-filter"
           >
             <option value="All">All Divisions</option>
-            <option value="Furniture">Madio Furniture</option>
-            <option value="MAP">MAP Paints</option>
-            <option value="D&W">Madio Doors &amp; Windows</option>
+            {divisions.map((d) => (
+              <option key={d.id} value={d.slug}>{d.name}</option>
+            ))}
           </select>
         </div>
 

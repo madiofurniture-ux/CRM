@@ -7,6 +7,7 @@ import LinkedTasksPanel from "@/components/LinkedTasksPanel";
 import StageProgressBar from "@/components/StageProgressBar";
 import StakeholdersCard from "@/components/StakeholdersCard";
 import ProjectTrackingTab from "@/components/ProjectTrackingTab";
+import { useBusinessProfile } from "@/context/BusinessProfileContext";
 import { projectLifecycleStages } from "@/lib/lifecycle";
 import api from "@/lib/api";
 import { inrFull, fmtDate, marginTone } from "@/lib/format";
@@ -56,6 +57,7 @@ export default function Projects() {
   const [pnlByProject, setPnlByProject] = useState({});
   const [divisionFilter, setDivisionFilter] = useState("All");
   const [divisionPulse, setDivisionPulse] = useState([]);
+  const { divisions } = useBusinessProfile();
 
   const load = async () => {
     try {
@@ -244,9 +246,9 @@ export default function Projects() {
             data-testid="division-filter"
           >
             <option value="All">All Divisions</option>
-            <option value="Furniture">Madio Furniture</option>
-            <option value="MAP">MAP Paints</option>
-            <option value="D&W">Madio Doors &amp; Windows</option>
+            {divisions.map((d) => (
+              <option key={d.id} value={d.slug}>{d.name}</option>
+            ))}
           </select>
         </div>
 
@@ -408,9 +410,9 @@ export default function Projects() {
                     onChange={(e) => setForm({ ...form, division: e.target.value })}
                     className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)] bg-white"
                   >
-                    <option value="Furniture">Furniture</option>
-                    <option value="MAP">MAP (Paints)</option>
-                    <option value="D&W">D&W (Doors & Windows)</option>
+                    {divisions.map((d) => (
+                      <option key={d.id} value={d.slug}>{d.name}</option>
+                    ))}
                   </select>
                 </div>
               </div>

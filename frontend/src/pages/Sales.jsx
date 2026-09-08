@@ -3,11 +3,13 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
+import { useBusinessProfile } from "@/context/BusinessProfileContext";
 
 export default function Sales() {
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [fDiv, setFDiv] = useState("All");
+  const { divisions } = useBusinessProfile();
 
   useEffect(() => { api.get("/sales").then((r) => setRows(r.data)); }, []);
 
@@ -32,7 +34,8 @@ export default function Sales() {
         <div className="flex flex-wrap gap-2 mb-4">
           <input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="sales-search" />
           <select value={fDiv} onChange={(e) => setFDiv(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
-            <option>All</option><option>Furniture</option><option>MAP</option><option>D&W</option>
+            <option>All</option>
+            {divisions.map((d) => <option key={d.id} value={d.slug}>{d.slug}</option>)}
           </select>
         </div>
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">

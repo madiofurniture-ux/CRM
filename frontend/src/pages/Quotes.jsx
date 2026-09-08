@@ -5,8 +5,8 @@ import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers } from "lucide-react";
+import { useBusinessProfile } from "@/context/BusinessProfileContext";
 
-const DIVISIONS = ["Furniture", "MAP", "D&W"];
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 
 export default function Quotes() {
@@ -18,6 +18,7 @@ export default function Quotes() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const { divisions } = useBusinessProfile();
 
   const emptyItem = { sku: "", name: "", division: "Furniture", qty: 1, unit_price: 0, discount_pct: 0, gst_pct: 18, total_amount: 0 };
 
@@ -175,8 +176,8 @@ export default function Quotes() {
           />
           <select value={fDiv} onChange={(e) => setFDiv(e.target.value)} className="px-3.5 py-2 rounded-xl bg-white border border-[var(--border)] text-sm outline-none">
             <option value="All">All Divisions</option>
-            {DIVISIONS.map((d) => (
-              <option key={d}>{d}</option>
+            {divisions.map((d) => (
+              <option key={d.id} value={d.slug}>{d.slug}</option>
             ))}
           </select>
           <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3.5 py-2 rounded-xl bg-white border border-[var(--border)] text-sm outline-none">
@@ -290,9 +291,9 @@ export default function Quotes() {
                     onChange={(e) => setForm({ ...form, division: e.target.value })}
                     className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--border)] outline-none focus:border-[var(--brand)] bg-white font-semibold text-[var(--brand)]"
                   >
-                    <option value="Furniture">Furniture</option>
-                    <option value="MAP">MAP - Premium Architectural Plaster</option>
-                    <option value="D&W">Doors & Windows (D&W)</option>
+                    {divisions.map((d) => (
+                      <option key={d.id} value={d.slug}>{d.name}</option>
+                    ))}
                   </select>
                 </div>
               </div>

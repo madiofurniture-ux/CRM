@@ -4,9 +4,9 @@ import api, { formatApiError } from "@/lib/api";
 import { inr, inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { GripVertical, X, Trash2, Pencil } from "lucide-react";
+import { useBusinessProfile } from "@/context/BusinessProfileContext";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
-const DIVISIONS = ["Furniture", "MAP", "D&W"];
 const STAGE_TINTS = {
   New: "border-t-blue-400",
   Qualified: "border-t-blue-600",
@@ -34,6 +34,7 @@ export default function Pipeline() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const { divisions } = useBusinessProfile();
 
   const load = async () => {
     const { data } = await api.get("/quotes");
@@ -258,8 +259,8 @@ export default function Pipeline() {
                     className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--border)] outline-none focus:border-[var(--brand)] bg-white"
                     data-testid="deal-division"
                   >
-                    {DIVISIONS.map((d) => (
-                      <option key={d}>{d}</option>
+                    {divisions.map((d) => (
+                      <option key={d.id} value={d.slug}>{d.slug}</option>
                     ))}
                   </select>
                 </div>

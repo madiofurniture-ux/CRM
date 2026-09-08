@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 
 import { AuthProvider } from "@/context/AuthContext";
 import { PrivacyModeProvider } from "@/context/PrivacyModeContext";
+import { BusinessProfileProvider } from "@/context/BusinessProfileContext";
 import PrivacyPinModal from "@/components/PrivacyPinModal";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Layout from "@/components/Layout";
@@ -72,6 +73,7 @@ function PageLoader() {
 function App() {
   return (
     <AuthProvider>
+      <BusinessProfileProvider>
       <PrivacyModeProvider>
       <Toaster position="top-right" richColors closeButton />
       <PrivacyPinModal />
@@ -135,6 +137,7 @@ function App() {
         </Suspense>
       </BrowserRouter>
       </PrivacyModeProvider>
+      </BusinessProfileProvider>
     </AuthProvider>
   );
 }
