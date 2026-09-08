@@ -30,8 +30,8 @@ def test_custom_field_key_is_a_stable_slug_of_the_label():
     assert stage_key("Budget Band") == stage_key("  budget   band  ")
 
 
-def test_supported_entities_are_lead_and_customer():
-    assert set(CUSTOM_FIELD_ENTITIES) == {"lead", "customer"}
+def test_supported_entities_are_lead_customer_and_project():
+    assert set(CUSTOM_FIELD_ENTITIES) == {"lead", "customer", "project"}
 
 
 # ── Customer.custom_fields round-trip (create/update/retrieve) ──────────────

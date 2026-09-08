@@ -740,6 +740,37 @@ class OfficeSettings(BaseModel):
     invoice_prefix: Optional[str] = "MAD"
 
 
+# ------- Tenant business profile: per-tenant division roster, so a sister
+# entity onboarded onto this same codebase configures its own divisions
+# instead of the app hardcoding Madio's three business lines. -------
+class Division(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    name: str
+    slug: str
+    brand_color: Optional[str] = "#006B4F"
+    logo_url: Optional[str] = ""
+    custom_sku_prefix: Optional[str] = ""
+    terms_and_conditions: Optional[str] = ""
+
+
+DEFAULT_DIVISIONS = [
+    Division(id="furniture", name="Madio Furniture", slug="Furniture", custom_sku_prefix="MF"),
+    Division(id="map", name="MAP Premium Acrylic Paints", slug="MAP", custom_sku_prefix="MAP"),
+    Division(id="dw", name="Madio Doors & Windows", slug="D&W", custom_sku_prefix="DW"),
+]
+
+
+class TenantBusinessProfile(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    divisions: List[Division] = Field(default_factory=lambda: [d.model_copy() for d in DEFAULT_DIVISIONS])
+
+
+class TenantBusinessProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    divisions: List[Division]
+
+
 # ------- Projects Execution -------
 class ProjectBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -772,6 +803,7 @@ class ProjectBase(BaseModel):
     stakeholders: Optional["ProjectStakeholders"] = None
     current_milestone: Optional[str] = ""
     completion_percentage: Optional[int] = 0
+    custom_fields: dict = Field(default_factory=dict)  # key (CustomFieldDef.key) -> value
 
 
 class ProjectCreate(ProjectBase):
@@ -794,6 +826,7 @@ class ProjectUpdate(BaseModel):
     stakeholders: Optional["ProjectStakeholders"] = None
     current_milestone: Optional[str] = None
     completion_percentage: Optional[int] = None
+    custom_fields: Optional[dict] = None
 
 
 class ProjectStageUpdate(BaseModel):

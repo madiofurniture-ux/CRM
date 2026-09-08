@@ -54,6 +54,7 @@ from models import (
     SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
     SplitPaymentCreate, PrivacyPinSet, PrivacyPinVerify,
     ProjectDailyLogCreate,
+    TenantBusinessProfile, TenantBusinessProfileUpdate,
 )
 from seed import seed_all
 
@@ -1982,6 +1983,33 @@ async def update_office_settings(payload: OfficeSettings, _: dict = Depends(requ
     data = payload.model_dump()
     await db.settings.update_one({"_id": "office"}, {"$set": data}, upsert=True)
     return data
+
+
+# ---------- Tenant Business Profile (per-tenant division roster) ----------
+async def _get_business_profile(user: dict):
+    owned = tenancy.scope({}, "business_profiles", user)
+    doc = await db.business_profiles.find_one(owned, {"_id": 0})
+    if not doc:
+        default = TenantBusinessProfile().model_dump()
+        tenancy.stamp(default, "business_profiles", user)
+        await db.business_profiles.insert_one(dict(default))
+        default.pop("_id", None)
+        return default
+    return doc
+
+
+@api.get("/settings/business-profile")
+async def get_business_profile(user: dict = Depends(get_current_user)):
+    return await _get_business_profile(user)
+
+
+@api.put("/settings/business-profile")
+async def update_business_profile(payload: TenantBusinessProfileUpdate,
+                                   user: dict = Depends(require_admin)):
+    data = payload.model_dump()
+    owned = tenancy.scope({}, "business_profiles", user)
+    await db.business_profiles.update_one(owned, {"$set": data}, upsert=True)
+    return await _get_business_profile(user)
 
 
 # ---------- Attendance with geofencing ----------
