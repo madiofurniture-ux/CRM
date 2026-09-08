@@ -760,7 +760,7 @@ class Division(BaseModel):
     id: str
     name: str
     slug: str
-    brand_color: Optional[str] = "#006B4F"
+    brand_color: Optional[str] = "#0062D2"  # matches --brand in index.css (Aura Blue)
     logo_url: Optional[str] = ""
     custom_sku_prefix: Optional[str] = ""
     terms_and_conditions: Optional[str] = ""

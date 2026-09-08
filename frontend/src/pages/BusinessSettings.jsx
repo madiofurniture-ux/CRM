@@ -27,7 +27,7 @@ const MODULES = [
 
 let divisionSeq = 0;
 const blankDivision = () => ({
-  id: `new-${Date.now()}-${divisionSeq++}`, name: "", slug: "", brand_color: "#006B4F",
+  id: `new-${Date.now()}-${divisionSeq++}`, name: "", slug: "", brand_color: "#0062D2",
   logo_url: "", custom_sku_prefix: "", terms_and_conditions: "",
 });
 
@@ -127,7 +127,7 @@ export default function BusinessSettings() {
               <Fld l="SKU Prefix" v={d.custom_sku_prefix} oc={(v) => updateDivision(d.id, { custom_sku_prefix: v })} placeholder="e.g. MF" />
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Brand Color</label>
-                <input type="color" value={d.brand_color || "#006B4F"} onChange={(e) => updateDivision(d.id, { brand_color: e.target.value })}
+                <input type="color" value={d.brand_color || "#0062D2"} onChange={(e) => updateDivision(d.id, { brand_color: e.target.value })}
                   className="w-full h-9 rounded-lg border border-[var(--border)] bg-white" />
               </div>
               <Fld l="Logo URL" v={d.logo_url} oc={(v) => updateDivision(d.id, { logo_url: v })} cls="col-span-2" placeholder="https://…" />
