@@ -52,6 +52,7 @@ from models import (
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
     TeamCreate, Team, RoleCreate, Role,
     SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
+    SplitPaymentCreate, PrivacyPinSet, PrivacyPinVerify,
     ProjectDailyLogCreate,
 )
 from seed import seed_all
@@ -670,6 +671,7 @@ ALL_MODULE_IDS = [
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
+    "finance-payments",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -3362,6 +3364,94 @@ async def delete_payment(item_id: str, user: dict = Depends(get_current_user)):
                 tenancy.scope({"id": sale["id"]}, "sales", user),
                 {"$set": {"balance": max(0.0, value - paid), "status": status}})
     return {"ok": True}
+
+
+# ------- Finance: split cash/bank-transfer payments with GST, and the
+# privacy PIN that guards unmasking cash figures. Separate collection
+# (finance_payments) from the flat sale/invoice `payments` ledger above —
+# see models.py's SplitPayment docstring for why. -------
+@api.post("/finance/payments")
+async def create_split_payment(payload: SplitPaymentCreate, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    doc["status"] = "RECORDED"
+
+    bt = doc.get("bank_transfer_component")
+    bt_total = 0.0
+    if bt:
+        taxable = round(lc.money(bt.get("taxable_amount")), 2)
+        gst_amount = round(taxable * (bt.get("gst_rate") or 0) / 100, 2)
+        bt_total = round(taxable + gst_amount, 2)
+        bt.update(taxable_amount=taxable, gst_amount=gst_amount, total_bt_amount=bt_total)
+        doc["bank_transfer_component"] = bt
+
+    cash = doc.get("cash_component")
+    cash_amount = 0.0
+    if cash:
+        cash_amount = round(lc.money(cash.get("cash_amount")), 2)
+        cash["cash_amount"] = cash_amount
+        doc["cash_component"] = cash
+
+    doc["total_collected"] = round(bt_total + cash_amount, 2)
+    tenancy.stamp(doc, "finance_payments", user)
+    await db.finance_payments.insert_one(dict(doc))
+    doc.pop("_id", None)
+
+    # Cash isn't credited to a wallet unless the caller opts in with a
+    # wallet_id — a payment can be recorded as collected without touching
+    # any project float. Reuses cashbook_top_up's exact CASH_IN + atomic
+    # $inc pattern so the two crediting paths can never drift.
+    wallet_id = cash.get("wallet_id") if cash else None
+    if cash_amount > 0 and wallet_id:
+        owned = tenancy.scope({"id": wallet_id}, "cashbooks", user)
+        book = await db.cashbooks.find_one(owned, {"_id": 0})
+        if book and book.get("status") == "ACTIVE":
+            entry = {
+                "id": new_id(), "cashbook_id": wallet_id, "type": "CASH_IN",
+                "status": "Approved", "amount": cash_amount,
+                "category": "Payment Collection", "created_at": now_iso(),
+                "entry_person": user.get("name", ""),
+            }
+            tenancy.stamp(entry, "cashbook_entries", user)
+            await db.cashbook_entries.insert_one(dict(entry))
+            await db.cashbooks.update_one(owned, {"$inc": {"current_balance": cash_amount}})
+    return doc
+
+
+@api.get("/finance/payments")
+async def list_split_payments(mask_cash: bool = True, user: dict = Depends(get_current_user)):
+    """mask_cash=true (default) strips the cash component server-side — never
+    just hidden client-side — so a masked response can never leak real cash
+    figures over the wire regardless of what the frontend does with it."""
+    rows = await db.finance_payments.find(
+        tenancy.scope({}, "finance_payments", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
+    if mask_cash:
+        for r in rows:
+            r["cash_component"] = None
+    return rows
+
+
+@api.post("/finance/set-privacy-pin")
+async def set_privacy_pin(payload: PrivacyPinSet, user: dict = Depends(get_current_user)):
+    if not re.fullmatch(r"\d{4,}", payload.pin):
+        raise HTTPException(status_code=400, detail="PIN must be 4+ digits")
+    tid = tenancy.tenant_of(user) or DEFAULT_TENANT
+    await db.users.update_one(
+        {"id": user["id"], "tenant_id": tid}, {"$set": {"finance_privacy_pin_hash": hash_pin(payload.pin)}})
+    return {"ok": True}
+
+
+@api.post("/finance/verify-privacy-pin")
+async def verify_privacy_pin(payload: PrivacyPinVerify, user: dict = Depends(get_current_user)):
+    tid = tenancy.tenant_of(user) or DEFAULT_TENANT
+    me = await db.users.find_one({"id": user["id"], "tenant_id": tid}, {"_id": 0, "finance_privacy_pin_hash": 1})
+    stored = (me or {}).get("finance_privacy_pin_hash")
+    if not stored:
+        raise HTTPException(status_code=400, detail="Privacy PIN not set — set one first")
+    if not verify_pin(payload.pin, stored):
+        raise HTTPException(status_code=401, detail="Incorrect PIN")
+    return {"verified": True}
 
 
 @api.post("/v1/payments")

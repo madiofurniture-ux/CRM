@@ -5,6 +5,7 @@ import KpiCard from "@/components/KpiCard";
 import StageBadge from "@/components/StageBadge";
 import EmptyState from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import api from "@/lib/api";
 import { inr, inrFull, fmtDate, marginTone } from "@/lib/format";
 import {
@@ -14,6 +15,7 @@ import {
 
 export default function ProjectPnL() {
   const navigate = useNavigate();
+  const { isCashHidden, requestUnlock } = usePrivacyMode();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
@@ -55,8 +57,8 @@ export default function ProjectPnL() {
           <KpiCard label="Total Contract Revenue" value={inr(summary?.total_contract_revenue)}
             hint={`Across ${projects.length} project${projects.length === 1 ? "" : "s"}`}
             accent="brand" icon={IndianRupee} testid="pnl-kpi-revenue" />
-          <KpiCard label="Total Field Cash Spent" value={inr(summary?.total_field_cash_spent)}
-            hint={`${activeCount} with an active wallet`}
+          <KpiCard label="Total Field Cash Spent" value={isCashHidden ? "••••••" : inr(summary?.total_field_cash_spent)}
+            hint={isCashHidden ? <button onClick={requestUnlock} className="text-blue-600 underline">Unlock</button> : `${activeCount} with an active wallet`}
             accent="danger" icon={Wallet} testid="pnl-kpi-spent" />
           <KpiCard label="Aggregate Gross Margin" value={`${summary?.aggregate_margin_pct ?? 0}%`}
             hint="Revenue minus approved spend"
@@ -126,7 +128,7 @@ export default function ProjectPnL() {
                           <span className="ml-2 text-xs font-mono text-[var(--ink-3)]">{p.project_no}</span>
                         </td>
                         <td className="px-4 py-3 text-right font-mono">{inrFull(p.contract_value)}</td>
-                        <td className="px-4 py-3 text-right font-mono">{inrFull(p.approved_petty_cash)}</td>
+                        <td className="px-4 py-3 text-right font-mono">{isCashHidden ? "••••••" : inrFull(p.approved_petty_cash)}</td>
                         <td className="px-4 py-3 text-right font-mono">
                           {inrFull(p.approved_incentives + p.pending_incentives)}
                           {p.pending_incentives > 0 && <div className="text-[10px] text-[var(--warn,#B45309)]">{inrFull(p.pending_incentives)} pending</div>}

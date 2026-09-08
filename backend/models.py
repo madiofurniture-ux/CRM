@@ -1,6 +1,6 @@
 """Pydantic models for MADIO CRM."""
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import List, Optional, Any
+from typing import List, Literal, Optional, Any
 from datetime import datetime, timezone
 import uuid
 
@@ -1350,4 +1350,60 @@ class AuditLogBase(BaseModel):
 
 class AuditLog(AuditLogBase):
     id: str
+
+
+# ------- Finance: split cash/bank-transfer payments with GST -------
+# A separate collection/model from the existing Payment (sale/invoice
+# collection ledger, no GST or deal/project linkage) — this tracks
+# deal/project-level settlements with a GST-bearing bank-transfer component
+# and a privacy-maskable cash component, which would be an awkward,
+# backward-incompatible bolt-on to the existing flat Payment shape.
+class BankTransferComponent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    taxable_amount: float = 0
+    gst_rate: float = GST_DEFAULT
+    gst_amount: float = 0
+    total_bt_amount: float = 0
+    utr_reference: Optional[str] = ""
+    bank_account_id: Optional[str] = ""
+    tax_invoice_number: Optional[str] = ""
+
+
+class CashComponent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    cash_amount: float = 0
+    wallet_id: Optional[str] = ""
+    receipt_voucher_no: Optional[str] = ""
+
+
+class SplitPaymentBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    deal_id: Optional[str] = ""
+    project_id: Optional[str] = ""
+    customer_id: Optional[str] = ""
+    payment_mode: Literal["BANK_TRANSFER", "CASH", "SPLIT"]
+    bank_transfer_component: Optional[BankTransferComponent] = None
+    cash_component: Optional[CashComponent] = None
+    receipt_date: str
+
+
+class SplitPaymentCreate(SplitPaymentBase):
+    pass
+
+
+class SplitPayment(SplitPaymentBase):
+    id: str
+    tenant_id: str
+    total_collected: float = 0
+    status: Literal["RECORDED", "VERIFIED", "RECONCILED"] = "RECORDED"
     created_at: str
+
+
+class PrivacyPinSet(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    pin: str  # 4-digit PIN, hashed with the same bcrypt helper as login PINs
+
+
+class PrivacyPinVerify(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    pin: str

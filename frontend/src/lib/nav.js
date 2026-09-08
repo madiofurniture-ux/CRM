@@ -6,7 +6,7 @@ import {
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, ClipboardList, Wand2, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
-  LayoutTemplate,
+  LayoutTemplate, Landmark,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
@@ -42,6 +42,7 @@ export const NAV = [
   { app: "money", id: "cashbook", to: "/cashbook", label: "Cashbooks", icon: Wallet },
   { app: "money", id: "project-pnl", to: "/reports/project-pnl", label: "Project P&L", icon: LineChart },
   { app: "money", id: "incentives", to: "/incentives", label: "Incentives", icon: HandCoins },
+  { app: "money", id: "finance-payments", to: "/payments", label: "Payments & Tax Invoices", icon: Landmark },
 
   // Relations
   { app: "relations", id: "customers", to: "/customers", label: "Customers", icon: Contact },

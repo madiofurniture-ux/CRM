@@ -4,6 +4,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 
 import { AuthProvider } from "@/context/AuthContext";
+import { PrivacyModeProvider } from "@/context/PrivacyModeContext";
+import PrivacyPinModal from "@/components/PrivacyPinModal";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Layout from "@/components/Layout";
 
@@ -57,6 +59,7 @@ const Customers = lazy(() => import("@/pages/Customers"));
 const QuoteFollowups = lazy(() => import("@/pages/QuoteFollowups"));
 const ProjectPnL = lazy(() => import("@/pages/ProjectPnL"));
 const Incentives = lazy(() => import("@/pages/Incentives"));
+const Payments = lazy(() => import("@/pages/Payments"));
 
 function PageLoader() {
   return (
@@ -69,7 +72,9 @@ function PageLoader() {
 function App() {
   return (
     <AuthProvider>
+      <PrivacyModeProvider>
       <Toaster position="top-right" richColors closeButton />
+      <PrivacyPinModal />
       <BrowserRouter>
         <Suspense fallback={<PageLoader />}>
         <Routes>
@@ -125,9 +130,11 @@ function App() {
           <Route path="/quotes/followups" element={<ProtectedRoute page="quote-followups"><Layout><QuoteFollowups /></Layout></ProtectedRoute>} />
           <Route path="/reports/project-pnl" element={<ProtectedRoute page="project-pnl"><Layout><ProjectPnL /></Layout></ProtectedRoute>} />
           <Route path="/incentives" element={<ProtectedRoute page="incentives"><Layout><Incentives /></Layout></ProtectedRoute>} />
+          <Route path="/payments" element={<ProtectedRoute page="finance-payments"><Layout><Payments /></Layout></ProtectedRoute>} />
         </Routes>
         </Suspense>
       </BrowserRouter>
+      </PrivacyModeProvider>
     </AuthProvider>
   );
 }

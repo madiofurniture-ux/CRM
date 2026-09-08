@@ -5,75 +5,76 @@ import {
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
   CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
   SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2, HandCoins, LayoutTemplate,
+  Landmark,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
 
+// Ordered strictly by business lifecycle: intake -> sales -> operations ->
+// finance settlement -> system admin. Each item's `id` is unchanged from
+// before this reorder (canAccess()/tenant.enabled_modules key on it), so
+// this is purely a re-grouping, not a permissions change.
 const SECTIONS = [
   {
-    title: "Overview",
+    title: "Intake & Leads",
     items: [
       { id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard },
-      { id: "alerts", to: "/alerts", label: "Follow-Up Alerts", icon: Bell },
-      { id: "reports", to: "/reports", label: "Reports", icon: PieChart },
+      { id: "visitors", to: "/visitors", label: "Visitors / Walk-ins", icon: UserPlus },
+      { id: "leads", to: "/leads", label: "Leads", icon: Sparkles },
+      { id: "customers", to: "/customers", label: "Contacts & Accounts", icon: Contact },
+      { id: "architects", to: "/architects", label: "Architects", icon: Building2 },
     ],
   },
   {
-    title: "Sales CRM",
+    title: "Sales & Closure",
     items: [
-      { id: "pipeline", to: "/pipeline", label: "Pipeline", icon: Columns3 },
       { id: "requirements", to: "/requirements", label: "Requirements", icon: ClipboardList },
       { id: "configurator", to: "/configurator", label: "Configurator", icon: Wand2 },
       { id: "quotes", to: "/quotes", label: "Quotations", icon: FileText },
       { id: "quote-builder", to: "/quotes/builder", label: "Quote Builder", icon: LayoutTemplate },
       { id: "quote-followups", to: "/quotes/followups", label: "Follow-ups", icon: PhoneCall },
+      { id: "pipeline", to: "/pipeline", label: "Pipeline & Deals", icon: Columns3 },
       { id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
-      { id: "visitors", to: "/visitors", label: "Visitors", icon: UserPlus },
-      { id: "leads", to: "/leads", label: "Leads", icon: Sparkles },
-      { id: "customers", to: "/customers", label: "Customers", icon: Contact },
-      { id: "architects", to: "/architects", label: "Architects", icon: Building2 },
     ],
   },
   {
-    title: "Inventory",
+    title: "Operations & Site",
     items: [
-      { id: "inventory", to: "/inventory", label: "Stock", icon: Package },
+      { id: "projects", to: "/projects", label: "Projects", icon: HardHat },
+      { id: "daily-planner", to: "/daily-planner", label: "Daily Planner", icon: CalendarCheck2 },
+      { id: "tasks", to: "/tasks", label: "Tasks", icon: ListTodo },
+      { id: "dwsurvey", to: "/dw-survey", label: "D&W Survey", icon: DoorOpen },
+      { id: "attendance", to: "/attendance", label: "Attendance", icon: MapPin },
+      { id: "meetplan", to: "/meets", label: "Meet Planner", icon: CalendarDays },
+      { id: "inventory", to: "/inventory", label: "Inventory & Materials", icon: Package },
       { id: "stock-ledger", to: "/stock-ledger", label: "Stock Ledger", icon: Layers },
       { id: "inv-analytics", to: "/inventory/analytics", label: "Analytics", icon: BarChart3 },
     ],
   },
   {
-    title: "Work",
+    title: "Finance & Settlements",
     items: [
-      { id: "projects", to: "/projects", label: "Projects", icon: HardHat },
-      { id: "dwsurvey", to: "/dw-survey", label: "D&W Survey", icon: DoorOpen },
-      { id: "attendance", to: "/attendance", label: "Attendance", icon: MapPin },
-      { id: "tasks", to: "/tasks", label: "Tasks", icon: ListTodo },
-      { id: "daily-planner", to: "/daily-planner", label: "Daily Planner", icon: CalendarCheck2 },
-      { id: "meetplan", to: "/meets", label: "Meet Planner", icon: CalendarDays },
-    ],
-  },
-  {
-    title: "Finance",
-    items: [
+      { id: "finance-payments", to: "/payments", label: "Payments & Tax Invoices", icon: Landmark },
       { id: "invoice-gen", to: "/invoices", label: "Tax Invoices", icon: FileSpreadsheet },
-      { id: "petty", to: "/petty-cash", label: "Petty Cash", icon: IndianRupee },
+      { id: "petty", to: "/petty-cash", label: "Petty Cash & Wallets", icon: IndianRupee },
       { id: "outstanding", to: "/outstanding", label: "Outstanding", icon: AlertTriangle },
       { id: "project-pnl", to: "/reports/project-pnl", label: "Project P&L", icon: LineChart },
-      { id: "incentives", to: "/incentives", label: "Incentives", icon: HandCoins },
+      { id: "incentives", to: "/incentives", label: "Incentives & Commissions", icon: HandCoins },
     ],
   },
   {
-    title: "Admin",
+    title: "System",
     items: [
+      { id: "alerts", to: "/alerts", label: "Follow-Up Alerts", icon: Bell },
+      { id: "reports", to: "/reports", label: "Reports & Analytics", icon: PieChart },
+      { id: "teams", to: "/admin/teams", label: "Team & Access", icon: UsersRound, adminOnly: true },
+      { id: "roles-permissions", to: "/admin/roles-permissions", label: "Roles & Permissions", icon: Lock, adminOnly: true },
+      { id: "roles", to: "/admin/roles", label: "Users", icon: Users, adminOnly: true },
       { id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database, adminOnly: true },
       { id: "financial-year", to: "/admin/financial-year", label: "Financial Year", icon: CalendarRange, adminOnly: true },
       { id: "workflows", to: "/admin/workflows", label: "Workflows", icon: Workflow, adminOnly: true },
       { id: "business", to: "/admin/business", label: "Business Settings", icon: Settings, adminOnly: true },
       { id: "custom-fields", to: "/admin/custom-fields", label: "Custom Fields", icon: SlidersHorizontal, adminOnly: true },
-      { id: "teams", to: "/admin/teams", label: "Teams", icon: UsersRound, adminOnly: true },
-      { id: "roles-permissions", to: "/admin/roles-permissions", label: "Roles & Permissions", icon: Lock, adminOnly: true },
-      { id: "roles", to: "/admin/roles", label: "Users", icon: Users, adminOnly: true },
     ],
   },
 ];
