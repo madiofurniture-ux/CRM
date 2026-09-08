@@ -13,7 +13,7 @@ from mongomock_motor import AsyncMongoMockClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server  # noqa: E402
-from models import Division, TenantBusinessProfileUpdate  # noqa: E402
+from models import Division, TenantBusinessProfileUpdate, PROJECT_STAGE_KEYS  # noqa: E402
 from tenancy import CUSTOM_FIELD_ENTITIES  # noqa: E402
 
 ADMIN = {"id": "u1", "tenant_id": "acme", "name": "Admin", "role": "admin"}
@@ -75,3 +75,11 @@ def test_tenant_isolation_business_profiles():
 
 def test_project_is_a_supported_custom_field_entity():
     assert "project" in CUSTOM_FIELD_ENTITIES
+
+
+def test_default_divisions_have_a_label_for_every_canonical_stage():
+    async def run():
+        profile = await server.get_business_profile(user=ADMIN)
+        for d in profile["divisions"]:
+            assert set(d["stage_labels"].keys()) == set(PROJECT_STAGE_KEYS)
+    asyncio.run(run())

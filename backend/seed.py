@@ -606,6 +606,21 @@ async def seed_all(db):
     await seed_meets(db)
     await seed_petty_cash(db)
     await seed_projects(db)
+    await seed_floors(db)
+
+
+# Multi-location inventory nodes. Inventory.location and StockMovement's
+# warehouse/to_warehouse already track free-text locations and transfers
+# between them (see lc.normalize_location) — this only seeds the named
+# nodes a fresh install starts with, so the Inventory location picker isn't
+# empty on day one.
+async def seed_floors(db):
+    if await db.floors.count_documents({}) > 0:
+        return
+    for name in ["Central Warehouse", "Showroom Display", "Factory Unit"]:
+        await db.floors.insert_one({
+            "id": new_id(), "name": name, "color": "", "created_at": now_iso(),
+        })
 
 
 async def seed_invoices(db):

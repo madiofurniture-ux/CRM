@@ -343,6 +343,11 @@ class InventoryBase(BaseModel):
     location: Optional[str] = "Warehouse"
     image_url: Optional[str] = ""
     vendor_code: Optional[str] = ""
+    division: Optional[str] = ""  # Division.slug, for the price-tag's division logo/brand color
+    width_mm: Optional[float] = None
+    height_mm: Optional[float] = None
+    depth_mm: Optional[float] = None
+    material_finish: Optional[str] = ""
 
 
 class InventoryCreate(InventoryBase):
@@ -743,6 +748,13 @@ class OfficeSettings(BaseModel):
 # ------- Tenant business profile: per-tenant division roster, so a sister
 # entity onboarded onto this same codebase configures its own divisions
 # instead of the app hardcoding Madio's three business lines. -------
+# The canonical Project.stage values, unchanged across every division —
+# notifications, division-pulse, and P&L all key off these exact strings.
+# A division only customizes how each one is LABELED for its own trade,
+# never the underlying state machine.
+PROJECT_STAGE_KEYS = ["Survey", "Quoted", "Execution", "Review", "Closure", "Completed"]
+
+
 class Division(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
@@ -752,12 +764,22 @@ class Division(BaseModel):
     logo_url: Optional[str] = ""
     custom_sku_prefix: Optional[str] = ""
     terms_and_conditions: Optional[str] = ""
+    stage_labels: Optional[dict] = None  # PROJECT_STAGE_KEYS entry -> this division's display label
 
 
 DEFAULT_DIVISIONS = [
-    Division(id="furniture", name="Madio Furniture", slug="Furniture", custom_sku_prefix="MF"),
-    Division(id="map", name="MAP Premium Acrylic Paints", slug="MAP", custom_sku_prefix="MAP"),
-    Division(id="dw", name="Madio Doors & Windows", slug="D&W", custom_sku_prefix="DW"),
+    Division(id="furniture", name="Madio Furniture", slug="Furniture", custom_sku_prefix="MF", stage_labels={
+        "Survey": "Site Survey", "Quoted": "3D Render & Quote", "Execution": "Execution",
+        "Review": "Quality Check", "Closure": "Delivery", "Completed": "Completed",
+    }),
+    Division(id="map", name="MAP Premium Acrylic Paints", slug="MAP", custom_sku_prefix="MAP", stage_labels={
+        "Survey": "Substrate Moisture Test", "Quoted": "Surface Prep Quote", "Execution": "Topcoat",
+        "Review": "Quality Inspection", "Closure": "Warranty", "Completed": "Completed",
+    }),
+    Division(id="dw", name="Madio Doors & Windows", slug="D&W", custom_sku_prefix="DW", stage_labels={
+        "Survey": "Site Measurement", "Quoted": "Fabrication Quote", "Execution": "Installation",
+        "Review": "Quality Check", "Closure": "Handover", "Completed": "Completed",
+    }),
 ]
 
 

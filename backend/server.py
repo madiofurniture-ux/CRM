@@ -1587,6 +1587,73 @@ make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="
           on_create=_notify_order_confirmed)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory",
           normalize=normalize_inventory, redact=redact_vendor_field)
+
+
+def _render_price_tag_pdf(item: dict, division: Optional[dict]) -> bytes:
+    """Vector PDF sized for a standard 100mm x 60mm shipping/shelf label,
+    via ReportLab platypus + its built-in Code128 barcode graphics (no
+    extra dependency). The division logo and product image are printed as
+    text/URL, not fetched and embedded — embedding a user-supplied
+    image_url server-side would mean this endpoint makes an outbound
+    request to whatever URL is stored on the record, an SSRF vector."""
+    from io import BytesIO
+    from reportlab.lib.units import mm
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+    from reportlab.graphics.barcode.code128 import Code128
+
+    PAGE_W, PAGE_H = 100 * mm, 60 * mm
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=(PAGE_W, PAGE_H),
+                             topMargin=4 * mm, bottomMargin=4 * mm, leftMargin=5 * mm, rightMargin=5 * mm)
+    styles = getSampleStyleSheet()
+    story = []
+
+    division_name = (division or {}).get("name") or item.get("division") or ""
+    if division_name:
+        story.append(Paragraph(f"<b>{division_name}</b>", styles["Normal"]))
+
+    story.append(Paragraph(f"<b>{item.get('name', '')}</b>", styles["Heading3"]))
+
+    dims = [item.get(k) for k in ("width_mm", "height_mm", "depth_mm")]
+    dims_line = " x ".join(f"{d:g}" for d in dims if d is not None) + " mm" if any(d is not None for d in dims) else ""
+    detail_rows = [
+        ["SKU", item.get("sku", "")],
+        ["Dimensions", dims_line or "—"],
+        ["Finish", item.get("material_finish") or "—"],
+        ["MRP", f"Rs. {item.get('mrp', 0):,.2f}"],
+    ]
+    table = Table(detail_rows, colWidths=[22 * mm, 63 * mm])
+    table.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.grey),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+        ("TOPPADDING", (0, 0), (-1, -1), 1),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 2 * mm))
+
+    barcode = Code128(item.get("sku", "") or "NOSKU", barHeight=10 * mm, barWidth=0.3)
+    story.append(barcode)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+@api.get("/inventory/{item_id}/price-tag.pdf")
+async def inventory_price_tag(item_id: str, user: dict = Depends(get_current_user)):
+    owned = tenancy.scope({"id": item_id}, "inventory", user)
+    item = await db.inventory.find_one(owned, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    profile = await _get_business_profile(user)
+    division = next((d for d in profile.get("divisions", []) if d.get("slug") == item.get("division")), None)
+    pdf_bytes = _render_price_tag_pdf(item, division)
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="price-tag-{item.get("sku", item_id)}.pdf"'},
+    )
 make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to",
           normalize=normalize_task)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user")

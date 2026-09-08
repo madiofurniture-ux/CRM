@@ -183,6 +183,8 @@ export default function Projects() {
             const Icon = s.icon;
             const count = rows.filter((r) => r.stage === s.id).length;
             const isActive = activeStage === s.id;
+            const activeDivision = divisionFilter !== "All" ? divisions.find((d) => d.slug === divisionFilter) : null;
+            const label = activeDivision?.stage_labels?.[s.id] || s.label;
             return (
               <button
                 key={s.id}
@@ -194,7 +196,7 @@ export default function Projects() {
                 }`}
               >
                 <Icon size={14} style={{ color: s.color }} />
-                <span>{s.label}</span>
+                <span>{label}</span>
                 <span
                   className="px-1.5 py-0.5 rounded-full text-[10px] font-mono"
                   style={{
@@ -480,11 +482,10 @@ export default function Projects() {
                     onChange={(e) => setForm({ ...form, stage: e.target.value })}
                     className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)] bg-white"
                   >
-                    <option value="Survey">Survey</option>
-                    <option value="Quoted">Quoted</option>
-                    <option value="Execution">Execution</option>
-                    <option value="Review">Review</option>
-                    <option value="Closure">Closure</option>
+                    {STAGES.map((s) => {
+                      const formDivision = divisions.find((d) => d.slug === form.division);
+                      return <option key={s.id} value={s.id}>{formDivision?.stage_labels?.[s.id] || s.label}</option>;
+                    })}
                   </select>
                 </div>
               </div>
