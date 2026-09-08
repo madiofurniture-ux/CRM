@@ -27,13 +27,15 @@
 # (frontend/src/lib/api.js). Proxying here keeps the browser on one origin, so
 # the backend needs no CORS configuration.
 #
-# STAGING BRANCH: this must point at the staging backend (its own database —
-# server.py refuses to boot otherwise, see APP_ENV=staging check), never at
-# production's madio-crm-api.onrender.com. Confirm the host in the Render
-# dashboard once the madio-crm-api-staging service is live.
+# MAIN BRANCH (crm.madio.in): this must point at production's
+# madio-crm-api.onrender.com — never at the staging backend, which has its own
+# separate database and was previously (wrongly) targeted here, causing every
+# API call on the live site to hang until Netlify's proxy timed out (504).
+# The staging Netlify site's own netlify.toml (deployed from the staging
+# branch) is what should point at madio-crm-api-staging.onrender.com.
 [[redirects]]
   from = "/api/*"
-  to = "https://madio-crm-api-staging.onrender.com/api/:splat"
+  to = "https://madio-crm-api.onrender.com/api/:splat"
   status = 200
   force = true
 
