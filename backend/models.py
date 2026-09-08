@@ -769,6 +769,9 @@ class ProjectBase(BaseModel):
     sales_rep_id: Optional[str] = ""
     architect_id: Optional[str] = ""
     incentive_total: Optional[float] = 0
+    stakeholders: Optional["ProjectStakeholders"] = None
+    current_milestone: Optional[str] = ""
+    completion_percentage: Optional[int] = 0
 
 
 class ProjectCreate(ProjectBase):
@@ -788,6 +791,9 @@ class ProjectUpdate(BaseModel):
     target_date: Optional[str] = None
     remarks: Optional[str] = None
     quote_ref: Optional[str] = None
+    stakeholders: Optional["ProjectStakeholders"] = None
+    current_milestone: Optional[str] = None
+    completion_percentage: Optional[int] = None
 
 
 class ProjectStageUpdate(BaseModel):
@@ -796,6 +802,103 @@ class ProjectStageUpdate(BaseModel):
 
 class Project(ProjectBase):
     id: str
+    created_at: str
+
+
+# ------- Project stakeholder linkage — four fixed slots on a project,
+# each optionally pointing at an id in an existing collection (architects /
+# record_contacts / customers / users) via `id`, so unlinking is just
+# clearing the slot rather than deleting a record. -------
+class StakeholderPerson(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: Optional[str] = ""
+    name: str
+    phone: str
+    email: Optional[str] = ""
+
+
+class ArchitectStakeholder(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: Optional[str] = ""
+    name: str
+    phone: Optional[str] = ""
+    firm: Optional[str] = ""
+    commission_rate: Optional[float] = None
+
+
+class ContractorStakeholder(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: Optional[str] = ""
+    name: str
+    phone: str
+    role: Literal["APPLICATOR", "FABRICATOR", "CARPENTER", "LEAD_INSTALLER"]
+
+
+class SupervisorStakeholder(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    name: str
+    phone: Optional[str] = ""
+
+
+class ProjectStakeholders(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    client_poc: Optional[StakeholderPerson] = None
+    architect: Optional[ArchitectStakeholder] = None
+    applicator_or_contractor: Optional[ContractorStakeholder] = None
+    internal_site_supervisor: Optional[SupervisorStakeholder] = None
+
+
+ProjectBase.model_rebuild()
+ProjectCreate.model_rebuild()
+Project.model_rebuild()
+ProjectUpdate.model_rebuild()
+
+
+# ------- Daily site execution log — one entry per project per day,
+# capturing what a site supervisor reports. Separate collection from the
+# generic `Project.log` (freeform notes/audit trail) since a daily log has
+# a fixed, structured shape (labor, materials, photos) that a freeform log
+# entry doesn't. -------
+class MaterialReceived(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    item_name: str
+    quantity: float = 0
+    unit: str = ""
+
+
+class LaborCount(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    skilled: int = 0
+    unskilled: int = 0
+
+
+class ProjectDailyLogBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    project_id: str
+    division: Optional[str] = ""
+    log_date: str
+    supervisor_id: Optional[str] = ""
+    supervisor_name: str
+    work_completed_today: str
+    materials_received: List[MaterialReceived] = Field(default_factory=list)
+    labor_count: LaborCount = Field(default_factory=LaborCount)
+    site_hindrances: Optional[str] = ""
+    site_photos: List[str] = Field(default_factory=list)
+    # When set, POSTing this log also advances the parent project's rollup
+    # fields (current_milestone always overwrites; completion_percentage
+    # only ever moves up — see create_project_daily_log in server.py).
+    current_milestone: Optional[str] = None
+    completion_percentage: Optional[int] = None
+
+
+class ProjectDailyLogCreate(ProjectDailyLogBase):
+    pass
+
+
+class ProjectDailyLog(ProjectDailyLogBase):
+    id: str
+    tenant_id: Optional[str] = ""
     created_at: str
 
 

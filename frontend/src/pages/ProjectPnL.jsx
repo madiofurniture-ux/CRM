@@ -17,6 +17,7 @@ export default function ProjectPnL() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
+  const [divisionFilter, setDivisionFilter] = useState("All");
 
   useEffect(() => {
     setLoading(true);
@@ -34,7 +35,8 @@ export default function ProjectPnL() {
   };
 
   const summary = data?.summary;
-  const projects = data?.projects || [];
+  const allProjects = data?.projects || [];
+  const projects = divisionFilter === "All" ? allProjects : allProjects.filter((p) => p.division === divisionFilter);
   const activeCount = projects.filter((p) => p.wallet_count > 0).length;
 
   return (
@@ -62,6 +64,20 @@ export default function ProjectPnL() {
           <KpiCard label="Pending Expense Exposure" value={inr(summary?.pending_exposure)}
             hint={`Unapproved: ${inrFull(summary?.pending_exposure)} pending review`}
             accent="warn" icon={AlertTriangle} testid="pnl-kpi-pending" />
+        </div>
+
+        <div className="flex justify-end">
+          <select
+            value={divisionFilter}
+            onChange={(e) => setDivisionFilter(e.target.value)}
+            className="px-3 py-2 text-sm rounded-xl bg-white border border-[var(--border)] outline-none focus:border-[var(--brand)]"
+            data-testid="pnl-division-filter"
+          >
+            <option value="All">All Divisions</option>
+            <option value="Furniture">Madio Furniture</option>
+            <option value="MAP">MAP Paints</option>
+            <option value="D&W">Madio Doors &amp; Windows</option>
+          </select>
         </div>
 
         <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">

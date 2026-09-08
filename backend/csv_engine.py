@@ -215,6 +215,7 @@ async def compute_project_pnl(db, user: dict) -> dict:
         out.append({
             "project_id": pid, "project_no": p.get("project_no", ""),
             "customer": p.get("customer", ""), "stage": p.get("stage", ""),
+            "division": p.get("division", ""),
             "contract_value": revenue, "approved_petty_cash": approved,
             "gross_profit": gross_profit, "margin_pct": margin_pct,
             "net_margin": net_margin,

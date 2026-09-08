@@ -52,6 +52,7 @@ from models import (
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
     TeamCreate, Team, RoleCreate, Role,
     SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
+    ProjectDailyLogCreate,
 )
 from seed import seed_all
 
@@ -2414,7 +2415,7 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
 
 @api.put("/projects/{project_id}/stage", response_model=dict)
 async def update_project_stage(project_id: str, data: ProjectStageUpdate, user=Depends(get_current_user)):
-    valid_stages = ["Survey", "Quoted", "Execution", "Review", "Closure"]
+    valid_stages = ["Survey", "Quoted", "Execution", "Review", "Closure", "Completed"]
     if data.stage not in valid_stages:
         raise HTTPException(400, f"Invalid stage. Must be one of: {valid_stages}")
     owned = tenancy.scope({"id": project_id}, "projects", user)
@@ -2443,6 +2444,134 @@ async def delete_project(project_id: str, user=Depends(get_current_user)):
     if res.deleted_count == 0:
         raise HTTPException(404, "Project not found")
     return {"status": "deleted"}
+
+
+# ------- Stakeholder search: 1-click lookup across the existing people
+# collections (architects, record_contacts, customers) so a project's
+# client_poc/architect/contractor/supervisor slots can be linked to an
+# existing record instead of retyping their details. -------
+@api.get("/stakeholders/search")
+async def search_stakeholders(query: str = "", role: str = "", user: dict = Depends(get_current_user)):
+    query = (query or "").strip()
+    if not query:
+        return []
+    rx = {"$regex": re.escape(query), "$options": "i"}
+    results: List[dict] = []
+
+    if role != "internal_site_supervisor":
+        archs = await db.architects.find(
+            tenancy.scope({"$or": [{"name": rx}, {"phone": rx}]}, "architects", user),
+            {"_id": 0, "id": 1, "name": 1, "phone": 1, "firm": 1},
+        ).to_list(10)
+        results += [{**a, "source": "architects"} for a in archs]
+
+        custs = await db.customers.find(
+            tenancy.scope({"$or": [{"name": rx}, {"phone": rx}]}, "customers", user),
+            {"_id": 0, "id": 1, "name": 1, "phone": 1, "email": 1},
+        ).to_list(10)
+        results += [{**c, "source": "customers"} for c in custs]
+
+    rc_query: dict = {"$or": [{"contact_name": rx}, {"contact_phone": rx}]}
+    if role:
+        rc_query["role"] = rx
+    contacts = await db.record_contacts.find(
+        tenancy.scope(rc_query, "record_contacts", user),
+        {"_id": 0, "id": 1, "contact_name": 1, "contact_phone": 1, "role": 1},
+    ).to_list(10)
+    results += [
+        {"id": c.get("id"), "name": c.get("contact_name"), "phone": c.get("contact_phone"),
+         "role": c.get("role"), "source": "record_contacts"}
+        for c in contacts
+    ]
+    return results[:20]
+
+
+# ------- Daily site execution log: one entry per project per day. Posting
+# one can advance the project's completion_percentage/current_milestone
+# rollup, but never regress it — a supervisor's earlier optimistic update
+# can't be undone by a later log that omits the field. -------
+@api.get("/projects/{project_id}/daily-logs")
+async def list_project_daily_logs(project_id: str, user: dict = Depends(get_current_user)):
+    q = tenancy.scope({"project_id": project_id}, "project_daily_logs", user)
+    return await db.project_daily_logs.find(q, {"_id": 0}).sort("log_date", 1).to_list(2000)
+
+
+@api.post("/projects/{project_id}/daily-logs")
+async def create_project_daily_log(project_id: str, payload: ProjectDailyLogCreate,
+                                    user: dict = Depends(get_current_user)):
+    owned_project = tenancy.scope({"id": project_id}, "projects", user)
+    project = await db.projects.find_one(owned_project, {"_id": 0, "completion_percentage": 1})
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    doc = payload.model_dump()
+    doc["project_id"] = project_id
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    tenancy.stamp(doc, "project_daily_logs", user)
+    await db.project_daily_logs.insert_one(dict(doc))
+    doc.pop("_id", None)
+
+    project_patch: dict = {}
+    if doc.get("current_milestone"):
+        project_patch["current_milestone"] = doc["current_milestone"]
+    if doc.get("completion_percentage") is not None:
+        new_pct = max(0, min(100, doc["completion_percentage"]))
+        existing_pct = project.get("completion_percentage") or 0
+        project_patch["completion_percentage"] = max(existing_pct, new_pct)
+    if project_patch:
+        await db.projects.update_one(owned_project, {"$set": project_patch})
+
+    return doc
+
+
+# ------- Division-level rollup across the three business lines. Reuses
+# each project's already-stored `value`/`completion_percentage` and the
+# cashbooks linked to it (spend = initial_balance - current_balance) rather
+# than re-summing raw cashbook_entries. -------
+@api.get("/reports/division-pulse")
+async def division_pulse_report(user: dict = Depends(get_current_user)):
+    projects = await db.projects.find(
+        tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000)
+    cashbooks = await db.cashbooks.find(
+        tenancy.scope({}, "cashbooks", user), {"_id": 0}).to_list(5000)
+    logs = await db.project_daily_logs.find(
+        tenancy.scope({}, "project_daily_logs", user), {"_id": 0}).to_list(20000)
+
+    spend_by_project: dict = {}
+    for cb in cashbooks:
+        pid = cb.get("project_id")
+        if pid:
+            spend_by_project[pid] = spend_by_project.get(pid, 0) + max(
+                0, (cb.get("initial_balance") or 0) - (cb.get("current_balance") or 0))
+
+    hindrances_by_project: dict = {}
+    for log in logs:
+        if (log.get("site_hindrances") or "").strip():
+            pid = log.get("project_id")
+            hindrances_by_project[pid] = hindrances_by_project.get(pid, 0) + 1
+
+    divisions: dict = {}
+    for p in projects:
+        div = p.get("division") or "Unspecified"
+        row = divisions.setdefault(div, {
+            "division": div, "active_project_count": 0, "total_contract_value": 0,
+            "completion_sum": 0, "total_site_spend": 0, "flagged_hindrances": 0,
+        })
+        if (p.get("stage") or "") not in ("Closure", "Completed"):
+            row["active_project_count"] += 1
+        row["total_contract_value"] += p.get("value") or 0
+        row["completion_sum"] += p.get("completion_percentage") or 0
+        row["total_site_spend"] += spend_by_project.get(p.get("id"), 0)
+        row["flagged_hindrances"] += hindrances_by_project.get(p.get("id"), 0)
+
+    result = []
+    for div, row in divisions.items():
+        count = len([p for p in projects if (p.get("division") or "Unspecified") == div])
+        avg = round(row.pop("completion_sum") / count, 1) if count else 0
+        row["average_completion_percentage"] = avg
+        result.append(row)
+    return result
 
 
 # Mount

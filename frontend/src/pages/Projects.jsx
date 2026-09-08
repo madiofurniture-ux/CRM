@@ -5,6 +5,8 @@ import LogTimeline from "@/components/LogTimeline";
 import PettyCashBurnWidget from "@/components/PettyCashBurnWidget";
 import LinkedTasksPanel from "@/components/LinkedTasksPanel";
 import StageProgressBar from "@/components/StageProgressBar";
+import StakeholdersCard from "@/components/StakeholdersCard";
+import ProjectTrackingTab from "@/components/ProjectTrackingTab";
 import { projectLifecycleStages } from "@/lib/lifecycle";
 import api from "@/lib/api";
 import { inrFull, fmtDate, marginTone } from "@/lib/format";
@@ -52,6 +54,8 @@ export default function Projects() {
   };
   const [form, setForm] = useState(emptyForm);
   const [pnlByProject, setPnlByProject] = useState({});
+  const [divisionFilter, setDivisionFilter] = useState("All");
+  const [divisionPulse, setDivisionPulse] = useState([]);
 
   const load = async () => {
     try {
@@ -62,8 +66,13 @@ export default function Projects() {
     }
   };
 
+  const loadDivisionPulse = () => {
+    api.get("/reports/division-pulse").then(({ data }) => setDivisionPulse(data)).catch(() => setDivisionPulse([]));
+  };
+
   useEffect(() => {
     load();
+    loadDivisionPulse();
     api.get("/reports/project-pnl")
       .then(({ data }) => setPnlByProject(Object.fromEntries(data.projects.map((p) => [p.project_id, p]))))
       .catch(() => setPnlByProject({}));
@@ -73,15 +82,16 @@ export default function Projects() {
     const q = search.toLowerCase();
     return rows.filter((r) => {
       const matchStage = activeStage === "All" || r.stage === activeStage;
+      const matchDivision = divisionFilter === "All" || r.division === divisionFilter;
       const matchQuery =
         !q ||
         r.customer.toLowerCase().includes(q) ||
         r.project_no.toLowerCase().includes(q) ||
         (r.site_address || "").toLowerCase().includes(q) ||
         (r.assigned_engineer || "").toLowerCase().includes(q);
-      return matchStage && matchQuery;
+      return matchStage && matchDivision && matchQuery;
     });
-  }, [rows, activeStage, search]);
+  }, [rows, activeStage, divisionFilter, search]);
 
   const advanceStage = async (p, nextStage) => {
     try {
@@ -197,6 +207,27 @@ export default function Projects() {
           })}
         </div>
 
+        {/* Division health overview */}
+        {divisionPulse.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5" data-testid="division-health-card">
+            {divisionPulse.map((d) => (
+              <div key={d.division} className="bg-white border border-[var(--border)] rounded-xl p-3.5">
+                <div className="text-xs font-semibold text-[var(--ink)] mb-2">{d.division}</div>
+                <div className="flex items-center justify-between text-[11px] text-[var(--ink-2)]">
+                  <span>{d.active_project_count} active</span>
+                  <span>{inrFull(d.total_contract_value)}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-[var(--ink-2)] mt-1">
+                  <span>Avg completion {d.average_completion_percentage}%</span>
+                  {d.flagged_hindrances > 0 && (
+                    <span className="text-amber-700 font-medium">{d.flagged_hindrances} hindrance{d.flagged_hindrances === 1 ? "" : "s"}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Filter / Search input */}
         <div className="mb-5 flex items-center justify-between gap-4">
           <input
@@ -206,6 +237,17 @@ export default function Projects() {
             onChange={(e) => setSearch(e.target.value)}
             className="w-80 px-3.5 py-2 text-sm rounded-xl bg-white border border-[var(--border)] outline-none focus:border-[var(--brand)] transition"
           />
+          <select
+            value={divisionFilter}
+            onChange={(e) => setDivisionFilter(e.target.value)}
+            className="px-3 py-2 text-sm rounded-xl bg-white border border-[var(--border)] outline-none focus:border-[var(--brand)]"
+            data-testid="division-filter"
+          >
+            <option value="All">All Divisions</option>
+            <option value="Furniture">Madio Furniture</option>
+            <option value="MAP">MAP Paints</option>
+            <option value="D&W">Madio Doors &amp; Windows</option>
+          </select>
         </div>
 
         {/* Project Cards Grid */}
@@ -496,6 +538,20 @@ export default function Projects() {
             </div>
             <div className="p-5 space-y-4">
               <StageProgressBar stages={projectLifecycleStages(logProject, pnlByProject[logProject.id])} />
+              <StakeholdersCard
+                project={logProject}
+                onUpdated={(updated) => {
+                  setLogProject(updated);
+                  setRows((p) => p.map((x) => x.id === updated.id ? updated : x));
+                }}
+              />
+              <ProjectTrackingTab
+                project={logProject}
+                onProjectUpdated={(updated) => {
+                  setLogProject(updated);
+                  setRows((p) => p.map((x) => x.id === updated.id ? updated : x));
+                }}
+              />
               <PettyCashBurnWidget projectId={logProject.id} />
               <LogTimeline
                 entity="project" itemId={logProject.id} entries={logProject.log || []}
