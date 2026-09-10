@@ -165,7 +165,9 @@ export default function Dashboard() {
               <div className="font-heading font-semibold text-[var(--ink)]">Priority Follow-ups</div>
               <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--danger-soft)] text-[var(--danger)] font-medium">{overdue.length}</span>
             </div>
-            {overdue.length === 0 ? (
+            {loading ? (
+              <div className="text-sm text-[var(--ink-3)] py-6 text-center">Loading…</div>
+            ) : overdue.length === 0 ? (
               <div className="text-sm text-[var(--ink-3)] py-6 text-center">All caught up 🌿</div>
             ) : (
               <div className="space-y-2.5">

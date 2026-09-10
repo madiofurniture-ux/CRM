@@ -138,7 +138,10 @@ export default function Outstanding() {
                       </td>
                     </tr>
                   ))}
-                  {(data?.outstanding_sales || []).length === 0 && <tr><td colSpan="5" className="text-center py-8 text-[var(--ink-3)]">All sales fully collected 🎉</td></tr>}
+                  {/* Gated on the fetch having landed — `data` is null until
+                      then, which otherwise reads as "nothing to collect". */}
+                  {data === null && <tr><td colSpan="5" className="text-center py-8 text-[var(--ink-3)]">Loading…</td></tr>}
+                  {data !== null && (data.outstanding_sales || []).length === 0 && <tr><td colSpan="5" className="text-center py-8 text-[var(--ink-3)]">All sales fully collected 🎉</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -212,7 +215,8 @@ export default function Outstanding() {
                     </td>
                   </tr>
                 ))}
-                {(data?.outstanding_invoices || []).length === 0 && <tr><td colSpan="7" className="text-center py-8 text-[var(--ink-3)]">All invoices settled 🎉</td></tr>}
+                {data === null && <tr><td colSpan="7" className="text-center py-8 text-[var(--ink-3)]">Loading…</td></tr>}
+                {data !== null && (data.outstanding_invoices || []).length === 0 && <tr><td colSpan="7" className="text-center py-8 text-[var(--ink-3)]">All invoices settled 🎉</td></tr>}
               </tbody>
             </table>
           </div>

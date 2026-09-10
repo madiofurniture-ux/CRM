@@ -4,7 +4,7 @@ import StageBadge from "@/components/StageBadge";
 import SearchSelect from "@/components/SearchSelect";
 import api from "@/lib/api";
 import { inrFull } from "@/lib/format";
-import { Package, Grid3x3, List, X } from "lucide-react";
+import { Package, Grid3x3, List, X, Tag } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUSES = ["In Stock", "Display", "Sold", "Missing", "Reserved"];
@@ -13,6 +13,23 @@ const STATUSES = ["In Stock", "Display", "Sold", "Missing", "Reserved"];
 // viewer may see it (admin/accountant) — see server.py's redact_vendor_field.
 // So display logic never needs its own role check; it just shows what's there.
 const vendorLabel = (r) => [r.vendor_code, r.vendor].filter(Boolean).join(" · ");
+
+// The barcode price tag is a server-rendered PDF and the API is bearer-token
+// authed, so it has to be fetched as a blob — a plain link or window.open
+// would arrive unauthenticated. Same pattern as QuoteBuilder's quote PDF.
+async function openPriceTag(item) {
+  try {
+    const { data } = await api.get(`/inventory/${item.id}/price-tag.pdf`, {
+      skipCache: true, responseType: "blob",
+    });
+    const url = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
+    window.open(url, "_blank", "noopener");
+    // Revoke late: revoking immediately can race the new tab's own load.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch {
+    toast.error("Could not generate the price tag");
+  }
+}
 
 // Location color legend — color is always paired with the name/code, never
 // the only identifier. Matches lc.normalize_location()'s canonical labels.
@@ -194,6 +211,7 @@ export default function Inventory() {
                     <th className="text-right font-semibold px-4 py-2.5">Margin</th>
                     <th className="text-left font-semibold px-4 py-2.5">Status</th>
                     <th className="text-left font-semibold px-4 py-2.5">Location</th>
+                    <th className="w-12"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -210,8 +228,22 @@ export default function Inventory() {
                       <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{i.margin?.toFixed(0)}%</td>
                       <td className="px-4 py-3"><StageBadge stage={i.status} /></td>
                       <td className="px-4 py-3 text-[var(--ink-2)] text-xs">{locationBadge(i.location)}</td>
+                      <td className="px-2 py-3">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openPriceTag(i); }}
+                          className="p-1.5 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-3)] hover:text-[var(--brand)]"
+                          title="Print barcode price tag"
+                          aria-label={`Print barcode price tag for ${i.name || i.sku}`}
+                          data-testid={`price-tag-${i.id}`}
+                        >
+                          <Tag size={15} strokeWidth={1.8} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
+                  {filtered.length === 0 && (
+                    <tr><td colSpan={12} className="text-center py-12 text-[var(--ink-3)]">No inventory items</td></tr>
+                  )}
                 </tbody>
               </table>
             </div>

@@ -60,7 +60,7 @@ export default function Invoices() {
     const q = search.toLowerCase();
     return rows.filter((r) =>
       (fStatus === "All" || r.status === fStatus) &&
-      (!q || r.customer.toLowerCase().includes(q) || r.invoice_no.toLowerCase().includes(q))
+      (!q || (r.customer || "").toLowerCase().includes(q) || (r.invoice_no || "").toLowerCase().includes(q))
     );
   }, [rows, search, fStatus]);
 
@@ -315,36 +315,38 @@ function InvoicePrint({ invoice, office, onClose }) {
           </div>
         </div>
 
-        <table className="w-full text-sm mb-6 border-t border-b border-[var(--ink)]">
-          <thead>
-            <tr className="border-b border-[var(--border)]">
-              <th className="text-left py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">#</th>
-              <th className="text-left py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Description</th>
-              <th className="text-left py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">HSN</th>
-              <th className="text-right py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Qty</th>
-              <th className="text-right py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Rate</th>
-              <th className="text-right py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Tax%</th>
-              <th className="text-right py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(invoice.line_items || []).map((it, i) => {
-              const amt = (it.qty || 0) * (it.rate || 0) * (1 - (it.discount_pct || 0) / 100);
-              return (
-                <tr key={it.id || `${it.description}-${i}`} className="border-b border-[var(--border-light)]">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm mb-6 border-t border-b border-[var(--ink)]">
+            <thead>
+              <tr className="border-b border-[var(--border)]">
+                <th className="text-left py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">#</th>
+                <th className="text-left py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Description</th>
+                <th className="text-left py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">HSN</th>
+                <th className="text-right py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Qty</th>
+                <th className="text-right py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Rate</th>
+                <th className="text-right py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Tax%</th>
+                <th className="text-right py-2 text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(invoice.line_items || []).map((it, i) => {
+                const amt = (it.qty || 0) * (it.rate || 0) * (1 - (it.discount_pct || 0) / 100);
+                return (
+                  <tr key={it.id || `${it.description}-${i}`} className="border-b border-[var(--border-light)]">
 
-                  <td className="py-3">{i + 1}</td>
-                  <td className="py-3">{it.description}</td>
-                  <td className="py-3 font-mono">{it.hsn}</td>
-                  <td className="py-3 text-right font-mono">{it.qty}</td>
-                  <td className="py-3 text-right font-mono">{inrFull(it.rate)}</td>
-                  <td className="py-3 text-right font-mono">{it.tax_pct}%</td>
-                  <td className="py-3 text-right font-mono font-semibold">{inrFull(amt)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    <td className="py-3">{i + 1}</td>
+                    <td className="py-3">{it.description}</td>
+                    <td className="py-3 font-mono">{it.hsn}</td>
+                    <td className="py-3 text-right font-mono">{it.qty}</td>
+                    <td className="py-3 text-right font-mono">{inrFull(it.rate)}</td>
+                    <td className="py-3 text-right font-mono">{it.tax_pct}%</td>
+                    <td className="py-3 text-right font-mono font-semibold">{inrFull(amt)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
 
         <div className="flex justify-end mb-8">
           <div className="w-72 space-y-1 text-sm font-mono">

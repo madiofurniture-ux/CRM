@@ -16,6 +16,7 @@ export default function QuoteWorkspace() {
   const nav = useNavigate();
   const { user } = useAuth();
   const [ws, setWs] = useState(null);
+  const [loadError, setLoadError] = useState(false);
   const [pipeline, setPipeline] = useState(null);
   const [tab, setTab] = useState("lines");
   const [busy, setBusy] = useState(false);
@@ -23,6 +24,7 @@ export default function QuoteWorkspace() {
 
   const load = useCallback(async () => {
     try {
+      setLoadError(false);
       const { data } = await api.get(`/quotes/${id}/workspace`);
       setWs(data);
       if (data.quote?.phone) {
@@ -30,9 +32,23 @@ export default function QuoteWorkspace() {
         catch { /* progress bar is a nice-to-have; the workspace still works without it */ }
       }
     }
-    catch { toast.error("Quote not found"); }
+    catch { toast.error("Quote not found"); setLoadError(true); }
   }, [id]);
   useEffect(() => { load(); }, [load]);
+
+  // Without the error branch a failed fetch left `ws` null forever, so the
+  // page sat on "Loading…" with no way back.
+  if (loadError) return (
+    <><Topbar title="Quote Workspace" />
+      <div className="p-10 text-center space-y-3" data-testid="quote-workspace-error">
+        <div className="text-sm text-[var(--ink-2)]">This quote could not be loaded.</div>
+        <div className="text-xs text-[var(--ink-3)]">It may have been deleted, or the connection dropped.</div>
+        <div className="flex items-center justify-center gap-2 pt-1">
+          <button onClick={load} className="btn-primary px-4">Retry</button>
+          <button onClick={() => nav("/quotes")} className="px-4 py-2 rounded-lg border border-[var(--border)] text-sm">Back to Quotes</button>
+        </div>
+      </div></>
+  );
 
   if (!ws) return <><Topbar title="Quote Workspace" /><div className="p-10 text-center text-[var(--ink-3)]">Loading…</div></>;
 

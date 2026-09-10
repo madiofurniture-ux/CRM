@@ -17,7 +17,7 @@ export default function Sales() {
     const q = search.toLowerCase();
     return rows.filter((r) =>
       (fDiv === "All" || r.division === fDiv) &&
-      (!q || r.customer.toLowerCase().includes(q) || r.sale_no.toLowerCase().includes(q))
+      (!q || (r.customer || "").toLowerCase().includes(q) || (r.sale_no || "").toLowerCase().includes(q))
     );
   }, [rows, search, fDiv]);
 

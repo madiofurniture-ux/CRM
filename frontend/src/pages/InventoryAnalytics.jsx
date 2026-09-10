@@ -95,6 +95,11 @@ export default function InventoryAnalytics() {
                     <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull((i.mrp || 0) * (i.qty || 0))}</td>
                   </tr>
                 ))}
+                {(data?.top_items || []).length === 0 && (
+                  <tr><td colSpan={6} className="text-center py-10 text-[var(--ink-3)] text-sm">
+                    {data === null ? "Loading…" : "No stock on hand to rank yet"}
+                  </td></tr>
+                )}
               </tbody>
             </table>
           </div>

@@ -301,38 +301,40 @@ export default function DWSurvey() {
       <Topbar title="D&W Site Surveys" subtitle={`${surveys.length} surveys`} onAdd={newSurvey} addLabel="New Survey" />
       <div className="p-6" data-testid="dwsurvey-page">
         <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-[var(--surface-2)]">
-              <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
-                <th className="text-left font-semibold px-4 py-2.5">Survey</th>
-                <th className="text-left font-semibold px-4 py-2.5">Customer</th>
-                <th className="text-left font-semibold px-4 py-2.5">Date</th>
-                <th className="text-left font-semibold px-4 py-2.5">Status</th>
-                <th className="w-10"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {surveys.map((s) => (
-                <tr key={s.id} onClick={() => openSurvey(s.id)} className="border-t border-[var(--border-light)] hover:bg-[var(--surface-2)]/50 cursor-pointer">
-                  <td className="px-4 py-3 font-mono text-xs">{s.survey_id}</td>
-                  <td className="px-4 py-3 font-medium">{s.customer || <span className="text-[var(--ink-3)]">Untitled</span>}</td>
-                  <td className="px-4 py-3 text-[var(--ink-2)]">{fmtDate(s.date)}</td>
-                  <td className="px-4 py-3 text-[var(--ink-2)]">{s.status}</td>
-                  <td className="px-2 py-3">
-                    <button
-                      onClick={(e) => removeSurvey(s, e)}
-                      className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"
-                      title="Delete survey"
-                      data-testid={`dws-delete-${s.id}`}
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[var(--surface-2)]">
+                <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
+                  <th className="text-left font-semibold px-4 py-2.5">Survey</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Customer</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Date</th>
+                  <th className="text-left font-semibold px-4 py-2.5">Status</th>
+                  <th className="w-10"></th>
                 </tr>
-              ))}
-              {surveys.length === 0 && <tr><td colSpan="5" className="text-center py-10 text-[var(--ink-3)]">No surveys yet</td></tr>}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {surveys.map((s) => (
+                  <tr key={s.id} onClick={() => openSurvey(s.id)} className="border-t border-[var(--border-light)] hover:bg-[var(--surface-2)]/50 cursor-pointer">
+                    <td className="px-4 py-3 font-mono text-xs">{s.survey_id}</td>
+                    <td className="px-4 py-3 font-medium">{s.customer || <span className="text-[var(--ink-3)]">Untitled</span>}</td>
+                    <td className="px-4 py-3 text-[var(--ink-2)]">{fmtDate(s.date)}</td>
+                    <td className="px-4 py-3 text-[var(--ink-2)]">{s.status}</td>
+                    <td className="px-2 py-3">
+                      <button
+                        onClick={(e) => removeSurvey(s, e)}
+                        className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"
+                        title="Delete survey"
+                        data-testid={`dws-delete-${s.id}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {surveys.length === 0 && <tr><td colSpan="5" className="text-center py-10 text-[var(--ink-3)]">No surveys yet</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </>

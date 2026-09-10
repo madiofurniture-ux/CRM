@@ -122,6 +122,50 @@ def test_line_item_arithmetic_aggregates_discount_and_gst_correctly():
     asyncio.run(run())
 
 
+def test_blank_or_zero_qty_falls_back_to_a_single_unit():
+    """A cleared or zero qty box bills one unit, not zero (server
+    `lc.money(...) or 1`). The QuoteBuilder preview mirrors this exactly —
+    locked here so neither side can drift to a 0 without the other."""
+    async def run():
+        sections = [{
+            "id": "s1", "type": "ITEM_GRID", "title": "Blank qty",
+            "items": [
+                {"description": "cleared qty box", "qty": "", "unit_rate": 1000, "discount_pct": 0, "gst_rate": 18},
+                {"description": "explicit zero", "qty": 0, "unit_rate": 900, "discount_pct": 0, "gst_rate": 18},
+            ],
+        }]
+        summary = server._compute_quote_financials(sections)  # noqa: SLF001
+        assert summary["subtotal"] == 1900
+        assert sections[0]["items"][0]["line_total"] == 1180  # 1000 + 18%
+        assert sections[0]["items"][1]["line_total"] == 1062  # 900 + 18%
+    asyncio.run(run())
+
+
+def test_each_line_is_rounded_to_paise_before_being_summed():
+    """Per-line round-then-sum (not sum-then-round) is the server contract the
+    builder preview has to reproduce, or preview and stored record disagree."""
+    async def run():
+        sections = [{
+            "id": "s1", "type": "ITEM_GRID", "title": "Odd rates",
+            "items": [
+                {"description": "A", "qty": 3, "unit_rate": 333.333, "discount_pct": 7.5, "gst_rate": 18},
+                {"description": "B", "qty": 7, "unit_rate": 101.017, "discount_pct": 3.33, "gst_rate": 12},
+            ],
+        }]
+        summary = server._compute_quote_financials(sections)  # noqa: SLF001
+        # A: subtotal round(999.999)=1000.0, disc round(75.0)=75.0,
+        #    taxable 925.0, tax round(166.5)=166.5
+        # B: subtotal round(707.119)=707.12, disc round(23.547...)=23.55,
+        #    taxable 683.57, tax round(82.0284)=82.03
+        assert summary["subtotal"] == 1707.12
+        assert summary["total_discount"] == 98.55
+        assert summary["total_tax"] == 248.53
+        assert summary["grand_total"] == 1857.1
+        assert sections[0]["items"][0]["line_total"] == 1091.5
+        assert sections[0]["items"][1]["line_total"] == 765.6
+    asyncio.run(run())
+
+
 def test_get_quote_returns_persisted_sections():
     async def run():
         await _make_quote(sections=[{"id": "s1", "type": "TEXT_BLOCK", "title": "Scope", "text": "hello"}])

@@ -207,73 +207,75 @@ export default function Workflows() {
               </button>
             </div>
 
-            <table className="w-full text-sm">
-              <thead className="bg-[var(--surface-2)] text-[var(--ink-3)]">
-                <tr className="text-[11px] uppercase tracking-wider">
-                  <th className="w-16 px-3 py-2 text-left">Order</th>
-                  <th className="px-3 py-2 text-left">Stage name</th>
-                  <th className="w-28 px-3 py-2 text-center">Ends here</th>
-                  <th className="w-28 px-3 py-2 text-center">Counts as won</th>
-                  <th className="w-10"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {stages.map((s, i) => (
-                  <tr key={i} className="border-t border-[var(--border)]" data-testid={`wf-stage-${i}`}>
-                    <td className="px-3 py-2">
-                      <div className="flex gap-0.5">
-                        <button onClick={() => move(i, -1)} disabled={i === 0 || !isAdmin}
-                                className="p-1 rounded hover:bg-[var(--surface-2)] disabled:opacity-25">
-                          <ChevronUp size={13} />
-                        </button>
-                        <button onClick={() => move(i, 1)} disabled={i === stages.length - 1 || !isAdmin}
-                                className="p-1 rounded hover:bg-[var(--surface-2)] disabled:opacity-25">
-                          <ChevronDown size={13} />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        value={s.label}
-                        disabled={!isAdmin}
-                        placeholder="e.g. Site Visit"
-                        onChange={(e) => setAt(i, { label: e.target.value })}
-                        className="w-full px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)] disabled:opacity-60"
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <button onClick={() => setAt(i, { terminal: !s.terminal })} disabled={!isAdmin}
-                              title="Nothing happens after this stage"
-                              className={`p-1.5 rounded-lg border ${s.terminal
-                                ? "border-[var(--brand)] text-[var(--brand)]"
-                                : "border-[var(--border)] text-[var(--ink-3)]"} disabled:opacity-40`}>
-                        <Flag size={13} />
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <button onClick={() => setAt(i, { won: !s.won })} disabled={!isAdmin}
-                              title="Reports count this as a success"
-                              className={`p-1.5 rounded-lg border ${s.won
-                                ? "border-emerald-500 text-emerald-600"
-                                : "border-[var(--border)] text-[var(--ink-3)]"} disabled:opacity-40`}>
-                        <Trophy size={13} />
-                      </button>
-                    </td>
-                    <td className="px-2 py-2">
-                      <button onClick={() => remove(i)} disabled={!isAdmin || stages.length <= 1}
-                              className="p-1 rounded text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-25">
-                        <Trash2 size={13} />
-                      </button>
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-[var(--surface-2)] text-[var(--ink-3)]">
+                  <tr className="text-[11px] uppercase tracking-wider">
+                    <th className="w-16 px-3 py-2 text-left">Order</th>
+                    <th className="px-3 py-2 text-left">Stage name</th>
+                    <th className="w-28 px-3 py-2 text-center">Ends here</th>
+                    <th className="w-28 px-3 py-2 text-center">Counts as won</th>
+                    <th className="w-10"></th>
                   </tr>
-                ))}
-                {!stages.length && (
-                  <tr><td colSpan={5} className="px-4 py-8 text-center text-[var(--ink-3)]">
-                    No stages yet — add the first.
-                  </td></tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {stages.map((s, i) => (
+                    <tr key={i} className="border-t border-[var(--border)]" data-testid={`wf-stage-${i}`}>
+                      <td className="px-3 py-2">
+                        <div className="flex gap-0.5">
+                          <button onClick={() => move(i, -1)} disabled={i === 0 || !isAdmin}
+                                  className="p-1 rounded hover:bg-[var(--surface-2)] disabled:opacity-25">
+                            <ChevronUp size={13} />
+                          </button>
+                          <button onClick={() => move(i, 1)} disabled={i === stages.length - 1 || !isAdmin}
+                                  className="p-1 rounded hover:bg-[var(--surface-2)] disabled:opacity-25">
+                            <ChevronDown size={13} />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          value={s.label}
+                          disabled={!isAdmin}
+                          placeholder="e.g. Site Visit"
+                          onChange={(e) => setAt(i, { label: e.target.value })}
+                          className="w-full px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)] disabled:opacity-60"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <button onClick={() => setAt(i, { terminal: !s.terminal })} disabled={!isAdmin}
+                                title="Nothing happens after this stage"
+                                className={`p-1.5 rounded-lg border ${s.terminal
+                                  ? "border-[var(--brand)] text-[var(--brand)]"
+                                  : "border-[var(--border)] text-[var(--ink-3)]"} disabled:opacity-40`}>
+                          <Flag size={13} />
+                        </button>
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <button onClick={() => setAt(i, { won: !s.won })} disabled={!isAdmin}
+                                title="Reports count this as a success"
+                                className={`p-1.5 rounded-lg border ${s.won
+                                  ? "border-emerald-500 text-emerald-600"
+                                  : "border-[var(--border)] text-[var(--ink-3)]"} disabled:opacity-40`}>
+                          <Trophy size={13} />
+                        </button>
+                      </td>
+                      <td className="px-2 py-2">
+                        <button onClick={() => remove(i)} disabled={!isAdmin || stages.length <= 1}
+                                className="p-1 rounded text-[var(--danger)] hover:bg-[var(--danger-soft)] disabled:opacity-25">
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!stages.length && (
+                    <tr><td colSpan={5} className="px-4 py-8 text-center text-[var(--ink-3)]">
+                      No stages yet — add the first.
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
 
             {isAdmin && (
               <div className="px-4 py-3 border-t border-[var(--border)] flex items-center gap-2">

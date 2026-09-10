@@ -87,8 +87,8 @@ export default function Projects() {
       const matchDivision = divisionFilter === "All" || r.division === divisionFilter;
       const matchQuery =
         !q ||
-        r.customer.toLowerCase().includes(q) ||
-        r.project_no.toLowerCase().includes(q) ||
+        (r.customer || "").toLowerCase().includes(q) ||
+        (r.project_no || "").toLowerCase().includes(q) ||
         (r.site_address || "").toLowerCase().includes(q) ||
         (r.assigned_engineer || "").toLowerCase().includes(q);
       return matchStage && matchDivision && matchQuery;

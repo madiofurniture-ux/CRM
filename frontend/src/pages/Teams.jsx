@@ -51,9 +51,9 @@ export default function Teams() {
   };
 
   const memberCount = (teamId) => users.filter((u) => u.team_id === teamId).length;
-  const initials = (name) => name.trim().slice(0, 2).toUpperCase();
+  const initials = (name) => (name || "").trim().slice(0, 2).toUpperCase() || "?";
   const activeCount = rows.filter((t) => t.active).length;
-  const visible = rows.filter((t) => t.name.toLowerCase().includes(q.toLowerCase()));
+  const visible = rows.filter((t) => (t.name || "").toLowerCase().includes(q.toLowerCase()));
 
   return (
     <>

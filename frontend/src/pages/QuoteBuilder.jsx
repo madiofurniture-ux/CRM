@@ -31,14 +31,20 @@ function newSection(type) {
 
 // Mirrors server._compute_quote_financials / _price_item — a live preview;
 // the server always recomputes authoritatively on save, this is never trusted.
+const round2 = (n) => Math.round(n * 100) / 100;
+
 function priceItem(item) {
+  // Per-line rounding must match server._price_item exactly (round each line
+  // to paise, then sum — not sum-then-round), or the preview quotes a total
+  // the saved record won't agree with. The `|| 1` qty fallback mirrors the
+  // server's `lc.money(...) or 1`.
   const qty = Number(item.qty) || 1;
   const rate = Number(item.unit_rate) || 0;
-  const subtotal = qty * rate;
-  const discount = subtotal * (Number(item.discount_pct) || 0) / 100;
+  const subtotal = round2(qty * rate);
+  const discount = round2(subtotal * (Number(item.discount_pct) || 0) / 100);
   const taxable = subtotal - discount;
-  const tax = taxable * (Number(item.gst_rate) || 0) / 100;
-  return { subtotal, discount, tax, line_total: taxable + tax };
+  const tax = round2(taxable * (Number(item.gst_rate) || 0) / 100);
+  return { subtotal, discount, tax, line_total: round2(taxable + tax) };
 }
 function computeFinancials(sections) {
   let subtotal = 0, total_discount = 0, total_tax = 0;

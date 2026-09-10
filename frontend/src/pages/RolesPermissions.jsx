@@ -97,6 +97,16 @@ export default function RolesPermissions() {
           </div>
         </div>
 
+        {!selectedId && (
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 flex items-center justify-center text-center min-h-[240px]">
+            <div className="text-sm text-[var(--ink-3)]">
+              {roles.length === 0
+                ? "No roles defined yet — create one on the left to start assigning permissions."
+                : "Select a role on the left to edit its permissions."}
+            </div>
+          </div>
+        )}
+
         {selectedId && (
           <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="mb-4">

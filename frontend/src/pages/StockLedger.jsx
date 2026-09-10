@@ -157,25 +157,27 @@ export default function StockLedger() {
 
         {tab === "onhand" && (
           <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-[var(--surface-2)]">
-                <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
-                  <th className="text-left font-semibold px-4 py-2.5">SKU</th>
-                  <th className="text-left font-semibold px-4 py-2.5">Product</th>
-                  <th className="text-right font-semibold px-4 py-2.5">On Hand</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(summary?.products || []).map((p) => (
-                  <tr key={p.product_id} className="border-t border-[var(--border-light)]">
-                    <td className="px-4 py-2.5 font-mono text-xs">{p.product_id}</td>
-                    <td className="px-4 py-2.5">{p.name}</td>
-                    <td className={`px-4 py-2.5 text-right font-mono font-semibold ${p.on_hand < 0 ? "text-[var(--danger)]" : "text-[var(--ink)]"}`}>{p.on_hand}</td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-[var(--surface-2)]">
+                  <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
+                    <th className="text-left font-semibold px-4 py-2.5">SKU</th>
+                    <th className="text-left font-semibold px-4 py-2.5">Product</th>
+                    <th className="text-right font-semibold px-4 py-2.5">On Hand</th>
                   </tr>
-                ))}
-                {(summary?.products || []).length === 0 && <tr><td colSpan="3" className="text-center py-10 text-[var(--ink-3)]">No movements yet — record the first receipt.</td></tr>}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {(summary?.products || []).map((p) => (
+                    <tr key={p.product_id} className="border-t border-[var(--border-light)]">
+                      <td className="px-4 py-2.5 font-mono text-xs">{p.product_id}</td>
+                      <td className="px-4 py-2.5">{p.name}</td>
+                      <td className={`px-4 py-2.5 text-right font-mono font-semibold ${p.on_hand < 0 ? "text-[var(--danger)]" : "text-[var(--ink)]"}`}>{p.on_hand}</td>
+                    </tr>
+                  ))}
+                  {(summary?.products || []).length === 0 && <tr><td colSpan="3" className="text-center py-10 text-[var(--ink-3)]">No movements yet — record the first receipt.</td></tr>}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 

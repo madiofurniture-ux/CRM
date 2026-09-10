@@ -75,27 +75,29 @@ export default function CsvImportModal({ entity, onClose, onImported }) {
                   {preview.row_count} row{preview.row_count === 1 ? "" : "s"} found — map each column below, or leave it "— Skip —".
                 </div>
                 <div className="border border-[var(--border)] rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead className="bg-[var(--surface-2)] text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
-                      <tr><th className="text-left px-3 py-2">CSV column</th><th className="text-left px-3 py-2">Sample</th><th className="text-left px-3 py-2">Maps to</th></tr>
-                    </thead>
-                    <tbody>
-                      {preview.headers.map((h) => (
-                        <tr key={h} className="border-t border-[var(--border-light)]">
-                          <td className="px-3 py-2 font-medium">{h}</td>
-                          <td className="px-3 py-2 text-[var(--ink-3)] truncate max-w-[10rem]">{preview.sample_rows[0]?.[h] || ""}</td>
-                          <td className="px-3 py-2">
-                            <select value={mapping[h] || ""} onChange={(e) => setMapping((m) => ({ ...m, [h]: e.target.value }))}
-                                    className="w-full px-2 py-1 rounded-md border border-[var(--border)] bg-white text-sm"
-                                    data-testid={`csv-map-${h}`}>
-                              <option value="">— Skip —</option>
-                              {preview.fields.map((f) => <option key={f} value={f}>{FIELD_LABEL[f] || f}</option>)}
-                            </select>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-[var(--surface-2)] text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
+                        <tr><th className="text-left px-3 py-2">CSV column</th><th className="text-left px-3 py-2">Sample</th><th className="text-left px-3 py-2">Maps to</th></tr>
+                      </thead>
+                      <tbody>
+                        {preview.headers.map((h) => (
+                          <tr key={h} className="border-t border-[var(--border-light)]">
+                            <td className="px-3 py-2 font-medium">{h}</td>
+                            <td className="px-3 py-2 text-[var(--ink-3)] truncate max-w-[10rem]">{preview.sample_rows[0]?.[h] || ""}</td>
+                            <td className="px-3 py-2">
+                              <select value={mapping[h] || ""} onChange={(e) => setMapping((m) => ({ ...m, [h]: e.target.value }))}
+                                      className="w-full px-2 py-1 rounded-md border border-[var(--border)] bg-white text-sm"
+                                      data-testid={`csv-map-${h}`}>
+                                <option value="">— Skip —</option>
+                                {preview.fields.map((f) => <option key={f} value={f}>{FIELD_LABEL[f] || f}</option>)}
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
                 <div className="flex justify-end gap-2">
                   <button className="btn-ghost" onClick={() => setPreview(null)}>Back</button>

@@ -339,7 +339,12 @@ export default function Attendance() {
                     <td className="px-4 py-3 text-xs text-[var(--ink-2)] truncate max-w-xs">{r.note || "-"}</td>
                   </tr>
                 ))}
-                {logs.length === 0 && (
+                {loading && (
+                  <tr>
+                    <td colSpan={7} className="text-center py-10 text-[var(--ink-3)] text-xs">Loading attendance…</td>
+                  </tr>
+                )}
+                {!loading && logs.length === 0 && (
                   <tr>
                     <td colSpan={7} className="text-center py-10 text-[var(--ink-3)] text-xs">No attendance records logged yet.</td>
                   </tr>

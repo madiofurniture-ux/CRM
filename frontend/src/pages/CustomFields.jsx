@@ -77,43 +77,45 @@ export default function CustomFields() {
         </div>
 
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-[var(--surface-2)] text-[var(--ink-3)]">
-              <tr className="text-[11px] uppercase tracking-wider">
-                <th className="px-3 py-2 text-left">Label</th>
-                <th className="px-3 py-2 text-left">Type</th>
-                <th className="w-20 px-3 py-2 text-center">Table</th>
-                <th className="w-20 px-3 py-2 text-center">Filter</th>
-                <th className="w-20 px-3 py-2 text-center">Detail</th>
-                <th className="w-10"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {defs.map((d) => (
-                <tr key={d.id} className="border-t border-[var(--border)]" data-testid={`cf-row-${d.key}`}>
-                  <td className="px-3 py-2 font-medium">{d.label}</td>
-                  <td className="px-3 py-2 text-[var(--ink-2)]">{d.type}</td>
-                  <td className="px-3 py-2 text-center">
-                    <input type="checkbox" checked={d.show_table} onChange={() => toggleFlag(d, "show_table")} />
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <input type="checkbox" checked={d.show_filter} onChange={() => toggleFlag(d, "show_filter")} />
-                  </td>
-                  <td className="px-3 py-2 text-center">
-                    <input type="checkbox" checked={d.show_detail} onChange={() => toggleFlag(d, "show_detail")} />
-                  </td>
-                  <td className="px-2 py-2">
-                    <button onClick={() => remove(d)} className="p-1 rounded text-[var(--danger)] hover:bg-[var(--danger-soft)]">
-                      <Trash2 size={13} />
-                    </button>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-[var(--surface-2)] text-[var(--ink-3)]">
+                <tr className="text-[11px] uppercase tracking-wider">
+                  <th className="px-3 py-2 text-left">Label</th>
+                  <th className="px-3 py-2 text-left">Type</th>
+                  <th className="w-20 px-3 py-2 text-center">Table</th>
+                  <th className="w-20 px-3 py-2 text-center">Filter</th>
+                  <th className="w-20 px-3 py-2 text-center">Detail</th>
+                  <th className="w-10"></th>
                 </tr>
-              ))}
-              {!defs.length && !adding && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-[var(--ink-3)]">No custom fields yet for {ENTITY_LABEL[entity]}.</td></tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {defs.map((d) => (
+                  <tr key={d.id} className="border-t border-[var(--border)]" data-testid={`cf-row-${d.key}`}>
+                    <td className="px-3 py-2 font-medium">{d.label}</td>
+                    <td className="px-3 py-2 text-[var(--ink-2)]">{d.type}</td>
+                    <td className="px-3 py-2 text-center">
+                      <input type="checkbox" checked={d.show_table} onChange={() => toggleFlag(d, "show_table")} />
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <input type="checkbox" checked={d.show_filter} onChange={() => toggleFlag(d, "show_filter")} />
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <input type="checkbox" checked={d.show_detail} onChange={() => toggleFlag(d, "show_detail")} />
+                    </td>
+                    <td className="px-2 py-2">
+                      <button onClick={() => remove(d)} className="p-1 rounded text-[var(--danger)] hover:bg-[var(--danger-soft)]">
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!defs.length && !adding && (
+                  <tr><td colSpan={6} className="px-4 py-8 text-center text-[var(--ink-3)]">No custom fields yet for {ENTITY_LABEL[entity]}.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
           {adding ? (
             <div className="px-4 py-3 border-t border-[var(--border)] flex flex-wrap items-end gap-2">

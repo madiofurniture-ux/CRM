@@ -42,7 +42,11 @@ export default function Alerts() {
     <>
       <Topbar title="Follow-Up Alerts" subtitle={`${data?.count || 0} items need attention`} />
       <div className="p-6 space-y-6" data-testid="alerts-page">
-        {(data?.count || 0) === 0 && <div className="text-center py-16 text-[var(--ink-3)]">All clear — nothing needs chasing right now 🎉</div>}
+        {/* `data` is null until the fetch lands — without that guard this
+            claimed "All clear" on every first paint, on the one screen whose
+            job is telling you what you have not chased yet. */}
+        {data === null && <div className="text-center py-16 text-[var(--ink-3)]">Loading alerts…</div>}
+        {data !== null && (data.count || 0) === 0 && <div className="text-center py-16 text-[var(--ink-3)]">All clear — nothing needs chasing right now 🎉</div>}
         {GROUPS.map((g) => {
           const items = grouped[g.key] || [];
           if (!items.length) return null;

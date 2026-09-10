@@ -88,59 +88,61 @@ export default function FinancialYear() {
           <div className="text-sm text-[var(--ink-3)]">Loading…</div>
         ) : (
           <div className="rounded-xl border border-[var(--border)] overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-[var(--surface-2)] text-[var(--ink-3)]">
-                <tr>
-                  <th className="text-left px-4 py-2.5 font-medium">Financial year</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Records</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Status</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {years.map((y) => {
-                  const isHidden = hidden.includes(y.fy);
-                  const isCurrent = y.fy === currentFy;
-                  return (
-                    <tr key={y.fy} className="border-t border-[var(--border)]"
-                        data-testid={`fy-row-${y.fy}`}>
-                      <td className="px-4 py-2.5 font-medium">
-                        FY {y.fy}
-                        {isCurrent && (
-                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-[var(--brand)] text-white align-middle">
-                            CURRENT
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-[var(--surface-2)] text-[var(--ink-3)]">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 font-medium">Financial year</th>
+                    <th className="text-right px-4 py-2.5 font-medium">Records</th>
+                    <th className="text-left px-4 py-2.5 font-medium">Status</th>
+                    <th className="text-right px-4 py-2.5 font-medium">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {years.map((y) => {
+                    const isHidden = hidden.includes(y.fy);
+                    const isCurrent = y.fy === currentFy;
+                    return (
+                      <tr key={y.fy} className="border-t border-[var(--border)]"
+                          data-testid={`fy-row-${y.fy}`}>
+                        <td className="px-4 py-2.5 font-medium">
+                          FY {y.fy}
+                          {isCurrent && (
+                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-[var(--brand)] text-white align-middle">
+                              CURRENT
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums">
+                          {y.records.toLocaleString("en-IN")}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className={isHidden ? "text-[var(--ink-3)]" : "text-emerald-600"}>
+                            {isHidden ? "Hidden" : "Visible"}
                           </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums">
-                        {y.records.toLocaleString("en-IN")}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <span className={isHidden ? "text-[var(--ink-3)]" : "text-emerald-600"}>
-                          {isHidden ? "Hidden" : "Visible"}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-right">
-                        <button
-                          onClick={() => toggle(y.fy)}
-                          disabled={!isAdmin}
-                          data-testid={`fy-toggle-${y.fy}`}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[var(--border)] hover:border-[var(--brand)] disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          {isHidden ? <Eye size={14} /> : <EyeOff size={14} />}
-                          {isHidden ? "Show" : "Hide"}
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {!years.length && (
-                  <tr><td colSpan={4} className="px-4 py-6 text-center text-[var(--ink-3)]">
-                    No dated records yet.
-                  </td></tr>
-                )}
-              </tbody>
-            </table>
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <button
+                            onClick={() => toggle(y.fy)}
+                            disabled={!isAdmin}
+                            data-testid={`fy-toggle-${y.fy}`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[var(--border)] hover:border-[var(--brand)] disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {isHidden ? <Eye size={14} /> : <EyeOff size={14} />}
+                            {isHidden ? "Show" : "Hide"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!years.length && (
+                    <tr><td colSpan={4} className="px-4 py-6 text-center text-[var(--ink-3)]">
+                      No dated records yet.
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
