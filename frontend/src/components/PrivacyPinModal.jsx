@@ -44,12 +44,12 @@ export default function PrivacyPinModal() {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Shield size={18} className="text-[var(--brand)]" />
-            <h3 id="privacy-pin-title" className="font-heading font-semibold">{needsSetup ? "Set Privacy PIN" : "Unlock Cash Figures"}</h3>
+            <h3 id="privacy-pin-title" className="font-heading font-semibold">{needsSetup ? "Set Privacy PIN" : "Unlock Other Amounts"}</h3>
           </div>
           <button onClick={close} aria-label="Close"><X size={16} /></button>
         </div>
         <p className="text-xs text-[var(--ink-3)] mb-4">
-          {needsSetup ? "Choose a 4-digit PIN to protect cash figures going forward." : "Enter your privacy PIN to view masked cash amounts."}
+          {needsSetup ? "Choose a 4-digit PIN to protect Other amounts going forward." : "Enter your privacy PIN to view masked Other amounts."}
         </p>
         <form onSubmit={submit}>
           <input

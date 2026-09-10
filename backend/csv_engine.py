@@ -242,7 +242,7 @@ async def compute_project_pnl(db, user: dict) -> dict:
     return {
         "summary": {
             "total_contract_revenue": total_revenue,
-            "total_field_cash_spent": total_approved,
+            "total_field_settlement_spend": total_approved,
             "aggregate_margin_pct": aggregate_margin,
             "pending_exposure": total_pending,
             "total_approved_incentives": total_approved_incentives,

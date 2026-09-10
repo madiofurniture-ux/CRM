@@ -1,5 +1,5 @@
 """Pydantic models for MADIO CRM."""
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict, field_validator
 from typing import List, Literal, Optional, Any
 from datetime import datetime, timezone
 import uuid
@@ -238,7 +238,10 @@ class QuoteBase(BaseModel):
     requirement_id: Optional[str] = ""    # set when generated from a Requirement
     config_id: Optional[str] = ""         # set when generated from a Configurator run
     value: float = 0
-    cash: Optional[float] = 0
+    # Settlement split on the quote. `other` was called `cash` before the
+    # Other / Direct Settlement rename — the alias keeps pre-rename quote
+    # rows and older clients readable.
+    other: Optional[float] = Field(0, validation_alias=AliasChoices("other", "cash"))
     bank: Optional[float] = 0
     mode: Optional[str] = "Walk-in"
     remarks: Optional[str] = ""
@@ -491,7 +494,7 @@ class PettyCashBase(BaseModel):
     party: Optional[str] = ""
     description: str = ""
     amount: float = 0
-    mode: str = "Cash"  # Cash / Bank / UPI
+    mode: str = "Other"  # Other (Direct Settlement) / Bank / UPI
     by_user: Optional[str] = ""
     ref: Optional[str] = ""
 
@@ -541,7 +544,7 @@ class CashbookEntryBase(BaseModel):
     type: str                            # CASH_IN / CASH_OUT
     amount: float = 0
     category: Optional[str] = ""         # Hardware / Fuel / Refreshments / Transport / Advances / ...
-    payment_mode: str = "CASH"            # CASH / UPI / ONLINE
+    payment_mode: str = "OTHER"           # OTHER (Direct Settlement) / UPI / ONLINE
     remark: Optional[str] = ""
     receipt_url: Optional[str] = ""
     entry_person: Optional[str] = ""
@@ -584,7 +587,7 @@ class CashbookEntryApproval(BaseModel):
 class CashbookTopUp(BaseModel):
     model_config = ConfigDict(extra="ignore")
     amount: float
-    payment_mode: str = "CASH"
+    payment_mode: str = "OTHER"
     remark: Optional[str] = ""
     entry_person: Optional[str] = ""
 
@@ -600,7 +603,7 @@ class CashbookExpense(BaseModel):
     model_config = ConfigDict(extra="ignore")
     amount: float
     category: Optional[str] = ""
-    payment_mode: str = "CASH"
+    payment_mode: str = "OTHER"
     remark: Optional[str] = ""
     receipt_url: Optional[str] = ""
     entry_person: Optional[str] = ""
@@ -1029,7 +1032,7 @@ class PaymentBase(BaseModel):
     division: str = "Furniture"
     direction: str = "In"               # In / Out / Refund
     amount: float = 0
-    mode: str = "Cash"                  # Cash / Bank / UPI / Cheque
+    mode: str = "Other"                 # Other (Direct Settlement) / Bank / UPI / Cheque
     kind: Optional[str] = "Advance"     # Advance / Part / Final / Refund
     received_by: Optional[str] = ""
     against_sale_id: Optional[str] = ""
@@ -1407,11 +1410,11 @@ class AuditLog(AuditLogBase):
     id: str
 
 
-# ------- Finance: split cash/bank-transfer payments with GST -------
+# ------- Finance: split Other/bank-transfer payments with GST -------
 # A separate collection/model from the existing Payment (sale/invoice
 # collection ledger, no GST or deal/project linkage) — this tracks
 # deal/project-level settlements with a GST-bearing bank-transfer component
-# and a privacy-maskable cash component, which would be an awkward,
+# and a privacy-maskable Other component, which would be an awkward,
 # backward-incompatible bolt-on to the existing flat Payment shape.
 class BankTransferComponent(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -1424,22 +1427,34 @@ class BankTransferComponent(BaseModel):
     tax_invoice_number: Optional[str] = ""
 
 
-class CashComponent(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    cash_amount: float = 0
+class OtherComponent(BaseModel):
+    """The non-bank leg of a split payment — "Other" / Direct Settlement.
+
+    Reads legacy `cash_amount` too: rows written before the terminology
+    rename are still on disk, and an old client may still post that key.
+    """
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    other_amount: float = Field(0, validation_alias=AliasChoices("other_amount", "cash_amount"))
     wallet_id: Optional[str] = ""
     receipt_voucher_no: Optional[str] = ""
 
 
 class SplitPaymentBase(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
     deal_id: Optional[str] = ""
     project_id: Optional[str] = ""
     customer_id: Optional[str] = ""
-    payment_mode: Literal["BANK_TRANSFER", "CASH", "SPLIT"]
+    payment_mode: Literal["BANK_TRANSFER", "OTHER", "SPLIT"]
     bank_transfer_component: Optional[BankTransferComponent] = None
-    cash_component: Optional[CashComponent] = None
+    other_component: Optional[OtherComponent] = Field(
+        None, validation_alias=AliasChoices("other_component", "cash_component"))
     receipt_date: str
+
+    @field_validator("payment_mode", mode="before")
+    @classmethod
+    def _rename_legacy_mode(cls, v):
+        """Legacy callers/rows still say CASH; it is now OTHER."""
+        return "OTHER" if v == "CASH" else v
 
 
 class SplitPaymentCreate(SplitPaymentBase):
@@ -1452,6 +1467,23 @@ class SplitPayment(SplitPaymentBase):
     total_collected: float = 0
     status: Literal["RECORDED", "VERIFIED", "RECONCILED"] = "RECORDED"
     created_at: str
+
+
+def normalize_settlement(doc: dict) -> dict:
+    """Map a stored finance_payments row from the pre-rename shape
+    (payment_mode "CASH", `cash_component.cash_amount`) onto the current
+    Other / Direct Settlement shape. Mutates and returns `doc`.
+
+    Applied on read rather than as a one-shot data migration so that rows
+    written by an older server instance mid-deploy are also handled.
+    """
+    if doc.get("payment_mode") == "CASH":
+        doc["payment_mode"] = "OTHER"
+    legacy = doc.pop("cash_component", None)
+    if legacy and not doc.get("other_component"):
+        legacy["other_amount"] = legacy.pop("cash_amount", legacy.get("other_amount", 0))
+        doc["other_component"] = legacy
+    return doc
 
 
 class PrivacyPinSet(BaseModel):

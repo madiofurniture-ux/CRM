@@ -143,7 +143,7 @@ export default function DailyPlanner() {
           </button>
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm font-semibold">
               {stats.completed} / {stats.total} completed

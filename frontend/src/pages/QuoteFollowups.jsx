@@ -59,7 +59,7 @@ export default function QuoteFollowups() {
             className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm w-40" />
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-[var(--surface-2)]">

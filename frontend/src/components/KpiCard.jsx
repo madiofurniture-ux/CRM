@@ -9,7 +9,7 @@ export default function KpiCard({ label, value, hint, accent = "brand", icon: Ic
   const a = accents[accent] || accents.brand;
   return (
     <div
-      className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 shadow-[0_1px_2px_rgba(26,29,26,0.04)] hover:shadow-[0_4px_12px_rgba(26,29,26,0.06)] transition"
+      className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 shadow-[0_1px_2px_rgba(26,29,26,0.04)] hover:shadow-[0_4px_12px_rgba(26,29,26,0.06)] transition"
       data-testid={testid}
     >
       <div className="flex items-center justify-between mb-3">

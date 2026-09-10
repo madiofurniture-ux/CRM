@@ -134,7 +134,7 @@ export default function QuoteWorkspace() {
 
         {tab === "lines" && (
           <>
-            <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+            <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
               <div className="p-3 border-b border-[var(--border-light)] flex justify-between items-center">
                 <div className="font-heading font-semibold text-sm">Line items</div>
                 <button onClick={addLine} disabled={busy} className="btn-ghost disabled:opacity-60"><Plus size={14} /> Add line</button>
@@ -176,7 +176,7 @@ export default function QuoteWorkspace() {
         )}
 
         {tab === "versions" && (
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="text-sm text-[var(--ink-2)] mb-3">This quote has {ws.versions.length} version(s). Current: <span className="font-semibold">v{q.version}</span>.</div>
             <div className="flex flex-wrap gap-2">
               {ws.versions.map((v) => (
@@ -203,7 +203,7 @@ function TotalsBar({ ws, onSave, busy }) {
   useEffect(() => { setDiscount(ws.quote.discount || 0); }, [ws.quote.discount]);
   const t = ws.totals;
   return (
-    <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 flex flex-col md:flex-row md:items-end gap-4 justify-between">
+    <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 flex flex-col md:flex-row md:items-end gap-4 justify-between">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
         <Cell label="Subtotal" value={inrFull(ws.subtotal)} />
         <div>

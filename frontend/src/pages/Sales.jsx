@@ -3,13 +3,13 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
-import { useBusinessProfile } from "@/context/BusinessProfileContext";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 
 export default function Sales() {
   const [rows, setRows] = useState([]);
   const [search, setSearch] = useState("");
   const [fDiv, setFDiv] = useState("All");
-  const { divisions } = useBusinessProfile();
+  const { divisions } = useTenantConfig();
 
   useEffect(() => { api.get("/sales").then((r) => setRows(r.data)); }, []);
 
@@ -38,7 +38,7 @@ export default function Sales() {
             {divisions.map((d) => <option key={d.id} value={d.slug}>{d.slug}</option>)}
           </select>
         </div>
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-[var(--surface-2)]">

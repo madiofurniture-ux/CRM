@@ -75,7 +75,7 @@ export default function Dashboard() {
 
         {/* Charts row */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          <div className="xl:col-span-2 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="xl:col-span-2 bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <div className="font-heading font-semibold text-[var(--ink)]">Monthly Revenue</div>
@@ -97,7 +97,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="font-heading font-semibold text-[var(--ink)] mb-1">Division Split</div>
             <div className="text-xs text-[var(--ink-3)] mb-4">Revenue by division</div>
             <div className="h-56">
@@ -136,8 +136,8 @@ export default function Dashboard() {
 
         {/* Pipeline + alerts */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          <div className="xl:col-span-2 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
-            <div className="font-heading font-semibold text-[var(--ink)] mb-4">Pipeline by stage</div>
+          <div className="xl:col-span-2 bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
+            <div className="font-heading font-semibold text-[var(--ink)] mb-4">Pipeline Pulse</div>
             <div className="space-y-3">
               {(stats?.by_stage || []).map((s) => {
                 const max = Math.max(...(stats?.by_stage || []).map((x) => x.value), 1);
@@ -160,9 +160,9 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="flex items-center justify-between mb-4">
-              <div className="font-heading font-semibold text-[var(--ink)]">Follow-up alerts</div>
+              <div className="font-heading font-semibold text-[var(--ink)]">Priority Follow-ups</div>
               <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--danger-soft)] text-[var(--danger)] font-medium">{overdue.length}</span>
             </div>
             {overdue.length === 0 ? (
@@ -187,7 +187,7 @@ export default function Dashboard() {
         </div>
 
         {/* Recent quotes */}
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
           <div className="p-5 border-b border-[var(--border-light)]">
             <div className="font-heading font-semibold text-[var(--ink)]">Recent quotations</div>
             <div className="text-xs text-[var(--ink-3)] mt-0.5">Latest deals in your pipeline</div>

@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 
 const BUCKET_COLORS = { "0-30": "#4A5D4E", "31-60": "#D48B30", "61-90": "#C85A32", "90+": "#B24040" };
-const MODES = ["Cash", "Bank", "UPI", "Cheque"];
+const MODES = ["Other", "Bank", "UPI", "Cheque"];
 
 export default function Outstanding() {
   const { user } = useAuth();
@@ -31,7 +31,7 @@ export default function Outstanding() {
     setForm({
       date: new Date().toISOString().slice(0, 10),
       amount: record.balance || 0,
-      mode: "Cash",
+      mode: "Other",
       remarks: "",
     });
   };
@@ -82,7 +82,7 @@ export default function Outstanding() {
           <KpiCard label="Hot Pipeline" value={inrFull(data?.hot_pipeline)} accent="brand" icon={TrendingUp} />
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
           <div className="font-heading font-semibold text-[var(--ink)] mb-4">Aging on sales balances</div>
           <div className="grid grid-cols-4 gap-3">
             {(data?.aging || []).map((a) => (
@@ -101,7 +101,7 @@ export default function Outstanding() {
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-[var(--border-light)] flex items-center justify-between">
               <div>
                 <div className="font-heading font-semibold text-[var(--ink)]">Unpaid Sales</div>
@@ -144,7 +144,7 @@ export default function Outstanding() {
             </div>
           </div>
 
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-[var(--border-light)]">
               <div className="font-heading font-semibold text-[var(--ink)]">Hot Quotes (₹1L+)</div>
               <div className="text-xs text-[var(--ink-3)]">{data?.hot_quotes?.length || 0} in Quoted / Negotiation</div>
@@ -174,7 +174,7 @@ export default function Outstanding() {
           </div>
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
           <div className="p-4 border-b border-[var(--border-light)]">
             <div className="font-heading font-semibold text-[var(--ink)]">Unpaid Invoices</div>
           </div>

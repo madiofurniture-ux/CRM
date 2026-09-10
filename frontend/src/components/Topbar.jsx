@@ -12,7 +12,7 @@ const RESULT_ROUTE = {
 
 export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actions }) {
   const { setOpen } = useSidebar();
-  const { isCashHidden, requestUnlock, relock } = usePrivacyMode();
+  const { isOtherHidden, requestUnlock, relock } = usePrivacyMode();
   const nav = useNavigate();
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
@@ -89,16 +89,16 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
       {actions}
 
       <button
-        onClick={isCashHidden ? requestUnlock : relock}
+        onClick={isOtherHidden ? requestUnlock : relock}
         className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold shrink-0 ${
-          isCashHidden ? "bg-[var(--surface-2)] text-[var(--ink-2)]" : "bg-blue-600 text-white"
+          isOtherHidden ? "bg-[var(--surface-2)] text-[var(--ink-2)]" : "bg-blue-600 text-white"
         }`}
-        title={isCashHidden ? "Privacy Mode: ON — cash figures masked" : "Unlocked — all cash visible. Click to relock."}
-        aria-label={isCashHidden ? "Privacy Mode on, cash masked. Click to unlock." : "Privacy Mode unlocked. Click to relock."}
+        title={isOtherHidden ? "Privacy Mode: ON — Other amounts masked" : "Unlocked — all Other amounts visible. Click to relock."}
+        aria-label={isOtherHidden ? "Privacy Mode on, Other amounts masked. Click to unlock." : "Privacy Mode unlocked. Click to relock."}
         data-testid="privacy-mode-toggle"
       >
-        {isCashHidden ? <Shield size={15} strokeWidth={1.8} /> : <ShieldCheck size={15} strokeWidth={1.8} />}
-        <span className="hidden sm:inline">{isCashHidden ? "Privacy Mode" : "Unlocked"}</span>
+        {isOtherHidden ? <Shield size={15} strokeWidth={1.8} /> : <ShieldCheck size={15} strokeWidth={1.8} />}
+        <span className="hidden sm:inline">{isOtherHidden ? "Privacy Mode" : "Unlocked"}</span>
       </button>
 
       <button className="p-2 rounded-full hover:bg-[var(--surface-2)] text-[var(--ink-2)] shrink-0" aria-label="Notifications" data-testid="topbar-notifications">

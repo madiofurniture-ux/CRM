@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Topbar from "@/components/Topbar";
 import api, { formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 import { toast } from "sonner";
 import { Save, Plus, Trash2 } from "lucide-react";
 
@@ -33,6 +34,7 @@ const blankDivision = () => ({
 
 export default function BusinessSettings() {
   const { user, tenant, refreshTenant } = useAuth();
+  const { divisions: tenantDivisions, loading: tenantLoading, reload: reloadTenantConfig } = useTenantConfig();
   const isAdmin = user?.role === "admin";
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -48,9 +50,11 @@ export default function BusinessSettings() {
     });
   }, [tenant]);
 
+  // Seed the editor from the shared tenant config rather than re-fetching
+  // /settings/business-profile here — one fetch, one source of truth.
   useEffect(() => {
-    api.get("/settings/business-profile").then(({ data }) => setDivisions(data.divisions || []));
-  }, []);
+    if (divisions === null && !tenantLoading) setDivisions(tenantDivisions);
+  }, [divisions, tenantLoading, tenantDivisions]);
 
   const toggle = (id) => setForm((f) => ({
     ...f,
@@ -84,6 +88,9 @@ export default function BusinessSettings() {
     try {
       const { data } = await api.put("/settings/business-profile", { divisions });
       setDivisions(data.divisions);
+      // Refresh the app-wide roster too, so every other screen's division
+      // dropdowns pick the change up without a page reload.
+      await reloadTenantConfig();
       toast.success("Divisions saved");
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
     finally { setSavingDivisions(false); }
@@ -96,7 +103,7 @@ export default function BusinessSettings() {
     <>
       <Topbar title="Business Settings" subtitle="Branding and which modules this business uses" />
       <div className="p-6 max-w-3xl space-y-6" data-testid="business-settings-page">
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 space-y-4">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 space-y-4">
           <div className="font-heading font-semibold text-sm">Branding</div>
           <div className="grid grid-cols-2 gap-4">
             <Fld l="Display Name" v={form.display_name} oc={(v) => setForm({ ...form, display_name: v })} placeholder="e.g. Acme Interiors CRM" />
@@ -107,7 +114,7 @@ export default function BusinessSettings() {
           </div>
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 space-y-4" data-testid="divisions-settings">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 space-y-4" data-testid="divisions-settings">
           <div className="flex items-center justify-between">
             <div>
               <div className="font-heading font-semibold text-sm">Divisions</div>
@@ -147,7 +154,7 @@ export default function BusinessSettings() {
           </button>
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
           <div className="font-heading font-semibold text-sm mb-3">Enabled Modules</div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {MODULES.map((m) => (

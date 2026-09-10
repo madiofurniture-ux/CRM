@@ -78,7 +78,7 @@ def test_pending_excluded_from_margin_but_counted_in_exposure():
         assert row["margin_pct"] == 100.0
         assert row["pending_petty_cash"] == 8000
         assert pnl["summary"]["pending_exposure"] == 8000
-        assert pnl["summary"]["total_field_cash_spent"] == 0
+        assert pnl["summary"]["total_field_settlement_spend"] == 0
     asyncio.run(run())
 
 
@@ -141,7 +141,7 @@ def test_aggregate_summary_sums_across_projects():
         pnl = await csv_engine.compute_project_pnl(server.db, ADMIN)
         summary = pnl["summary"]
         assert summary["total_contract_revenue"] == 150000
-        assert summary["total_field_cash_spent"] == 15000
+        assert summary["total_field_settlement_spend"] == 15000
         assert summary["aggregate_margin_pct"] == 90.0
     asyncio.run(run())
 
@@ -183,7 +183,7 @@ def test_tenant_isolation_cannot_see_another_tenants_projects_or_margins():
         pnl_globex = await csv_engine.compute_project_pnl(server.db, OTHER_TENANT_ADMIN)
         assert [p["project_id"] for p in pnl_globex["projects"]] == ["p2"]
         assert pnl_globex["summary"]["total_contract_revenue"] == 999999
-        assert pnl_globex["summary"]["total_field_cash_spent"] == 0  # never sees acme's spend
+        assert pnl_globex["summary"]["total_field_settlement_spend"] == 0  # never sees acme's spend
     asyncio.run(run())
 
 

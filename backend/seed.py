@@ -502,7 +502,7 @@ async def seed_quotes(db):
     for i, (c, r) in enumerate(customers, start=1):
         stage = random.choice(["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"])
         value = float(random.choice([85000, 125000, 180000, 245000, 320000, 480000, 750000, 1200000]))
-        cash = round(value * random.uniform(0.1, 0.4), 2) if stage in ("Won", "Negotiation") else 0
+        other = round(value * random.uniform(0.1, 0.4), 2) if stage in ("Won", "Negotiation") else 0
         bank = round(value * random.uniform(0.3, 0.6), 2) if stage in ("Won", "Negotiation") else 0
         docs.append({
             "id": new_id(),
@@ -515,7 +515,7 @@ async def seed_quotes(db):
             "by_user": random.choice(["Raghu MF", "Nenmu", "Gowtham Hive"]),
             "stage": stage,
             "value": value,
-            "cash": cash,
+            "other": other,
             "bank": bank,
             "mode": random.choice(["Walk-in", "WhatsApp", "Site Visit", "Phone"]),
             "remarks": random.choice(["Furniture set for living room", "Complete interior package", "Paint requirement", "Doors and windows for villa", "Bulk order for office"]),
@@ -711,15 +711,15 @@ async def seed_petty_cash(db):
         return
     today = datetime.now(timezone.utc).date()
     entries = [
-        ("In", "Opening", "", "Opening balance", 25000, "Cash"),
-        ("Out", "Fuel", "IOCL Pump", "Delivery van fuel", 3200, "Cash"),
+        ("In", "Opening", "", "Opening balance", 25000, "Other"),
+        ("Out", "Fuel", "IOCL Pump", "Delivery van fuel", 3200, "Other"),
         ("Out", "Food", "Zomato", "Team lunch", 1450, "UPI"),
-        ("Out", "Transport", "Auto", "Sample delivery", 450, "Cash"),
-        ("In", "Sale", "Anja Reddy", "Advance cash", 15000, "Cash"),
-        ("Out", "Repair", "Electrician", "Showroom light fix", 2200, "Cash"),
-        ("Out", "Stationery", "Local", "Printer paper", 680, "Cash"),
-        ("In", "Sale", "Walk-in customer", "Paint sample sale", 3500, "Cash"),
-        ("Out", "Fuel", "HP Pump", "Delivery van", 2800, "Cash"),
+        ("Out", "Transport", "Auto", "Sample delivery", 450, "Other"),
+        ("In", "Sale", "Anja Reddy", "Advance settlement", 15000, "Other"),
+        ("Out", "Repair", "Electrician", "Showroom light fix", 2200, "Other"),
+        ("Out", "Stationery", "Local", "Printer paper", 680, "Other"),
+        ("In", "Sale", "Walk-in customer", "Paint sample sale", 3500, "Other"),
+        ("Out", "Fuel", "HP Pump", "Delivery van", 2800, "Other"),
         ("Out", "Courier", "Delhivery", "Sample dispatch", 780, "UPI"),
     ]
     docs = []

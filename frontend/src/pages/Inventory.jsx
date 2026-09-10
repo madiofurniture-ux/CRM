@@ -146,7 +146,7 @@ export default function Inventory() {
             {filtered.map((i) => (
               <div key={i.id} onClick={() => openEdit(i)} role="button" tabIndex={0}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openEdit(i); } }}
-                className="flex flex-col bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden hover:shadow-md hover:border-[var(--brand)] transition cursor-pointer" data-testid={`item-${i.id}`}>
+                className="flex flex-col bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden hover:shadow-md hover:border-[var(--brand)] transition cursor-pointer" data-testid={`item-${i.id}`}>
                 <div className="aspect-[4/3] bg-[var(--surface-2)] flex items-center justify-center relative shrink-0">
                   {i.image_url ? (
                     <img src={i.image_url} alt="" className="w-full h-full object-cover" />
@@ -178,7 +178,7 @@ export default function Inventory() {
             {filtered.length === 0 && <div className="col-span-full text-center py-12 text-[var(--ink-3)]">No inventory items</div>}
           </div>
         ) : (
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-[var(--surface-2)]">

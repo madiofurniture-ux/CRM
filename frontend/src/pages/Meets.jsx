@@ -92,7 +92,7 @@ export default function Meets() {
               </div>
               <button onClick={() => shiftWeek(1)} className="btn-ghost text-xs" data-testid="week-next">Next<ChevronRight size={14} /></button>
             </div>
-            <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+            <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
               <div className="overflow-x-auto">
                 <div className="grid grid-cols-[60px_repeat(7,minmax(140px,1fr))] min-w-[900px]">
                   <div className="bg-[var(--surface-2)] border-b border-[var(--border)]" />
@@ -141,7 +141,7 @@ export default function Meets() {
         ) : (
           <div className="space-y-2">
             {upcoming.map((m) => (
-              <div key={m.id} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 flex items-start gap-4 hover:shadow-sm" onClick={() => openEdit(m)}>
+              <div key={m.id} className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4 flex items-start gap-4 hover:shadow-sm" onClick={() => openEdit(m)}>
                 <div className="text-center min-w-[60px]">
                   <div className="text-[10px] uppercase tracking-wider text-[var(--ink-3)]">{new Date(m.date).toLocaleDateString("en-IN", { month: "short" })}</div>
                   <div className="font-heading font-bold text-2xl text-[var(--brand)]">{new Date(m.date).getDate()}</div>

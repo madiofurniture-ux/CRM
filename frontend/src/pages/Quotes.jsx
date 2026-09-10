@@ -5,7 +5,7 @@ import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers } from "lucide-react";
-import { useBusinessProfile } from "@/context/BusinessProfileContext";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 
@@ -18,7 +18,7 @@ export default function Quotes() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const { divisions } = useBusinessProfile();
+  const { divisions } = useTenantConfig();
 
   const emptyItem = { sku: "", name: "", division: "Furniture", qty: 1, unit_price: 0, discount_pct: 0, gst_pct: 18, total_amount: 0 };
 
@@ -32,7 +32,7 @@ export default function Quotes() {
     by_user: "",
     stage: "Quoted",
     value: 0,
-    cash: 0,
+    other: 0,
     bank: 0,
     mode: "Walk-in",
     remarks: "",

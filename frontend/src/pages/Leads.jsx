@@ -188,7 +188,7 @@ export default function Leads() {
           />
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-[var(--surface-2)]">

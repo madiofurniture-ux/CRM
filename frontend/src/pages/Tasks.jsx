@@ -77,7 +77,7 @@ export default function Tasks() {
           {filtered.map((t) => {
             const overdue = t.due_date && t.due_date < today && !t.done;
             return (
-              <div key={t.id} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 flex items-start gap-3 hover:shadow-sm transition" data-testid={`task-${t.id}`}>
+              <div key={t.id} className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4 flex items-start gap-3 hover:shadow-sm transition" data-testid={`task-${t.id}`}>
                 <button
                   onClick={() => toggle(t)}
                   className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 mt-0.5 transition ${t.done ? "bg-[var(--moss)] border-[var(--moss)]" : "border-[var(--border)] hover:border-[var(--brand)]"}`}

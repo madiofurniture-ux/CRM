@@ -6,7 +6,7 @@ const PrivacyModeContext = createContext(null);
 const UNLOCK_DURATION_MS = 15 * 60 * 1000; // auto-relock after 15 minutes
 
 export function PrivacyModeProvider({ children }) {
-  const [isCashHidden, setIsCashHidden] = useState(true);
+  const [isOtherHidden, setIsCashHidden] = useState(true);
   const [showPinModal, setShowPinModal] = useState(false);
   const relockTimer = useRef(null);
 
@@ -28,7 +28,7 @@ export function PrivacyModeProvider({ children }) {
   };
 
   return (
-    <PrivacyModeContext.Provider value={{ isCashHidden, requestUnlock, relock, showPinModal, setShowPinModal, unlockWithPin }}>
+    <PrivacyModeContext.Provider value={{ isOtherHidden, requestUnlock, relock, showPinModal, setShowPinModal, unlockWithPin }}>
       {children}
     </PrivacyModeContext.Provider>
   );
@@ -36,7 +36,7 @@ export function PrivacyModeProvider({ children }) {
 
 export function usePrivacyMode() {
   return useContext(PrivacyModeContext) || {
-    isCashHidden: true, requestUnlock: () => {}, relock: () => {},
+    isOtherHidden: true, requestUnlock: () => {}, relock: () => {},
     showPinModal: false, setShowPinModal: () => {}, unlockWithPin: async () => {},
   };
 }

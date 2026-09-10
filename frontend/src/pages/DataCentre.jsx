@@ -55,7 +55,7 @@ export default function DataCentre() {
       <Topbar title="Data Centre" subtitle="Import & export any dataset as CSV" />
       <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6" data-testid="data-centre-page">
         {/* Export */}
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-4"><Database size={16} className="text-[var(--brand)]" /><div className="font-heading font-semibold">Datasets</div></div>
           <div className="space-y-2">
             {cols.map((c) => (
@@ -73,7 +73,7 @@ export default function DataCentre() {
         </div>
 
         {/* Import */}
-        <div className="lg:col-span-2 bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+        <div className="lg:col-span-2 bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2"><Upload size={16} className="text-[var(--brand)] " /><div className="font-heading font-semibold">Import into <span className="capitalize">{sel || "—"}</span></div></div>
             {active && <div className="text-[11px] text-[var(--ink-3)]">Key: <span className="font-mono">{active.id_field}</span></div>}

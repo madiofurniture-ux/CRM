@@ -89,7 +89,7 @@ export default function RoleManager() {
       <div className="p-6" data-testid="roles-page">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {users.map((u) => (
-            <div key={u.id} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5" data-testid={`user-${u.id}`}>
+            <div key={u.id} className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5" data-testid={`user-${u.id}`}>
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-heading font-bold" style={{ background: u.color }}>{u.icon}</div>

@@ -156,7 +156,7 @@ export default function StockLedger() {
         </div>
 
         {tab === "onhand" && (
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
             <table className="w-full text-sm">
               <thead className="bg-[var(--surface-2)]">
                 <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
@@ -180,7 +180,7 @@ export default function StockLedger() {
         )}
 
         {tab === "ledger" && (
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-[var(--surface-2)]">

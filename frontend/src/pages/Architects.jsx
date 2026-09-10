@@ -113,7 +113,7 @@ export default function Architects() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map((a) => (
-            <div key={a.id} className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 hover:shadow-md transition" data-testid={`arch-${a.id}`}>
+            <div key={a.id} className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 hover:shadow-md transition" data-testid={`arch-${a.id}`}>
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <div className="font-heading font-semibold text-[var(--ink)]">{a.name}</div>

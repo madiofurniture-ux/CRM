@@ -92,7 +92,7 @@ export default function Reports() {
 function Kpi({ label, value, small, accent = "ink" }) {
   const color = { moss: "text-[var(--moss)]", ink: "text-[var(--ink)]" }[accent];
   return (
-    <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4">
+    <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4">
       <div className="text-[10px] uppercase tracking-widest font-semibold text-[var(--ink-3)]">{label}</div>
       <div className={`font-heading font-bold ${small ? "text-lg" : "text-2xl"} font-mono mt-1 ${color}`}>{value}</div>
     </div>

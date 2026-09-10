@@ -7,8 +7,8 @@ import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { Wallet, Landmark, Receipt, X, Download } from "lucide-react";
 
-const MODES = ["All", "BANK_TRANSFER", "CASH", "SPLIT"];
-const MODE_LABEL = { All: "All", BANK_TRANSFER: "Bank Transfer", CASH: "Cash", SPLIT: "Split" };
+const MODES = ["All", "BANK_TRANSFER", "OTHER", "SPLIT"];
+const MODE_LABEL = { All: "All", BANK_TRANSFER: "Bank Transfer", OTHER: "Other", SPLIT: "Split" };
 const STATUS_TONE = {
   RECORDED: "bg-[var(--surface-2)] text-[var(--ink-2)]",
   VERIFIED: "bg-blue-100 text-blue-700",
@@ -17,11 +17,11 @@ const STATUS_TONE = {
 
 const emptyForm = {
   project_id: "", payment_mode: "SPLIT", receipt_date: new Date().toISOString().slice(0, 10),
-  bt_taxable: "", gst_rate: "18", utr_reference: "", cash_amount: "", wallet_id: "",
+  bt_taxable: "", gst_rate: "18", utr_reference: "", other_amount: "", wallet_id: "",
 };
 
 export default function Payments() {
-  const { isCashHidden, requestUnlock } = usePrivacyMode();
+  const { isOtherHidden, requestUnlock } = usePrivacyMode();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modeFilter, setModeFilter] = useState("All");
@@ -31,31 +31,31 @@ export default function Payments() {
 
   const load = () => {
     setLoading(true);
-    api.get("/finance/payments", { params: { mask_cash: isCashHidden } })
+    api.get("/finance/payments", { params: { mask_other: isOtherHidden } })
       .then(({ data }) => setRows(data)).finally(() => setLoading(false));
   };
-  useEffect(load, [isCashHidden]); // eslint-disable-line
+  useEffect(load, [isOtherHidden]); // eslint-disable-line
 
   const taxable = parseFloat(form.bt_taxable) || 0;
   const rate = parseFloat(form.gst_rate) || 0;
   const gstAmount = Math.round(taxable * rate) / 100;
   const btTotal = taxable + gstAmount;
-  const cashAmount = parseFloat(form.cash_amount) || 0;
-  const grandTotal = btTotal + cashAmount;
+  const otherAmount = parseFloat(form.other_amount) || 0;
+  const grandTotal = btTotal + otherAmount;
 
   const totals = rows.reduce((acc, r) => {
     acc.total += r.total_collected || 0;
     acc.bt += r.bank_transfer_component?.total_bt_amount || 0;
     acc.gst += r.bank_transfer_component?.gst_amount || 0;
-    acc.cash += r.cash_component?.cash_amount || 0;
+    acc.other += r.other_component?.other_amount || 0;
     return acc;
-  }, { total: 0, bt: 0, gst: 0, cash: 0 });
+  }, { total: 0, bt: 0, gst: 0, other: 0 });
 
   const visible = modeFilter === "All" ? rows : rows.filter((r) => r.payment_mode === modeFilter);
 
   const save = async () => {
     if (saving) return;
-    if (taxable <= 0 && cashAmount <= 0) { toast.error("Enter a bank transfer or cash amount"); return; }
+    if (taxable <= 0 && otherAmount <= 0) { toast.error("Enter a bank transfer or Other amount"); return; }
     setSaving(true);
     try {
       const payload = {
@@ -63,7 +63,7 @@ export default function Payments() {
         bank_transfer_component: taxable > 0 ? {
           taxable_amount: taxable, gst_rate: rate, utr_reference: form.utr_reference,
         } : null,
-        cash_component: cashAmount > 0 ? { cash_amount: cashAmount, wallet_id: form.wallet_id } : null,
+        other_component: otherAmount > 0 ? { other_amount: otherAmount, wallet_id: form.wallet_id } : null,
       };
       await api.post("/finance/payments", payload);
       toast.success("Payment recorded");
@@ -84,7 +84,7 @@ export default function Payments() {
       `Mode: ${MODE_LABEL[r.payment_mode] || r.payment_mode}`,
       r.bank_transfer_component ? `Bank Transfer: Taxable ${inrFull(r.bank_transfer_component.taxable_amount)} + GST ${inrFull(r.bank_transfer_component.gst_amount)} = ${inrFull(r.bank_transfer_component.total_bt_amount)}` : null,
       r.bank_transfer_component?.tax_invoice_number ? `Tax Invoice: ${r.bank_transfer_component.tax_invoice_number}` : null,
-      r.cash_component ? `Cash: ${inrFull(r.cash_component.cash_amount)}` : null,
+      r.other_component ? `Other (Direct Settlement): ${inrFull(r.other_component.other_amount)}` : null,
       `Total Collected: ${inrFull(r.total_collected)}`,
       `Status: ${r.status}`,
     ].filter(Boolean).join("\n");
@@ -98,15 +98,15 @@ export default function Payments() {
 
   return (
     <>
-      <Topbar title="Payments & Tax Invoices" subtitle="Split cash / bank-transfer settlements" onAdd={() => setShow(true)} addLabel="Record Payment" />
+      <Topbar title="Payments & Tax Invoices" subtitle="Split Other / bank-transfer settlements" onAdd={() => setShow(true)} addLabel="Record Payment" />
       <div className="p-6 space-y-6" data-testid="payments-page">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <KpiCard icon={Receipt} label="Total Collections" value={inrFull(totals.total)} />
           <KpiCard icon={Landmark} label="Bank Transfer (+GST)" value={inrFull(totals.bt)} hint={`GST: ${inrFull(totals.gst)}`} />
           <KpiCard
-            icon={Wallet} label="Cash Collections"
-            value={isCashHidden ? "••••••" : inrFull(totals.cash)}
-            hint={isCashHidden ? <button onClick={requestUnlock} className="text-blue-600 underline">Unlock</button> : null}
+            icon={Wallet} label="Other Collections"
+            value={isOtherHidden ? "••••••" : inrFull(totals.other)}
+            hint={isOtherHidden ? <button onClick={requestUnlock} className="text-blue-600 underline">Unlock</button> : null}
           />
           <KpiCard icon={Receipt} label="Pending GST Liability" value={inrFull(totals.gst)} accent="warn" />
         </div>
@@ -129,7 +129,7 @@ export default function Payments() {
                   <th className="text-left font-semibold px-4 py-2.5">Mode</th>
                   <th className="text-right font-semibold px-4 py-2.5">Bank Transfer</th>
                   <th className="text-right font-semibold px-4 py-2.5">GST</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Cash</th>
+                  <th className="text-right font-semibold px-4 py-2.5">Other</th>
                   <th className="text-right font-semibold px-4 py-2.5">Total</th>
                   <th className="text-left font-semibold px-4 py-2.5">Status</th>
                   <th className="px-4 py-2.5" />
@@ -143,7 +143,7 @@ export default function Payments() {
                     <td className="px-4 py-2.5 text-right font-mono">{r.bank_transfer_component ? inrFull(r.bank_transfer_component.total_bt_amount) : "—"}</td>
                     <td className="px-4 py-2.5 text-right font-mono">{r.bank_transfer_component ? inrFull(r.bank_transfer_component.gst_amount) : "—"}</td>
                     <td className="px-4 py-2.5 text-right font-mono">
-                      {r.cash_component === null ? (isCashHidden ? "••••••" : "—") : r.cash_component ? inrFull(r.cash_component.cash_amount) : "—"}
+                      {r.other_component === null ? (isOtherHidden ? "••••••" : "—") : r.other_component ? inrFull(r.other_component.other_amount) : "—"}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono font-semibold">{inrFull(r.total_collected)}</td>
                     <td className="px-4 py-2.5">
@@ -159,7 +159,7 @@ export default function Payments() {
               </tbody>
             </table>
             {!loading && visible.length === 0 && (
-              <EmptyState icon={Receipt} title="No payments recorded" hint="Record a split cash/bank-transfer payment to get started." />
+              <EmptyState icon={Receipt} title="No payments recorded" hint="Record a split Other/bank-transfer payment to get started." />
             )}
           </div>
         </div>
@@ -193,10 +193,10 @@ export default function Payments() {
                     className="w-full px-2 py-1.5 rounded-lg border border-[var(--border)] text-sm" />
                 </div>
                 <div className="border border-[var(--border)] rounded-xl p-3">
-                  <div className="text-xs font-semibold text-[var(--ink-2)] mb-2">Cash Portion</div>
-                  <label htmlFor="pay-cash" className="text-[10px] uppercase text-[var(--ink-3)] block mb-1">Cash Amount</label>
-                  <input id="pay-cash" type="number" min="0" value={form.cash_amount} onChange={(e) => setForm({ ...form, cash_amount: e.target.value })}
-                    className="w-full px-2 py-1.5 rounded-lg border border-[var(--border)] text-sm mb-2" data-testid="pay-cash" />
+                  <div className="text-xs font-semibold text-[var(--ink-2)] mb-2">Other (Direct Settlement)</div>
+                  <label htmlFor="pay-other" className="text-[10px] uppercase text-[var(--ink-3)] block mb-1">Other Amount</label>
+                  <input id="pay-other" type="number" min="0" value={form.other_amount} onChange={(e) => setForm({ ...form, other_amount: e.target.value })}
+                    className="w-full px-2 py-1.5 rounded-lg border border-[var(--border)] text-sm mb-2" data-testid="pay-other" />
                   <label htmlFor="pay-wallet" className="text-[10px] uppercase text-[var(--ink-3)] block mb-1">Credit to Wallet (optional)</label>
                   <input id="pay-wallet" value={form.wallet_id} onChange={(e) => setForm({ ...form, wallet_id: e.target.value })}
                     placeholder="Cashbook wallet id"
@@ -208,7 +208,7 @@ export default function Payments() {
                 <div className="flex justify-between"><span className="text-[var(--ink-3)]">Taxable Value</span><span className="font-mono">{inrFull(taxable)}</span></div>
                 <div className="flex justify-between"><span className="text-[var(--ink-3)]">GST ({rate}%)</span><span className="font-mono">{inrFull(gstAmount)}</span></div>
                 <div className="flex justify-between"><span className="text-[var(--ink-3)]">Bank Transfer Total</span><span className="font-mono">{inrFull(btTotal)}</span></div>
-                <div className="flex justify-between"><span className="text-[var(--ink-3)]">Cash Total</span><span className="font-mono">{inrFull(cashAmount)}</span></div>
+                <div className="flex justify-between"><span className="text-[var(--ink-3)]">Other Total</span><span className="font-mono">{inrFull(otherAmount)}</span></div>
                 <div className="flex justify-between font-semibold pt-1 border-t border-[var(--border-light)]"><span>Grand Total</span><span className="font-mono">{inrFull(grandTotal)}</span></div>
               </div>
             </div>

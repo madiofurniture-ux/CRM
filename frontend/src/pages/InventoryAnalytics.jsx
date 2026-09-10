@@ -41,21 +41,21 @@ export default function InventoryAnalytics() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="font-heading font-semibold text-[var(--ink)] mb-4">By Category</div>
             <Bar items={data?.by_category || []} color="#C85A32" />
           </div>
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="font-heading font-semibold text-[var(--ink)] mb-4">By Vendor</div>
             <Bar items={data?.by_vendor || []} color="#4A5D4E" />
           </div>
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="font-heading font-semibold text-[var(--ink)] mb-4">By Location</div>
             <Bar items={data?.by_location || []} color="#D48B30" />
           </div>
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5" data-testid="inventory-aging">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5" data-testid="inventory-aging">
           <div className="font-heading font-semibold text-[var(--ink)] mb-4">Stock Aging — Days In Stock</div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {(data?.aging || []).map((b) => (
@@ -68,7 +68,7 @@ export default function InventoryAnalytics() {
           </div>
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
           <div className="p-5 border-b border-[var(--border-light)]">
             <div className="font-heading font-semibold text-[var(--ink)]">Top 10 Items by Value</div>
           </div>

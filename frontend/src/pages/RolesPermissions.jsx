@@ -82,7 +82,7 @@ export default function RolesPermissions() {
     <>
       <Topbar title="Roles & Permissions" subtitle="Module access, per role" />
       <div className="p-6 grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6" data-testid="roles-permissions-page">
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-3 space-y-1 h-fit">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-3 space-y-1 h-fit">
           {roles.map((r) => (
             <button key={r.id} onClick={() => select(r)}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm flex items-center justify-between group ${selectedId === r.id ? "bg-[var(--brand-soft)] text-[var(--brand)] font-semibold" : "hover:bg-[var(--surface-hover)]"}`}
@@ -98,7 +98,7 @@ export default function RolesPermissions() {
         </div>
 
         {selectedId && (
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="mb-4">
               <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Role Name</label>
               <input value={name} onChange={(e) => setName(e.target.value)} className="px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)] w-64" />

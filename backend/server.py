@@ -52,7 +52,7 @@ from models import (
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
     TeamCreate, Team, RoleCreate, Role,
     SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
-    SplitPaymentCreate, PrivacyPinSet, PrivacyPinVerify,
+    SplitPaymentCreate, PrivacyPinSet, PrivacyPinVerify, normalize_settlement,
     ProjectDailyLogCreate,
     TenantBusinessProfile, TenantBusinessProfileUpdate,
 )
@@ -3461,8 +3461,8 @@ async def delete_payment(item_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
-# ------- Finance: split cash/bank-transfer payments with GST, and the
-# privacy PIN that guards unmasking cash figures. Separate collection
+# ------- Finance: split Other/bank-transfer payments with GST, and the
+# privacy PIN that guards unmasking Other figures. Separate collection
 # (finance_payments) from the flat sale/invoice `payments` ledger above —
 # see models.py's SplitPayment docstring for why. -------
 @api.post("/finance/payments")
@@ -3481,49 +3481,52 @@ async def create_split_payment(payload: SplitPaymentCreate, user: dict = Depends
         bt.update(taxable_amount=taxable, gst_amount=gst_amount, total_bt_amount=bt_total)
         doc["bank_transfer_component"] = bt
 
-    cash = doc.get("cash_component")
-    cash_amount = 0.0
-    if cash:
-        cash_amount = round(lc.money(cash.get("cash_amount")), 2)
-        cash["cash_amount"] = cash_amount
-        doc["cash_component"] = cash
+    other = doc.get("other_component")
+    other_amount = 0.0
+    if other:
+        other_amount = round(lc.money(other.get("other_amount")), 2)
+        other["other_amount"] = other_amount
+        doc["other_component"] = other
 
-    doc["total_collected"] = round(bt_total + cash_amount, 2)
+    doc["total_collected"] = round(bt_total + other_amount, 2)
     tenancy.stamp(doc, "finance_payments", user)
     await db.finance_payments.insert_one(dict(doc))
     doc.pop("_id", None)
 
-    # Cash isn't credited to a wallet unless the caller opts in with a
-    # wallet_id — a payment can be recorded as collected without touching
-    # any project float. Reuses cashbook_top_up's exact CASH_IN + atomic
-    # $inc pattern so the two crediting paths can never drift.
-    wallet_id = cash.get("wallet_id") if cash else None
-    if cash_amount > 0 and wallet_id:
+    # A direct settlement isn't credited to a wallet unless the caller opts
+    # in with a wallet_id — a payment can be recorded as collected without
+    # touching any project float. Reuses cashbook_top_up's exact CASH_IN +
+    # atomic $inc pattern so the two crediting paths can never drift.
+    wallet_id = other.get("wallet_id") if other else None
+    if other_amount > 0 and wallet_id:
         owned = tenancy.scope({"id": wallet_id}, "cashbooks", user)
         book = await db.cashbooks.find_one(owned, {"_id": 0})
         if book and book.get("status") == "ACTIVE":
             entry = {
                 "id": new_id(), "cashbook_id": wallet_id, "type": "CASH_IN",
-                "status": "Approved", "amount": cash_amount,
+                "status": "Approved", "amount": other_amount,
                 "category": "Payment Collection", "created_at": now_iso(),
                 "entry_person": user.get("name", ""),
             }
             tenancy.stamp(entry, "cashbook_entries", user)
             await db.cashbook_entries.insert_one(dict(entry))
-            await db.cashbooks.update_one(owned, {"$inc": {"current_balance": cash_amount}})
+            await db.cashbooks.update_one(owned, {"$inc": {"current_balance": other_amount}})
     return doc
 
 
 @api.get("/finance/payments")
-async def list_split_payments(mask_cash: bool = True, user: dict = Depends(get_current_user)):
-    """mask_cash=true (default) strips the cash component server-side — never
-    just hidden client-side — so a masked response can never leak real cash
-    figures over the wire regardless of what the frontend does with it."""
+async def list_split_payments(mask_other: bool = True, user: dict = Depends(get_current_user)):
+    """mask_other=true (default) strips the Other / Direct Settlement
+    component server-side — never just hidden client-side — so a masked
+    response can never leak real settlement figures over the wire regardless
+    of what the frontend does with it. Defaulting to masked also means an
+    older client still sending `mask_cash` fails closed, not open."""
     rows = await db.finance_payments.find(
         tenancy.scope({}, "finance_payments", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
-    if mask_cash:
+    rows = [normalize_settlement(r) for r in rows]
+    if mask_other:
         for r in rows:
-            r["cash_component"] = None
+            r["other_component"] = None
     return rows
 
 

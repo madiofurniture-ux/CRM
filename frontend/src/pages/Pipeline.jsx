@@ -4,7 +4,7 @@ import api, { formatApiError } from "@/lib/api";
 import { inr, inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { GripVertical, X, Trash2, Pencil } from "lucide-react";
-import { useBusinessProfile } from "@/context/BusinessProfileContext";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 const STAGE_TINTS = {
@@ -15,6 +15,20 @@ const STAGE_TINTS = {
   Won: "border-t-[var(--moss)]",
   Lost: "border-t-[var(--danger)]",
 };
+
+// Weighted-pipeline probability for a deal sitting at each stage — the
+// standard CRM read on how likely it is to close. A deal that carries its
+// own `probability` (set by the rep) overrides the stage default.
+const STAGE_PROBABILITY = { New: 10, Qualified: 30, Quoted: 50, Negotiation: 70, Won: 100, Lost: 0 };
+
+const dealProbability = (q) =>
+  Number.isFinite(q?.probability) ? q.probability : (STAGE_PROBABILITY[q?.stage] ?? 0);
+
+const probabilityTone = (pct) =>
+  pct >= 70 ? "bg-[var(--moss-soft)] text-[var(--moss)]"
+    : pct >= 40 ? "bg-blue-50 text-blue-700"
+      : pct > 0 ? "bg-[var(--warn-soft)] text-[var(--warn)]"
+        : "bg-[var(--surface-2)] text-[var(--ink-3)]";
 
 const emptyForm = {
   quote_no: "",
@@ -34,7 +48,7 @@ export default function Pipeline() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
-  const { divisions } = useBusinessProfile();
+  const { divisions } = useTenantConfig();
 
   const load = async () => {
     const { data } = await api.get("/quotes");
@@ -180,9 +194,16 @@ export default function Pipeline() {
                         <GripVertical size={14} className="text-[var(--ink-3)] shrink-0 group-hover:opacity-0" />
                       </div>
                       <div className="text-[11px] text-[var(--ink-3)] mb-2 truncate">{q.remarks}</div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold">{q.division}</span>
-                        <span className="font-mono text-xs font-semibold text-[var(--ink)]">{inr(q.value)}</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold truncate">{q.division}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${probabilityTone(dealProbability(q))}`}
+                                title="Probability of closing at this stage"
+                                data-testid={`kanban-probability-${q.id}`}>
+                            {dealProbability(q)}%
+                          </span>
+                          <span className="font-mono text-xs font-semibold text-[var(--ink)]">{inr(q.value)}</span>
+                        </div>
                       </div>
                       <div className="mt-2 pt-2 border-t border-[var(--border-light)] flex items-center justify-between text-[10px] text-[var(--ink-3)]">
                         <span className="font-mono">{q.quote_no}</span>

@@ -145,7 +145,7 @@ export default function DWSurvey() {
             </button>
           </div>
 
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
             <F l="Customer" v={current.customer} oc={(v) => patchSurvey({ customer: v })} />
             <F l="Phone" v={current.phone} oc={(v) => patchSurvey({ phone: v })} />
             <F l="Site address" v={current.site_address} oc={(v) => patchSurvey({ site_address: v })} cls="col-span-2" />
@@ -167,7 +167,7 @@ export default function DWSurvey() {
           </div>
 
           {/* ── Site photos ─────────────────────────────────────────── */}
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
             <div className="flex items-center justify-between mb-3">
               <div>
                 <div className="font-heading font-semibold">Site photos</div>
@@ -213,7 +213,7 @@ export default function DWSurvey() {
             )}
           </div>
 
-          <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+          <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
             <div className="p-4 border-b border-[var(--border-light)] flex items-center justify-between">
               <div className="font-heading font-semibold">Openings</div>
               <button onClick={addOpening} disabled={addingOpening} className="btn-ghost disabled:opacity-60"><Plus size={14} /> {addingOpening ? "Adding…" : "Add opening"}</button>
@@ -300,7 +300,7 @@ export default function DWSurvey() {
     <>
       <Topbar title="D&W Site Surveys" subtitle={`${surveys.length} surveys`} onAdd={newSurvey} addLabel="New Survey" />
       <div className="p-6" data-testid="dwsurvey-page">
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl overflow-hidden">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-[var(--surface-2)]">
               <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">

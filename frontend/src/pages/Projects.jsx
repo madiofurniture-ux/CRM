@@ -7,7 +7,7 @@ import LinkedTasksPanel from "@/components/LinkedTasksPanel";
 import StageProgressBar from "@/components/StageProgressBar";
 import StakeholdersCard from "@/components/StakeholdersCard";
 import ProjectTrackingTab from "@/components/ProjectTrackingTab";
-import { useBusinessProfile } from "@/context/BusinessProfileContext";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 import { projectLifecycleStages } from "@/lib/lifecycle";
 import api from "@/lib/api";
 import { inrFull, fmtDate, marginTone } from "@/lib/format";
@@ -57,7 +57,7 @@ export default function Projects() {
   const [pnlByProject, setPnlByProject] = useState({});
   const [divisionFilter, setDivisionFilter] = useState("All");
   const [divisionPulse, setDivisionPulse] = useState([]);
-  const { divisions } = useBusinessProfile();
+  const { divisions } = useTenantConfig();
 
   const load = async () => {
     try {

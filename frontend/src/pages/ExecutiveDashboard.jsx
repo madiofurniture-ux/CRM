@@ -72,7 +72,7 @@ export default function ExecutiveDashboard() {
             hint="Collected + pending" icon={IndianRupee} testid="kpi-total-revenue" />
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-4">
             <TrendingUp size={16} className="text-[var(--brand)]" />
             <h3 className="font-heading font-semibold text-sm">Pipeline Funnel — Quote Stages</h3>
@@ -94,7 +94,7 @@ export default function ExecutiveDashboard() {
           </div>
         </div>
 
-        <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-5">
+        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-heading font-semibold text-sm">Commission Approval</h3>
             <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)}

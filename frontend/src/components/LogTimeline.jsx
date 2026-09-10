@@ -40,7 +40,7 @@ export default function LogTimeline({ entity, itemId, entries = [], onAppended }
   };
 
   return (
-    <div className="bg-[var(--surface)] border border-[var(--border)] rounded-xl p-4 space-y-3" data-testid="log-timeline">
+    <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-4 space-y-3" data-testid="log-timeline">
       <div className="flex gap-2 items-start flex-wrap">
         <textarea
           value={text} onChange={(e) => setText(e.target.value)}
