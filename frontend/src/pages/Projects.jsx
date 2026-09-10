@@ -8,6 +8,7 @@ import StageProgressBar from "@/components/StageProgressBar";
 import StakeholdersCard from "@/components/StakeholdersCard";
 import ProjectTrackingTab from "@/components/ProjectTrackingTab";
 import { useTenantConfig } from "@/context/TenantConfigContext";
+import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import { projectLifecycleStages } from "@/lib/lifecycle";
 import api from "@/lib/api";
 import { inrFull, fmtDate, marginTone } from "@/lib/format";
@@ -58,6 +59,7 @@ export default function Projects() {
   const [divisionFilter, setDivisionFilter] = useState("All");
   const [divisionPulse, setDivisionPulse] = useState([]);
   const { divisions } = useTenantConfig();
+  const { isOtherHidden } = usePrivacyMode();
 
   const load = async () => {
     try {
@@ -75,10 +77,15 @@ export default function Projects() {
   useEffect(() => {
     load();
     loadDivisionPulse();
-    api.get("/reports/project-pnl")
+  }, []);
+
+  // Margin is masked server-side under Privacy Mode, so this refetches on
+  // unlock/relock instead of holding a stale figure.
+  useEffect(() => {
+    api.get("/reports/project-pnl", { params: { mask_other: isOtherHidden } })
       .then(({ data }) => setPnlByProject(Object.fromEntries(data.projects.map((p) => [p.project_id, p]))))
       .catch(() => setPnlByProject({}));
-  }, []);
+  }, [isOtherHidden]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -336,11 +343,13 @@ export default function Projects() {
                     </div>
                   </div>
                   {pnlByProject[p.id]?.wallet_count > 0 && (() => {
+                    // null = withheld by the server under Privacy Mode, not 0%.
+                    const masked = pnlByProject[p.id].margin_pct == null;
                     const tone = marginTone(pnlByProject[p.id].margin_pct);
                     return (
                       <div className="mb-4">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${tone.bg} ${tone.text}`} data-testid={`project-margin-${p.id}`}>
-                          Margin {pnlByProject[p.id].margin_pct}%
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${masked ? "bg-[var(--surface-2)] text-[var(--ink-3)]" : `${tone.bg} ${tone.text}`}`} data-testid={`project-margin-${p.id}`}>
+                          Margin {masked ? "••••••" : `${pnlByProject[p.id].margin_pct}%`}
                         </span>
                       </div>
                     );
@@ -529,10 +538,11 @@ export default function Projects() {
               <h3 className="font-heading font-semibold text-lg flex items-center gap-2">
                 Follow-ups — {logProject.project_no}
                 {pnlByProject[logProject.id]?.wallet_count > 0 && (() => {
+                  const masked = pnlByProject[logProject.id].margin_pct == null;
                   const tone = marginTone(pnlByProject[logProject.id].margin_pct);
                   return (
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${tone.bg} ${tone.text}`} data-testid={`project-drawer-margin-${logProject.id}`}>
-                      Margin {pnlByProject[logProject.id].margin_pct}%
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${masked ? "bg-[var(--surface-2)] text-[var(--ink-3)]" : `${tone.bg} ${tone.text}`}`} data-testid={`project-drawer-margin-${logProject.id}`}>
+                      Margin {masked ? "••••••" : `${pnlByProject[logProject.id].margin_pct}%`}
                     </span>
                   );
                 })()}

@@ -85,7 +85,13 @@ export default function Payments() {
       r.bank_transfer_component ? `Bank Transfer: Taxable ${inrFull(r.bank_transfer_component.taxable_amount)} + GST ${inrFull(r.bank_transfer_component.gst_amount)} = ${inrFull(r.bank_transfer_component.total_bt_amount)}` : null,
       r.bank_transfer_component?.tax_invoice_number ? `Tax Invoice: ${r.bank_transfer_component.tax_invoice_number}` : null,
       r.other_component ? `Other (Direct Settlement): ${inrFull(r.other_component.other_amount)}` : null,
-      `Total Collected: ${inrFull(r.total_collected)}`,
+      // Masked, the server restates total_collected as bank-transfer only.
+      // Say so on the receipt — an unlabelled smaller total would read as
+      // the full amount collected and understate the payment.
+      isOtherHidden ? `Other (Direct Settlement): masked — unlock to include` : null,
+      isOtherHidden
+        ? `Total Collected (Bank Transfer only): ${inrFull(r.total_collected)}`
+        : `Total Collected: ${inrFull(r.total_collected)}`,
       `Status: ${r.status}`,
     ].filter(Boolean).join("\n");
     const blob = new Blob([lines], { type: "text/plain;charset=utf-8" });
@@ -101,7 +107,14 @@ export default function Payments() {
       <Topbar title="Payments & Tax Invoices" subtitle="Split Other / bank-transfer settlements" onAdd={() => setShow(true)} addLabel="Record Payment" />
       <div className="p-6 space-y-6" data-testid="payments-page">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <KpiCard icon={Receipt} label="Total Collections" value={inrFull(totals.total)} />
+          <KpiCard
+            icon={Receipt}
+            label={isOtherHidden ? "Collections (Bank Transfer only)" : "Total Collections"}
+            value={inrFull(totals.total)}
+            hint={isOtherHidden ? (
+              <>Other excluded — <button onClick={requestUnlock} className="text-blue-600 underline">unlock</button> for the full total</>
+            ) : null}
+          />
           <KpiCard icon={Landmark} label="Bank Transfer (+GST)" value={inrFull(totals.bt)} hint={`GST: ${inrFull(totals.gst)}`} />
           <KpiCard
             icon={Wallet} label="Other Collections"
@@ -130,7 +143,7 @@ export default function Payments() {
                   <th className="text-right font-semibold px-4 py-2.5">Bank Transfer</th>
                   <th className="text-right font-semibold px-4 py-2.5">GST</th>
                   <th className="text-right font-semibold px-4 py-2.5">Other</th>
-                  <th className="text-right font-semibold px-4 py-2.5">Total</th>
+                  <th className="text-right font-semibold px-4 py-2.5">{isOtherHidden ? "Total (BT only)" : "Total"}</th>
                   <th className="text-left font-semibold px-4 py-2.5">Status</th>
                   <th className="px-4 py-2.5" />
                 </tr>

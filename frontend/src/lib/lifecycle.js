@@ -24,7 +24,10 @@ export function leadLifecycleStages(lead) {
 // omit it and those last two steps just show inactive.
 export function projectLifecycleStages(project, pnlRow) {
   const hasWallet = (pnlRow?.wallet_count || 0) > 0;
-  const hasPnl = hasWallet && ((pnlRow?.approved_petty_cash || 0) > 0 || (pnlRow?.approved_incentives || 0) > 0);
+  // `has_approved_spend`, not `approved_petty_cash`: the amount is null in a
+  // masked P&L payload, which would wrongly blank this step out. The boolean
+  // is mask-safe — it says spend exists without saying how much.
+  const hasPnl = hasWallet && (pnlRow?.has_approved_spend || (pnlRow?.approved_incentives || 0) > 0);
   return [
     // A Project's own record doesn't say whether a Visitor started this
     // lineage — approximated as "yes" whenever a Lead is attached, since a

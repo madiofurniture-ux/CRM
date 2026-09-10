@@ -1486,6 +1486,30 @@ def normalize_settlement(doc: dict) -> dict:
     return doc
 
 
+def mask_settlement(doc: dict) -> dict:
+    """Redact the Other / Direct Settlement leg for a masked viewer.
+
+    Nulling `other_component` on its own does NOT hide the figure:
+    `total_collected` is bank-transfer + Other, and the bank-transfer leg
+    stays visible on purpose (it is the invoiceable, official number), so
+    `total_collected - total_bt_amount` hands the hidden amount straight
+    back. Under the mask the total is therefore restated as the
+    bank-transfer-only figure, leaving a zero residual and nothing to
+    subtract.
+
+    It is restated from `total_bt_amount` — the exact field the masked
+    response also exposes — so the two can never disagree by a rounding
+    step. A row with no bank-transfer leg masks down to 0.
+
+    Mutates and returns `doc`. Apply only to masked responses; the
+    unmasked/PIN-unlocked shape must keep the real grand total.
+    """
+    doc["other_component"] = None
+    bt = doc.get("bank_transfer_component") or {}
+    doc["total_collected"] = bt.get("total_bt_amount") or 0
+    return doc
+
+
 class PrivacyPinSet(BaseModel):
     model_config = ConfigDict(extra="ignore")
     pin: str  # 4-digit PIN, hashed with the same bcrypt helper as login PINs

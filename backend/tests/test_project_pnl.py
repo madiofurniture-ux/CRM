@@ -193,3 +193,97 @@ def test_route_returns_summary_and_projects():
         result = await server.project_pnl_report(user=ADMIN)
         assert "summary" in result and "projects" in result
     asyncio.run(run())
+
+
+async def _project_with_approved_spend(amount=15000):
+    await _make_project(id="p1", value=100000)
+    await _make_book(id="b1", project_id="p1", current_balance=20000, imprest_limit=50000)
+    e1 = await server.cashbook_expense("b1", CashbookExpense(amount=amount, category="Materials"), user=ADMIN)
+    await server.cashbook_entry_approve(e1["id"], CashbookEntryApproval(approved=True), user=ADMIN)
+
+
+def test_masked_pnl_leaves_no_arithmetic_path_back_to_the_spend_figure():
+    """Same defect class as the masked payment total: blanking the headline
+    figure is worthless while every sibling metric inverts to it.
+    contract_value - gross_profit, contract_value * margin_pct, and the
+    category breakdown each recover approved_petty_cash exactly.
+    """
+    async def run():
+        await _project_with_approved_spend(15000)
+        result = await server.project_pnl_report(mask_other=True, user=ADMIN)
+        row = result["projects"][0]
+
+        assert row["approved_petty_cash"] is None
+        for leaky in ("gross_profit", "margin_pct", "net_margin"):
+            assert row[leaky] is None, f"{leaky} still inverts to the masked spend"
+        assert row["category_breakdown"] == []   # would have summed to 15000
+        assert row["recent_entries"] == []       # would have itemised it
+        assert "15000" not in str(row)
+
+        # Revenue stays visible and correct — it is not the masked quantity.
+        assert row["contract_value"] == 100000
+    asyncio.run(run())
+
+
+def test_masked_pnl_summary_hides_the_aggregate_and_its_margin():
+    """The aggregate is the same leak one level up: total_contract_revenue
+    is visible, so aggregate_margin_pct would give back total spend."""
+    async def run():
+        await _project_with_approved_spend(15000)
+        summary = (await server.project_pnl_report(mask_other=True, user=ADMIN))["summary"]
+
+        assert summary["total_field_settlement_spend"] is None
+        assert summary["aggregate_margin_pct"] is None
+        assert summary["total_contract_revenue"] == 100000  # not the masked quantity
+    asyncio.run(run())
+
+
+def test_pnl_masking_is_the_default_so_a_client_that_sends_no_flag_fails_closed():
+    async def run():
+        await _project_with_approved_spend(15000)
+        result = await server.project_pnl_report(user=ADMIN)  # no flag at all
+        assert result["projects"][0]["approved_petty_cash"] is None
+        assert result["summary"]["total_field_settlement_spend"] is None
+    asyncio.run(run())
+
+
+def test_unmasked_pnl_still_reports_real_spend_and_margin():
+    """Authorised, PIN-unlocked viewers must keep the true numbers."""
+    async def run():
+        await _project_with_approved_spend(15000)
+        result = await server.project_pnl_report(mask_other=False, user=ADMIN)
+        row = result["projects"][0]
+
+        assert row["approved_petty_cash"] == 15000
+        assert row["gross_profit"] == 85000
+        assert row["margin_pct"] == 85.0
+        assert row["category_breakdown"] == [{"category": "Materials", "amount": 15000}]
+        assert result["summary"]["total_field_settlement_spend"] == 15000
+        assert result["summary"]["aggregate_margin_pct"] == 85.0
+    asyncio.run(run())
+
+
+def test_has_approved_spend_survives_masking_for_the_lifecycle_pipeline():
+    """Projects.jsx marks the P&L lifecycle step done from this flag. It has
+    to keep working under the mask, which is why it is a boolean and not the
+    amount the UI used to test with."""
+    async def run():
+        await _project_with_approved_spend(15000)
+        masked = (await server.project_pnl_report(mask_other=True, user=ADMIN))["projects"][0]
+        assert masked["has_approved_spend"] is True
+        assert masked["approved_petty_cash"] is None  # ...without exposing how much
+    asyncio.run(run())
+
+
+def test_masked_csv_export_cannot_be_used_to_bypass_the_on_screen_mask():
+    async def run():
+        await _project_with_approved_spend(15000)
+        masked = "".join([chunk async for chunk in
+                          csv_engine.stream_project_pnl_csv(server.db, ADMIN, True)])
+        assert "15000" not in masked
+        assert "100000" in masked  # revenue column still exported
+
+        unmasked = "".join([chunk async for chunk in
+                            csv_engine.stream_project_pnl_csv(server.db, ADMIN, False)])
+        assert "15000" in unmasked
+    asyncio.run(run())

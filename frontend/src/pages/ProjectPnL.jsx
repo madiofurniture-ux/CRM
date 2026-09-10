@@ -23,13 +23,19 @@ export default function ProjectPnL() {
   const [divisionFilter, setDivisionFilter] = useState("All");
   const { divisions } = useTenantConfig();
 
+  // Spend figures are masked server-side now, so the payload itself changes
+  // with privacy mode — refetch on unlock/relock rather than re-rendering
+  // stale numbers.
   useEffect(() => {
     setLoading(true);
-    api.get("/reports/project-pnl").then(({ data }) => setData(data)).finally(() => setLoading(false));
-  }, []);
+    api.get("/reports/project-pnl", { params: { mask_other: isOtherHidden } })
+      .then(({ data }) => setData(data)).finally(() => setLoading(false));
+  }, [isOtherHidden]);
 
   const exportCsv = async () => {
-    const { data } = await api.get("/reports/project-pnl/export.csv", { skipCache: true, responseType: "blob" });
+    const { data } = await api.get("/reports/project-pnl/export.csv", {
+      skipCache: true, responseType: "blob", params: { mask_other: isOtherHidden },
+    });
     const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -62,8 +68,10 @@ export default function ProjectPnL() {
           <KpiCard label="Total Field Settlement Spend" value={isOtherHidden ? "••••••" : inr(summary?.total_field_settlement_spend)}
             hint={isOtherHidden ? <button onClick={requestUnlock} className="text-blue-600 underline">Unlock</button> : `${activeCount} with an active wallet`}
             accent="danger" icon={Wallet} testid="pnl-kpi-spent" />
-          <KpiCard label="Aggregate Gross Margin" value={`${summary?.aggregate_margin_pct ?? 0}%`}
-            hint="Revenue minus approved spend"
+          {/* Masked too: revenue is visible, so a margin % would give the
+              hidden spend straight back. */}
+          <KpiCard label="Aggregate Gross Margin" value={isOtherHidden ? "••••••" : `${summary?.aggregate_margin_pct ?? 0}%`}
+            hint={isOtherHidden ? <button onClick={requestUnlock} className="text-blue-600 underline">Unlock</button> : "Revenue minus approved spend"}
             accent="moss" icon={TrendingUp} testid="pnl-kpi-margin" />
           <KpiCard label="Pending Expense Exposure" value={inr(summary?.pending_exposure)}
             hint={`Unapproved: ${inrFull(summary?.pending_exposure)} pending review`}
@@ -119,7 +127,9 @@ export default function ProjectPnL() {
                   const isOpen = expanded === p.project_id;
                   const firstWallet = p.wallet_ids?.[0];
                   const totalCategorySpend = p.category_breakdown.reduce((a, c) => a + c.amount, 0) || 1;
-                  const burnPct = p.imprest_limit_total > 0
+                  // Burn % is spend/limit — with the limit visible it would
+                  // reconstruct the masked spend, so it goes under the mask too.
+                  const burnPct = !isOtherHidden && p.imprest_limit_total > 0
                     ? Math.min(100, Math.round((p.approved_petty_cash / p.imprest_limit_total) * 100)) : null;
                   return (
                     <>
@@ -135,10 +145,13 @@ export default function ProjectPnL() {
                           {inrFull(p.approved_incentives + p.pending_incentives)}
                           {p.pending_incentives > 0 && <div className="text-[10px] text-[var(--warn,#B45309)]">{inrFull(p.pending_incentives)} pending</div>}
                         </td>
-                        <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(p.gross_profit)}</td>
+                        <td className="px-4 py-3 text-right font-mono font-semibold">{isOtherHidden ? "••••••" : inrFull(p.gross_profit)}</td>
                         <td className="px-4 py-3 text-center">
-                          <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${tone.bg} ${tone.text}`} data-testid={`pnl-margin-${p.project_id}`}>
-                            {p.margin_pct}%
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${isOtherHidden ? "bg-[var(--surface-2)] text-[var(--ink-3)]" : `${tone.bg} ${tone.text}`}`}
+                            data-testid={`pnl-margin-${p.project_id}`}
+                          >
+                            {isOtherHidden ? "••••••" : `${p.margin_pct}%`}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right font-mono">{inrFull(p.float_balance)}</td>
@@ -162,7 +175,12 @@ export default function ProjectPnL() {
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                               <div>
                                 <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-2">Cashbook Spend</div>
-                                {p.category_breakdown.length === 0 ? (
+                                {isOtherHidden ? (
+                                  <div className="text-xs text-[var(--ink-3)]">
+                                    Spend detail hidden in Privacy Mode.{" "}
+                                    <button onClick={requestUnlock} className="text-blue-600 underline">Unlock</button>
+                                  </div>
+                                ) : p.category_breakdown.length === 0 ? (
                                   <div className="text-xs text-[var(--ink-3)]">No approved expenses yet.</div>
                                 ) : (
                                   <div className="space-y-2 mb-3">

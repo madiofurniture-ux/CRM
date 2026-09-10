@@ -52,7 +52,7 @@ from models import (
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
     TeamCreate, Team, RoleCreate, Role,
     SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
-    SplitPaymentCreate, PrivacyPinSet, PrivacyPinVerify, normalize_settlement,
+    SplitPaymentCreate, PrivacyPinSet, PrivacyPinVerify, normalize_settlement, mask_settlement,
     ProjectDailyLogCreate,
     TenantBusinessProfile, TenantBusinessProfileUpdate,
 )
@@ -1930,16 +1930,24 @@ async def cashbook_entries_export(user: dict = Depends(get_current_user)):
 
 
 @api.get("/reports/project-pnl")
-async def project_pnl_report(user: dict = Depends(get_current_user)):
+async def project_pnl_report(mask_other: bool = True, user: dict = Depends(get_current_user)):
+    """mask_other=true (default) redacts field-settlement spend server-side.
+
+    Privacy mode used to blur these figures in the browser only, which meant
+    the real numbers were still on the wire — and even on screen the masked
+    spend was recoverable as contract_value - gross_profit. mask_pnl takes
+    the whole derived family so there is nothing left to invert. Defaults
+    to masked so an older client that sends no flag fails closed."""
     await _require_permission("cashbook", "view", user)
-    return await csv_engine.compute_project_pnl(db, user)
+    pnl = await csv_engine.compute_project_pnl(db, user)
+    return csv_engine.mask_pnl(pnl) if mask_other else pnl
 
 
 @api.get("/reports/project-pnl/export.csv")
-async def project_pnl_export(user: dict = Depends(get_current_user)):
+async def project_pnl_export(mask_other: bool = True, user: dict = Depends(get_current_user)):
     await _require_permission("cashbook", "export", user)
     return StreamingResponse(
-        csv_engine.stream_project_pnl_csv(db, user),
+        csv_engine.stream_project_pnl_csv(db, user, mask_other),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="project_pnl_{lc.today_iso()}.csv"'},
     )
@@ -3536,13 +3544,17 @@ async def list_split_payments(mask_other: bool = True, user: dict = Depends(get_
     component server-side — never just hidden client-side — so a masked
     response can never leak real settlement figures over the wire regardless
     of what the frontend does with it. Defaulting to masked also means an
-    older client still sending `mask_cash` fails closed, not open."""
+    older client still sending `mask_cash` fails closed, not open.
+
+    Masking also restates `total_collected` to the bank-transfer-only
+    figure (see mask_settlement): leaving the true grand total in place
+    would let any masked viewer recover the hidden Other amount by
+    subtracting the still-visible bank-transfer leg from it."""
     rows = await db.finance_payments.find(
         tenancy.scope({}, "finance_payments", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
     rows = [normalize_settlement(r) for r in rows]
     if mask_other:
-        for r in rows:
-            r["other_component"] = None
+        rows = [mask_settlement(r) for r in rows]
     return rows
 
 

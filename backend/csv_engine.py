@@ -219,6 +219,10 @@ async def compute_project_pnl(db, user: dict) -> dict:
             "contract_value": revenue, "approved_petty_cash": approved,
             "gross_profit": gross_profit, "margin_pct": margin_pct,
             "net_margin": net_margin,
+            # Survives masking: the lifecycle pipeline only needs to know
+            # whether spend exists, not how much, so it stays usable in a
+            # masked view without exposing the figure itself.
+            "has_approved_spend": approved > 0,
             "approved_incentives": approved_incentives, "pending_incentives": pending_incentives,
             "float_balance": float_balance, "pending_petty_cash": pending,
             "wallet_count": len(pbooks), "wallet_ids": [b["id"] for b in pbooks],
@@ -252,8 +256,42 @@ async def compute_project_pnl(db, user: dict) -> dict:
     }
 
 
-async def stream_project_pnl_csv(db, user: dict) -> AsyncGenerator[str, None]:
+def mask_pnl(pnl: dict) -> dict:
+    """Redact field-settlement spend from a P&L payload for a masked viewer.
+
+    Blanking `approved_petty_cash` alone leaks it right back, because every
+    other spend-derived figure in the same payload inverts trivially:
+
+        approved_petty_cash = contract_value - gross_profit
+                            = contract_value * (1 - margin_pct/100)
+                            = contract_value - net_margin - approved_incentives
+                            = sum(category_breakdown amounts)
+
+    and the same holds in aggregate via `aggregate_margin_pct` against
+    `total_contract_revenue`. So the mask has to take the whole derived
+    family, not just the headline field. `recent_entries` goes too: it
+    itemises the very CASH_OUT lines that add up to the figure, and its
+    CASH_IN side carries Other-settlement credits.
+
+    Revenue, pending exposure and incentives are NOT masked — they are
+    separate quantities that do not reconstruct spend on their own.
+
+    Masked-out fields are None rather than 0: a zero would render as a real
+    figure and read as "no spend". Mutates and returns `pnl`.
+    """
+    pnl["summary"].update(total_field_settlement_spend=None, aggregate_margin_pct=None)
+    for row in pnl["projects"]:
+        row.update(approved_petty_cash=None, gross_profit=None, margin_pct=None,
+                   net_margin=None, category_breakdown=[], recent_entries=[])
+    return pnl
+
+
+async def stream_project_pnl_csv(db, user: dict, mask_other: bool = True) -> AsyncGenerator[str, None]:
+    """Masked by default: an export that ignored privacy mode would be a
+    one-click bypass of the on-screen mask."""
     pnl = await compute_project_pnl(db, user)
+    if mask_other:
+        pnl = mask_pnl(pnl)
     header_buf = io.StringIO()
     csv.writer(header_buf).writerow(PROJECT_PNL_FIELDS)
     yield header_buf.getvalue()

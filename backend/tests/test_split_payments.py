@@ -121,6 +121,83 @@ def test_list_payments_masks_other_by_default():
     asyncio.run(run())
 
 
+def test_masked_total_collected_cannot_be_subtracted_back_to_the_other_amount():
+    """The mask has to survive arithmetic, not just hide a field.
+
+    total_collected is bank-transfer + Other and the bank-transfer leg stays
+    visible, so a masked row that kept the true grand total would hand the
+    hidden figure to anyone who could subtract. Masked, the total must BE
+    the bank-transfer figure, leaving a zero residual.
+    """
+    async def run():
+        await server.create_split_payment(SplitPaymentCreate(
+            project_id="p1", payment_mode="SPLIT", receipt_date="2026-01-01",
+            bank_transfer_component=BankTransferComponent(taxable_amount=10000, gst_rate=18.0),
+            other_component=OtherComponent(other_amount=5000),
+        ), user=ADMIN)
+
+        row = (await server.list_split_payments(mask_other=True, user=ADMIN))[0]
+        visible_bt = row["bank_transfer_component"]["total_bt_amount"]
+        assert visible_bt == 11800                      # official figure untouched
+        assert row["total_collected"] == 11800          # restated to bank-transfer only
+        assert row["total_collected"] - visible_bt == 0  # no residual to recover 5000 from
+        assert "5000" not in str(row)
+    asyncio.run(run())
+
+
+def test_masked_other_only_payment_collapses_to_zero_not_the_hidden_amount():
+    """No bank-transfer leg means there is no visible figure at all — the
+    masked total must not fall back to the Other amount."""
+    async def run():
+        await server.create_split_payment(SplitPaymentCreate(
+            project_id="p1", payment_mode="OTHER", receipt_date="2026-01-01",
+            other_component=OtherComponent(other_amount=7777),
+        ), user=ADMIN)
+
+        row = (await server.list_split_payments(mask_other=True, user=ADMIN))[0]
+        assert row["bank_transfer_component"] is None
+        assert row["total_collected"] == 0
+        assert "7777" not in str(row)
+    asyncio.run(run())
+
+
+def test_unmasked_total_collected_is_still_the_real_grand_total():
+    """The fix is purely about what the mask reveals — an authorised viewer
+    must still get the true total, Other included."""
+    async def run():
+        await server.create_split_payment(SplitPaymentCreate(
+            project_id="p1", payment_mode="SPLIT", receipt_date="2026-01-01",
+            bank_transfer_component=BankTransferComponent(taxable_amount=10000, gst_rate=18.0),
+            other_component=OtherComponent(other_amount=5000),
+        ), user=ADMIN)
+
+        row = (await server.list_split_payments(mask_other=False, user=ADMIN))[0]
+        assert row["other_component"]["other_amount"] == 5000
+        assert row["total_collected"] == 16800  # 11800 + 5000, unchanged
+        assert row["total_collected"] - row["bank_transfer_component"]["total_bt_amount"] == 5000
+    asyncio.run(run())
+
+
+def test_masking_a_legacy_cash_row_also_restates_its_total():
+    """Pre-rename rows go through normalize_settlement first; the mask must
+    still cover them rather than passing the stored total through."""
+    async def run():
+        await server.db.finance_payments.insert_one(stamp({
+            "id": "legacy1", "created_at": "2025-06-01T00:00:00+00:00",
+            "project_id": "p1", "payment_mode": "CASH", "receipt_date": "2025-06-01",
+            "bank_transfer_component": {"taxable_amount": 1000, "gst_amount": 180,
+                                        "total_bt_amount": 1180},
+            "cash_component": {"cash_amount": 9000, "wallet_id": ""},
+            "total_collected": 10180, "status": "RECORDED"}, "finance_payments", ADMIN))
+
+        row = (await server.list_split_payments(mask_other=True, user=ADMIN))[0]
+        assert row["other_component"] is None
+        assert row["total_collected"] == 1180
+        assert row["total_collected"] - row["bank_transfer_component"]["total_bt_amount"] == 0
+        assert "9000" not in str(row)
+    asyncio.run(run())
+
+
 def test_tenant_isolation_on_split_payments():
     async def run():
         payload = SplitPaymentCreate(project_id="p1", payment_mode="OTHER", receipt_date="2026-01-01",
