@@ -5,7 +5,7 @@ import {
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
   CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
   SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2, HandCoins, LayoutTemplate,
-  Landmark,
+  Landmark, ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -71,6 +71,7 @@ const SECTIONS = [
       { id: "roles-permissions", to: "/admin/roles-permissions", label: "Roles & Permissions", icon: Lock, adminOnly: true },
       { id: "roles", to: "/admin/roles", label: "Users", icon: Users, adminOnly: true },
       { id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database, adminOnly: true },
+      { id: "data-health", to: "/admin/data-health", label: "Data Health", icon: ShieldCheck, adminOnly: true },
       { id: "financial-year", to: "/admin/financial-year", label: "Financial Year", icon: CalendarRange, adminOnly: true },
       { id: "workflows", to: "/admin/workflows", label: "Workflows", icon: Workflow, adminOnly: true },
       { id: "business", to: "/admin/business", label: "Business Settings", icon: Settings, adminOnly: true },

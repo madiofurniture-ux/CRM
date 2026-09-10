@@ -948,3 +948,45 @@ def bucket_followups(quotes: Iterable[dict], today: Optional[date] = None) -> di
     for b in out:
         out[b].sort(key=lambda q: q.get("next_follow_up") or "")
     return out
+
+
+# ---------------------------------------------------------- data health audit
+DATA_HEALTH_EPS = 0.01
+KNOWN_LEAD_STAGES = {"New", "Contacted", "Qualified", "Quoted", "Won", "Lost"}
+
+
+def _health_check(group: str, name: str, offenders: list) -> dict:
+    return {
+        "group": group,
+        "name": name,
+        "status": "failed" if offenders else "passed",
+        "message": f"{len(offenders)} affected: {', '.join(str(o) for o in offenders[:5])}" if offenders else "",
+    }
+
+
+def data_health_checks(*, inventory: Iterable[dict], invoices: Iterable[dict],
+                        sales: Iterable[dict], leads: Iterable[dict]) -> list[dict]:
+    """Runtime business-invariant audit: flags data that violates core rules
+    (negative stock, mismatched invoice math, overpaid sales, unknown funnel
+    stages) so it surfaces to an admin instead of as a support ticket."""
+    inventory, invoices, sales, leads = list(inventory), list(invoices), list(sales), list(leads)
+
+    return [
+        _health_check("Inventory", "Stock quantity never negative",
+                      [i.get("sku") for i in inventory if (i.get("qty") or 0) < 0]),
+        _health_check("Invoices", "Balance equals total minus paid",
+                      [i.get("invoice_no") for i in invoices
+                       if abs((i.get("total") or 0) - (i.get("paid") or 0) - (i.get("balance") or 0)) > DATA_HEALTH_EPS]),
+        _health_check("Invoices", "Total equals subtotal minus discount plus tax",
+                      [i.get("invoice_no") for i in invoices
+                       if abs((i.get("subtotal") or 0) - (i.get("discount_total") or 0)
+                              + (i.get("cgst") or 0) + (i.get("sgst") or 0) + (i.get("igst") or 0)
+                              - (i.get("total") or 0)) > DATA_HEALTH_EPS]),
+        _health_check("Sales", "Balance equals value minus paid",
+                      [s.get("sale_no") for s in sales
+                       if abs((s.get("value") or 0) - (s.get("paid") or 0) - (s.get("balance") or 0)) > DATA_HEALTH_EPS]),
+        _health_check("Sales", "Paid never exceeds sale value",
+                      [s.get("sale_no") for s in sales if (s.get("paid") or 0) > (s.get("value") or 0) + DATA_HEALTH_EPS]),
+        _health_check("Leads", "Stage is a known funnel value",
+                      [l.get("name") for l in leads if l.get("stage") not in KNOWN_LEAD_STAGES]),
+    ]

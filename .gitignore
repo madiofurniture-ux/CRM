@@ -4,6 +4,9 @@
 .idea/
 .vscode/
 
+# Temporary external reference clones (audit-only, never committed)
+.external_refs/
+
 # Dependencies
 node_modules/
 /node_modules

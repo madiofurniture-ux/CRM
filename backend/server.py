@@ -2265,6 +2265,22 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
     }
 
 
+@api.get("/reports/data-health")
+async def data_health_report(user: dict = Depends(get_current_user)):
+    inventory, invoices, sales, leads = await asyncio.gather(
+        db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000),
+        db.invoices.find(tenancy.scope({}, "invoices", user), {"_id": 0}).to_list(5000),
+        db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
+        db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000),
+    )
+    results = lc.data_health_checks(inventory=inventory, invoices=invoices, sales=sales, leads=leads)
+    return {
+        "results": results,
+        "passed": sum(1 for r in results if r["status"] == "passed"),
+        "failed": sum(1 for r in results if r["status"] == "failed"),
+    }
+
+
 @api.get("/analytics/inventory")
 async def inventory_analytics(user: dict = Depends(get_current_user)):
     items = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)

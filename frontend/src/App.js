@@ -46,6 +46,7 @@ const QuoteWorkspace = lazy(() => import("@/pages/QuoteWorkspace"));
 const QuoteBuilder = lazy(() => import("@/pages/QuoteBuilder"));
 const StockLedger = lazy(() => import("@/pages/StockLedger"));
 const DataCentre = lazy(() => import("@/pages/DataCentre"));
+const DataHealth = lazy(() => import("@/pages/DataHealth"));
 const FinancialYear = lazy(() => import("@/pages/FinancialYear"));
 const Workflows = lazy(() => import("@/pages/Workflows"));
 const BusinessSettings = lazy(() => import("@/pages/BusinessSettings"));
@@ -120,6 +121,7 @@ function App() {
           <Route path="/quotes/builder/:id" element={<ProtectedRoute page="quote-builder"><Layout><QuoteBuilder /></Layout></ProtectedRoute>} />
           <Route path="/stock-ledger" element={<ProtectedRoute page="stock-ledger"><Layout><StockLedger /></Layout></ProtectedRoute>} />
           <Route path="/data-centre" element={<ProtectedRoute page="data-centre"><Layout><DataCentre /></Layout></ProtectedRoute>} />
+          <Route path="/admin/data-health" element={<ProtectedRoute page="data-health"><Layout><DataHealth /></Layout></ProtectedRoute>} />
           <Route path="/admin/financial-year" element={<ProtectedRoute page="financial-year"><Layout><FinancialYear /></Layout></ProtectedRoute>} />
           <Route path="/admin/workflows" element={<ProtectedRoute page="workflows"><Layout><Workflows /></Layout></ProtectedRoute>} />
           <Route path="/admin/business" element={<ProtectedRoute page="business"><Layout><BusinessSettings /></Layout></ProtectedRoute>} />
