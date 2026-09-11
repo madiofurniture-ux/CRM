@@ -175,8 +175,17 @@ export default function Leads() {
       setSaving(false);
     }
   };
+  // Sends ONLY the stage — never `{...l, stage}`. `l` is a read-shaped snapshot
+  // from the last GET /leads, so resending it whole re-writes every other field
+  // from that snapshot: any edit landed since (a rename from this modal, another
+  // rep's edit, a value/assignment change) is silently reverted, and the
+  // remarks_history that _lead_out synthesizes from a legacy `remarks` string
+  // gets materialized with the acting user forged in as its author. PUT /leads
+  // is a partial update ($set on exactly the keys sent — see
+  // validate_partial_update, which only validates fields the caller changed),
+  // so one key is the correct payload for a one-field edit.
   const updateStage = async (l, stage) => {
-    await api.put(`/leads/${l.id}`, { ...l, stage });
+    await api.put(`/leads/${l.id}`, { stage });
     setRows((p) => p.map((x) => x.id === l.id ? { ...x, stage } : x));
   };
   const remove = async (id) => { if (!window.confirm("Delete?")) return; await api.delete(`/leads/${id}`); load(); };

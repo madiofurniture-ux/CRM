@@ -12,7 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from models import ArchitectCreate, LeadCreate, normalize_remarks_history
-from server import _shape_remark_history, normalize_architect, normalize_lead
+from server import (_shape_remark_history, normalize_architect, normalize_lead,
+                    validate_partial_update)
 
 
 USER = {"id": "u1", "name": "Priya Nair"}
@@ -138,3 +139,53 @@ def test_existing_team_id_still_round_trips():
     # so a lead that already carries one must keep it.
     lead = LeadCreate(**{**LEAD, "team_id": "T-7"}).model_dump()
     assert lead["team_id"] == "T-7"
+
+
+# ---------- 6. a lead's name survives a one-field edit from the list ----------
+#
+# The Leads list' stage dropdown used to PUT the whole row it was rendering
+# (`{...l, stage}`). That row is a read-shaped snapshot from the last
+# GET /leads, so it re-wrote `name` — and every other field — from that
+# snapshot. A rename that landed after the list was fetched (from this modal
+# in another tab, or another rep's edit) was silently reverted the next time
+# anyone touched that row's stage: the report was "the name change doesn't
+# stick / comes back old on reload". The page now sends only the field it is
+# changing; these lock in the PUT-merge semantics that relies on.
+
+STORED = {**LEAD, "id": "L1", "created_at": "2026-01-01T00:00:00",
+          "name": "Renamed Person", "value": 40000, "assigned_to": "Arun"}
+
+
+def test_stage_only_update_does_not_touch_the_name():
+    # What the list's stage dropdown sends now.
+    written = validate_partial_update(LeadCreate, STORED, {"stage": "Contacted"})
+    assert written == {"stage": "Contacted"}
+    assert "name" not in written   # $set can't revert a name it never mentions
+
+
+def test_resending_a_stale_whole_row_is_what_reverted_the_name():
+    # The old behaviour, kept as an explicit record of the defect: a snapshot
+    # taken before the rename puts the OLD name straight back into the $set.
+    stale_snapshot = {**STORED, "name": "Old Name"}
+    written = validate_partial_update(LeadCreate, STORED, {**stale_snapshot, "stage": "Contacted"})
+    assert written["name"] == "Old Name"
+
+
+def test_renaming_a_lead_persists_the_new_name():
+    written = validate_partial_update(LeadCreate, STORED, {**STORED, "name": "Corrected Name"})
+    assert written["name"] == "Corrected Name"
+
+
+def test_one_field_edits_still_work_on_a_legacy_row_that_fails_full_validation():
+    # Leads created by /convert/visitor-to-lead carry no `reference`, which
+    # LeadCreate requires. A stage-only edit must not be blocked by a field
+    # the caller never touched — and must still not drag the name along.
+    legacy = {k: v for k, v in STORED.items() if k != "reference"}
+    written = validate_partial_update(LeadCreate, legacy, {"stage": "Qualified"})
+    assert written == {"stage": "Qualified"}
+
+
+def test_renaming_a_legacy_row_still_persists_the_name():
+    legacy = {k: v for k, v in STORED.items() if k != "reference"}
+    written = validate_partial_update(LeadCreate, legacy, {"name": "Fixed Name"})
+    assert written["name"] == "Fixed Name"
