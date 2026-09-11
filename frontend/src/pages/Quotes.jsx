@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
@@ -13,8 +14,8 @@ export default function Quotes() {
   const [rows, setRows] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [search, setSearch] = useState("");
-  const [fDiv, setFDiv] = useState("All");
-  const [fStage, setFStage] = useState("All");
+  const [fDiv, setFDiv] = usePersistedState("quotes.division", "All");
+  const [fStage, setFStage] = usePersistedState("quotes.stage", "All");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);

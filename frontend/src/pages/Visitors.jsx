@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import SearchSelect from "@/components/SearchSelect";
 import RemarksEditor, { toRemarksArray } from "@/components/RemarksEditor";
@@ -18,19 +19,41 @@ export default function Visitors() {
   const [architects, setArchitects] = useState([]);
   const [staff, setStaff] = useState([]);
   const [search, setSearch] = useState("");
-  const [fStage, setFStage] = useState("All");
+  const [fStage, setFStage] = usePersistedState("visitors.stage", "All");
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [leadByVisitor, setLeadByVisitor] = useState({});
   const [leadsByPhone, setLeadsByPhone] = useState({});
   const [converting, setConverting] = useState(null);
+  // Inline architect creation, same pattern the Lead modal uses: the sub-form
+  // lives inside this modal so creating one never discards the half-filled
+  // visitor form around it. null = not creating.
+  const [archDraft, setArchDraft] = useState(null);
+  const [savingArch, setSavingArch] = useState(false);
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", customer_type: "Male", location: "",
     reference: "", reference_id: "", phone: "", requirement: "",
     attend_person: "", attend_person_id: "", remarks: [], status: "New", stage: "New", ticket_value: 0,
   };
   const [form, setForm] = useState(empty);
+
+  const saveArchitect = async () => {
+    const name = (archDraft?.name || "").trim();
+    if (!name) { toast.error("Architect name is required"); return; }
+    setSavingArch(true);
+    try {
+      const { data } = await api.post("/architects", {
+        name, phone: archDraft.phone || "", firm: archDraft.firm || "", type: "Architect",
+      });
+      setArchitects((a) => [data, ...a]);
+      setForm((f) => ({ ...f, reference_id: data.id, reference: data.name || "" }));
+      setArchDraft(null);
+      toast.success("Architect created");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail?.toString?.() || "Could not create architect");
+    } finally { setSavingArch(false); }
+  };
 
   const load = async () => {
     const { data } = await api.get("/visitors");
@@ -240,10 +263,28 @@ export default function Visitors() {
                   options={architectOptions}
                   value={form.reference_id}
                   onChange={(id, opt) => setForm({ ...form, reference_id: id, reference: opt ? opt.name : "" })}
-                  placeholder="Search architect by name, firm…"
-                  emptyLabel="No architects found — add one on the Architects page"
+                  placeholder="Search architect by name, firm or phone…"
+                  emptyLabel="No architects found"
                   testId="vf-ref"
+                  createLabel="Architect"
+                  onCreate={(term) => setArchDraft({ name: term, phone: "", firm: "" })}
                 />
+                {archDraft && (
+                  <div className="mt-2 p-3 rounded-lg border border-[var(--brand)] bg-[var(--brand-soft)]/30 space-y-2">
+                    <div className="grid grid-cols-3 gap-2">
+                      <VFld l="Name" v={archDraft.name} oc={(v) => setArchDraft({ ...archDraft, name: v })} testId="vf-arch-name" autoFocus />
+                      <VFld l="Phone" v={archDraft.phone} oc={(v) => setArchDraft({ ...archDraft, phone: v })} testId="vf-arch-phone" />
+                      <VFld l="Firm" v={archDraft.firm} oc={(v) => setArchDraft({ ...archDraft, firm: v })} testId="vf-arch-firm" />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button type="button" className="btn-ghost text-xs" onClick={() => setArchDraft(null)}>Cancel</button>
+                      <button type="button" className="btn-primary text-xs disabled:opacity-60"
+                        onClick={saveArchitect} disabled={savingArch} data-testid="vf-arch-save">
+                        {savingArch ? "Saving…" : "Create architect"}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {!form.reference_id && form.reference && (
                   <div className="text-[11px] text-[var(--ink-3)] mt-1">Currently: {form.reference} (unlinked — pick from the list to link)</div>
                 )}
@@ -288,6 +329,18 @@ export default function Visitors() {
         </div>
       )}
     </>
+  );
+}
+
+function VFld({ l, v, oc, testId, autoFocus = false }) {
+  return (
+    <div>
+      <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">{l}</label>
+      <input
+        value={v} autoFocus={autoFocus} onChange={(e) => oc(e.target.value)} data-testid={testId}
+        className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]"
+      />
+    </div>
   );
 }
 

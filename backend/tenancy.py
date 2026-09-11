@@ -48,7 +48,7 @@ TENANT_COLLECTIONS = {
     "requirements", "product_configs", "teams", "roles", "audit_log", "notification_logs",
     "cashbooks", "cashbook_entries", "agent_tasks", "agent_conversations",
     "record_contacts", "saved_views", "custom_field_defs", "finance_payments",
-    "project_daily_logs", "business_profiles",
+    "project_daily_logs", "business_profiles", "purchase_orders",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's

@@ -24,6 +24,7 @@ const Leads = lazy(() => import("@/pages/Leads"));
 const Architects = lazy(() => import("@/pages/Architects"));
 const Inventory = lazy(() => import("@/pages/Inventory"));
 const InventoryAnalytics = lazy(() => import("@/pages/InventoryAnalytics"));
+const PurchaseOrders = lazy(() => import("@/pages/PurchaseOrders"));
 const Tasks = lazy(() => import("@/pages/Tasks"));
 const DailyPlanner = lazy(() => import("@/pages/DailyPlanner"));
 const Projects = lazy(() => import("@/pages/Projects"));
@@ -98,6 +99,7 @@ function App() {
           <Route path="/architects" element={<ProtectedRoute page="architects"><Layout><Architects /></Layout></ProtectedRoute>} />
           <Route path="/inventory" element={<ProtectedRoute page="inventory"><Layout><Inventory /></Layout></ProtectedRoute>} />
           <Route path="/inventory/analytics" element={<ProtectedRoute page="inv-analytics"><Layout><InventoryAnalytics /></Layout></ProtectedRoute>} />
+          <Route path="/purchase-orders" element={<ProtectedRoute page="purchase-orders"><Layout><PurchaseOrders /></Layout></ProtectedRoute>} />
           <Route path="/tasks" element={<ProtectedRoute page="tasks"><Layout><Tasks /></Layout></ProtectedRoute>} />
           <Route path="/daily-planner" element={<ProtectedRoute page="daily-planner"><Layout><DailyPlanner /></Layout></ProtectedRoute>} />
           <Route path="/projects" element={<ProtectedRoute page="projects"><Layout><Projects /></Layout></ProtectedRoute>} />

@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import api from "@/lib/api";
+import { starsFromPct } from "@/components/StarRating";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 
@@ -18,7 +19,7 @@ export default function QuoteFollowups() {
   const [data, setData] = useState(null);
   const [tab, setTab] = useState("overdue");
   const [fAssigned, setFAssigned] = useState("All");
-  const [fMinConfidence, setFMinConfidence] = useState("");
+  const [fMinConfidence, setFMinConfidence] = useState("All");
 
   useEffect(() => {
     api.get("/quotes/followups").then((r) => setData(r.data)).catch(() => toast.error("Couldn't load follow-ups"));
@@ -32,7 +33,7 @@ export default function QuoteFollowups() {
 
   const filtered = rows.filter((r) =>
     (fAssigned === "All" || r.assigned_to === fAssigned) &&
-    (fMinConfidence === "" || (r.confidence_level ?? 0) >= parseFloat(fMinConfidence))
+    (fMinConfidence === "All" || starsFromPct(r.confidence_level) >= parseInt(fMinConfidence, 10))
   );
 
   const counts = Object.fromEntries(BUCKETS.map((b) => [b.key, (data?.[b.key] || []).length]));
@@ -55,8 +56,14 @@ export default function QuoteFollowups() {
           <select value={fAssigned} onChange={(e) => setFAssigned(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             {assignees.map((a) => <option key={a}>{a}</option>)}
           </select>
-          <input type="number" placeholder="Min confidence %" value={fMinConfidence} onChange={(e) => setFMinConfidence(e.target.value)}
-            className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm w-40" />
+          <select value={fMinConfidence} onChange={(e) => setFMinConfidence(e.target.value)}
+            aria-label="Minimum confidence"
+            className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm w-44">
+            <option value="All">Any confidence</option>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>{"★".repeat(n)} &amp; up</option>
+            ))}
+          </select>
         </div>
 
         <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
@@ -81,7 +88,11 @@ export default function QuoteFollowups() {
                     <td className="px-4 py-3 text-[var(--ink-2)]">{r.project_no || "—"}</td>
                     <td className="px-4 py-3 font-mono text-xs">{r.quote_no}</td>
                     <td className="px-4 py-3 text-right font-mono">{inrFull(r.value)}</td>
-                    <td className="px-4 py-3">{r.confidence_level != null ? `${r.confidence_level}%` : "—"}</td>
+                    <td className="px-4 py-3" title={r.confidence_level != null ? `${r.confidence_level}%` : ""}>
+                      {starsFromPct(r.confidence_level) > 0
+                        ? <span className="text-[var(--warn)]">{"★".repeat(starsFromPct(r.confidence_level))}</span>
+                        : "—"}
+                    </td>
                     <td className="px-4 py-3 text-[var(--ink-2)]">{r.assigned_to}</td>
                     <td className="px-4 py-3 whitespace-nowrap">{fmtDate(r.next_follow_up)}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)] max-w-[260px]">

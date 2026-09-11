@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import SearchSelect from "@/components/SearchSelect";
@@ -11,6 +12,7 @@ import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
 import CsvImportModal from "@/components/CsvImportModal";
 import RemarksTimeline from "@/components/RemarksTimeline";
+import StarRating from "@/components/StarRating";
 import EmptyState from "@/components/EmptyState";
 import { useAuth } from "@/context/AuthContext";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,7 +43,7 @@ export default function Leads() {
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [fStage, setFStage] = useState("All");
+  const [fStage, setFStage] = usePersistedState("leads.stage", "All");
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -445,7 +447,8 @@ export default function Leads() {
                   <div className="text-[11px] text-[var(--ink-3)] mt-1">Currently: {form.assigned_to} (unlinked — pick from the list to link)</div>
                 )}
               </div>
-              <Fld l="Confidence %" t="number" v={form.confidence_level} oc={(v) => setForm({ ...form, confidence_level: v === "" ? "" : parseFloat(v) || 0 })} />
+              <StarRating label="Confidence" testId="lead-confidence" value={form.confidence_level}
+                onChange={(pct) => setForm({ ...form, confidence_level: pct })} />
               <Fld l="Value" t="number" v={form.value} oc={(v) => setForm({ ...form, value: parseFloat(v) || 0 })} />
               <div className="col-span-2">
                 <RemarksTimeline

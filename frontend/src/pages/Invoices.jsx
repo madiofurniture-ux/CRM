@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
-import { GST_DEFAULT } from "@/lib/constants";
+import { GST_DEFAULT, GST_SLABS } from "@/lib/constants";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { Trash2, Edit2, Printer, X, Plus } from "lucide-react";
@@ -210,7 +210,15 @@ export default function Invoices() {
                           <td className="p-1"><input type="number" value={it.qty} onChange={(e) => setItem(i, "qty", parseFloat(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm text-right font-mono" data-testid={`inv-item-qty-${i}`} /></td>
                           <td className="p-1"><input type="number" value={it.rate} onChange={(e) => setItem(i, "rate", parseFloat(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm text-right font-mono" data-testid={`inv-item-rate-${i}`} /></td>
                           <td className="p-1"><input type="number" value={it.discount_pct} onChange={(e) => setItem(i, "discount_pct", parseFloat(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm text-right font-mono" /></td>
-                          <td className="p-1"><input type="number" value={it.tax_pct} onChange={(e) => setItem(i, "tax_pct", parseFloat(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm text-right font-mono" /></td>
+                          <td className="p-1">
+                            {/* Quick-select slabs rather than a free number box */}
+                            <select value={it.tax_pct} onChange={(e) => setItem(i, "tax_pct", parseFloat(e.target.value))}
+                              aria-label={`GST slab for line ${i + 1}`}
+                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm text-right font-mono">
+                              {GST_SLABS.map((g) => <option key={g} value={g}>{g}%</option>)}
+                              {!GST_SLABS.includes(it.tax_pct) && <option value={it.tax_pct}>{it.tax_pct}%</option>}
+                            </select>
+                          </td>
                           <td className="p-1 text-right font-mono text-sm font-semibold">{inrFull(amt)}</td>
                           <td className="p-1"><button onClick={() => delItem(i)} className="p-1 rounded hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={12} /></button></td>
                         </tr>

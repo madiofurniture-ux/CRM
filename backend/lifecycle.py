@@ -273,6 +273,50 @@ def validate_customer_name(name: str) -> str:
 validate_person_name = validate_customer_name
 
 
+# ---- Confidence: a 1-5 star rating stored as the pre-existing 0-100
+# `confidence_level` percentage, NOT as a new field. The star widget is the
+# only way to set it now, so new writes always land on one of these buckets;
+# the ~arbitrary percentages older rows carry (a free-text 0-100 number input
+# is what the UI used to offer) still have to render, so reads map to the
+# nearest star instead of migrating the data. Same on-read shim approach as
+# normalize_settlement()/normalize_remarks_history().
+CONFIDENCE_STARS = [20.0, 40.0, 60.0, 80.0, 100.0]
+
+
+def confidence_stars(pct: Any) -> int:
+    """0-100 percentage -> 0-5 stars. 0 means "not rated" (None/blank/0), which
+    is why this is `round(pct/20)` and not `ceil`: a stored 10% is genuinely
+    closer to 1 star than to 0, but an unset value must stay 0 stars."""
+    if pct is None or pct == "":
+        return 0
+    try:
+        value = float(pct)
+    except (TypeError, ValueError):
+        return 0
+    if value <= 0:
+        return 0
+    return max(1, min(5, round(value / 20)))
+
+
+def snap_confidence(pct: Any) -> Optional[float]:
+    """Validate a 0-100 confidence and snap it to its nearest star bucket.
+
+    Raises ValueError outside 0-100 — the old free-number input had no range
+    check at all, so a typo'd 1000 could be stored and would then render as a
+    5-star rating with no way to tell it was junk. None/blank stays unset.
+    """
+    if pct is None or pct == "":
+        return None
+    try:
+        value = float(pct)
+    except (TypeError, ValueError):
+        raise ValueError("Confidence must be a number between 0 and 100")
+    if not 0 <= value <= 100:
+        raise ValueError("Confidence must be between 0 and 100")
+    stars = confidence_stars(value)
+    return CONFIDENCE_STARS[stars - 1] if stars else 0.0
+
+
 _FLOOR_RE = re.compile(r"(ground|\d+)\s*(st|nd|rd|th)?\s*floor", re.I)
 
 
@@ -297,6 +341,7 @@ def _next_dated_id(items: Iterable[dict], field: str, tag: str) -> str:
     return f"{prefix}{_max_suffix(items, field, prefix) + 1:03d}"
 
 
+def next_po_no(pos):         return _next_dated_id(pos, "po_no", "PO")
 def next_lead_id(leads):     return _next_dated_id(leads, "lead_id", "LD")
 def next_payment_id(pays):   return _next_dated_id(pays, "payment_id", "PY")
 def next_project_id(projs):  return _next_dated_id(projs, "id", "PM")
@@ -410,6 +455,41 @@ def quote_total(subtotal: float, discount: float, tax_pct: float) -> dict:
     tax = round(taxable * money(tax_pct) / 100, 2)
     return {"subtotal": sub, "discount": round(disc, 2), "tax_total": tax,
             "grand_total": round(taxable + tax, 2), "value": round(taxable, 2)}
+
+
+# --------------------------------------------------------- purchase orders
+# Deliberately NOT quote_total() above: that one applies a single tax_pct to
+# the whole document, which is right for a customer quote but wrong for a PO,
+# where each line carries its own HSN/SAC and therefore its own GST slab (a
+# plywood line at 18% and a hardware line at 28% on one order). Rolling those
+# up with one rate would misstate the tax payable to the vendor.
+def po_line_amount(line: dict) -> float:
+    """Net-of-discount line value, before tax."""
+    gross = money(line.get("qty")) * money(line.get("rate"))
+    return round(gross * (1 - money(line.get("discount_pct")) / 100), 2)
+
+
+def po_totals(lines: Iterable[dict]) -> dict:
+    """Roll PO lines up, taxing each at its own rate. `tax_breakup` is per
+    slab so the PDF can print the GST summary a vendor invoice is matched
+    against."""
+    subtotal = tax_total = 0.0
+    by_slab: dict[float, float] = {}
+    for line in lines or []:
+        amount = po_line_amount(line)
+        rate = money(line.get("tax_pct"))
+        tax = round(amount * rate / 100, 2)
+        subtotal += amount
+        tax_total += tax
+        by_slab[rate] = round(by_slab.get(rate, 0.0) + tax, 2)
+    subtotal = round(subtotal, 2)
+    tax_total = round(tax_total, 2)
+    return {
+        "subtotal": subtotal,
+        "tax_total": tax_total,
+        "grand_total": round(subtotal + tax_total, 2),
+        "tax_breakup": [{"rate": r, "tax": t} for r, t in sorted(by_slab.items())],
+    }
 
 
 # ------------------------------------------------------------- D&W surveys

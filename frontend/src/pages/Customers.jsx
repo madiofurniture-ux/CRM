@@ -1,6 +1,8 @@
 import { useEffect, useState, useMemo } from "react";
+import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import JourneyDrawer from "@/components/JourneyDrawer";
+import StarRating from "@/components/StarRating";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
 import CsvImportModal from "@/components/CsvImportModal";
@@ -27,7 +29,7 @@ export default function Customers() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [fStage, setFStage] = useState("All");
+  const [fStage, setFStage] = usePersistedState("customers.stage", "All");
   const [jny, setJny] = useState(null);
   const [editing, setEditing] = useState(null);   // existing customer being edited, or null
   const [show, setShow] = useState(false);
@@ -71,7 +73,10 @@ export default function Customers() {
     if (!form.phone.trim()) return toast.error("Phone number is required");
     setSaving(true);
     const payload = { ...form,
-      confidence_level: form.confidence_level === "" ? null : parseFloat(form.confidence_level),
+      // StarRating hands back a number or null (never ""), so this must not
+      // parseFloat(null) into a NaN the JSON encoder can't represent.
+      confidence_level: form.confidence_level === "" || form.confidence_level == null
+        ? null : parseFloat(form.confidence_level),
       lat: form.lat === "" ? null : parseFloat(form.lat),
       lng: form.lng === "" ? null : parseFloat(form.lng),
     };
@@ -259,7 +264,8 @@ export default function Customers() {
                   <option value="Other">Other</option>
                 </select>
               </div>
-              <CFld l="Confidence %" t="number" v={form.confidence_level} oc={(v) => setForm({ ...form, confidence_level: v })} />
+              <StarRating label="Confidence" testId="customer-confidence" value={form.confidence_level}
+                onChange={(pct) => setForm({ ...form, confidence_level: pct })} />
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Team</label>
                 <select value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">

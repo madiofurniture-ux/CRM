@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import LogTimeline from "@/components/LogTimeline";
@@ -7,6 +8,7 @@ import LinkedTasksPanel from "@/components/LinkedTasksPanel";
 import StageProgressBar from "@/components/StageProgressBar";
 import StakeholdersCard from "@/components/StakeholdersCard";
 import ProjectTrackingTab from "@/components/ProjectTrackingTab";
+import JourneyDrawer from "@/components/JourneyDrawer";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import { projectLifecycleStages } from "@/lib/lifecycle";
@@ -32,12 +34,17 @@ const NEXT_STAGE_MAP = {
 
 export default function Projects() {
   const [rows, setRows] = useState([]);
-  const [activeStage, setActiveStage] = useState("All");
+  const [activeStage, setActiveStage] = usePersistedState("projects.stage", "All");
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [logProject, setLogProject] = useState(null);
+  // Customer-360 slide-over, keyed on phone — this app joins a customer's
+  // history by phone number, not by a customer_id foreign key (a Project
+  // stores `customer` as a plain display string). Same drawer Customers.jsx
+  // and Alerts.jsx already open.
+  const [jny, setJny] = useState(null);
 
   const emptyForm = {
     project_no: `PRJ-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -56,7 +63,7 @@ export default function Projects() {
   };
   const [form, setForm] = useState(emptyForm);
   const [pnlByProject, setPnlByProject] = useState({});
-  const [divisionFilter, setDivisionFilter] = useState("All");
+  const [divisionFilter, setDivisionFilter] = usePersistedState("projects.division", "All");
   const [divisionPulse, setDivisionPulse] = useState([]);
   const { divisions } = useTenantConfig();
   const { isOtherHidden } = usePrivacyMode();
@@ -305,7 +312,21 @@ export default function Projects() {
                     </div>
                   </div>
 
-                  <h3 className="font-heading font-bold text-base text-[var(--ink)] mb-1">{p.customer}</h3>
+                  {p.phone ? (
+                    <button
+                      type="button"
+                      onClick={() => setJny({ phone: p.phone, name: p.customer })}
+                      className="font-heading font-bold text-base text-[var(--ink)] mb-1 text-left hover:text-[var(--brand)] hover:underline"
+                      title={`Open ${p.customer}'s full history`}
+                      data-testid={`project-customer-${p.id}`}
+                    >
+                      {p.customer}
+                    </button>
+                  ) : (
+                    // No phone means nothing to join the history on, so this
+                    // stays plain text rather than a control that does nothing.
+                    <h3 className="font-heading font-bold text-base text-[var(--ink)] mb-1">{p.customer}</h3>
+                  )}
                   <div className="text-xs text-[var(--ink-2)] mb-3 flex items-center gap-1.5">
                     <span className="font-medium text-[var(--brand)] bg-[var(--brand-light)] px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider">
                       {p.division}
@@ -530,6 +551,8 @@ export default function Projects() {
           </div>
         </div>
       )}
+
+      <JourneyDrawer phone={jny?.phone} name={jny?.name} onClose={() => setJny(null)} />
 
       {logProject && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setLogProject(null)}>

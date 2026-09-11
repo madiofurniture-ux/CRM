@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 import lifecycle as lc
 import tenancy
-from models import LeadCreate, CustomerCreate, new_id, now_iso
+from models import LeadCreate, CustomerCreate, new_id, now_iso, PO_COMMITTED_STATUSES
 
 logger = logging.getLogger("madio")
 
@@ -152,6 +152,11 @@ async def compute_project_pnl(db, user: dict) -> dict:
     books = await db.cashbooks.find(tenancy.scope({}, "cashbooks", user), {"_id": 0}).to_list(5000)
     payouts = await db.commission_payouts.find(
         tenancy.scope({"project_id": {"$ne": ""}}, "commission_payouts", user), {"_id": 0}).to_list(20000)
+    # Material/procurement spend committed against a project. Draft and
+    # Cancelled POs are excluded (see PO_COMMITTED_STATUSES) — a draft is not
+    # yet money the business owes anyone.
+    pos = await db.purchase_orders.find(
+        tenancy.scope({"project_id": {"$ne": ""}}, "purchase_orders", user), {"_id": 0}).to_list(20000)
 
     books_by_project: dict[str, list[dict]] = {}
     for b in books:
@@ -163,6 +168,14 @@ async def compute_project_pnl(db, user: dict) -> dict:
     payouts_by_project: dict[str, list[dict]] = {}
     for pay in payouts:
         payouts_by_project.setdefault(pay.get("project_id", ""), []).append(pay)
+
+    material_by_project: dict[str, float] = {}
+    for po in pos:
+        if po.get("status") not in PO_COMMITTED_STATUSES:
+            continue
+        pid = po.get("project_id") or ""
+        material_by_project[pid] = round(
+            material_by_project.get(pid, 0.0) + (po.get("grand_total") or 0), 2)
 
     book_ids = [b["id"] for b in books if b.get("project_id")]
     entries = []
@@ -204,7 +217,11 @@ async def compute_project_pnl(db, user: dict) -> dict:
         ppayouts = payouts_by_project.get(pid, [])
         approved_incentives = sum(pay["commission_amount"] for pay in ppayouts if pay.get("status") in ("Approved", "Paid"))
         pending_incentives = sum(pay["commission_amount"] for pay in ppayouts if pay.get("status") == "Earned")
-        net_margin = revenue - approved - approved_incentives
+        # Realized margin at closure: contract revenue, less committed
+        # material/PO cost, less approved float (petty cash) debits, less
+        # accrued incentives.
+        material_cost = material_by_project.get(pid, 0.0)
+        net_margin = round(revenue - material_cost - approved - approved_incentives, 2)
 
         total_revenue += revenue
         total_approved += approved
@@ -217,6 +234,12 @@ async def compute_project_pnl(db, user: dict) -> dict:
             "customer": p.get("customer", ""), "stage": p.get("stage", ""),
             "division": p.get("division", ""),
             "contract_value": revenue, "approved_petty_cash": approved,
+            # Not masked: procurement spend is the official, invoiceable leg
+            # (same reasoning as the bank-transfer component in
+            # mask_settlement) and it does not reconstruct the masked
+            # field-settlement figure on its own — every quantity that would
+            # (gross_profit, margin_pct, net_margin) is masked alongside it.
+            "material_cost": material_cost,
             "gross_profit": gross_profit, "margin_pct": margin_pct,
             "net_margin": net_margin,
             # Survives masking: the lifecycle pipeline only needs to know

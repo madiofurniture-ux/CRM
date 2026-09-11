@@ -95,7 +95,7 @@ export default function DWSurvey() {
     if (addingOpening) return;
     setAddingOpening(true);
     try {
-      const { data } = await api.post("/dw-openings", { survey_id: openId, room: "", type: "Window", w: 0, h: 0, qty: 1, frame: "uPVC", glass: "Single", mesh: false, handle_position: "" });
+      const { data } = await api.post("/dw-openings", { survey_id: openId, room: "", type: "Window", w: 0, h: 0, qty: 1, lintel: 0, frame: "uPVC", glass: "Single", mesh: false, hardware_finish: "", handle_position: "" });
       setOpenings((p) => [...p, data]);
     } catch { toast.error("Could not add opening"); }
     finally { setAddingOpening(false); }
@@ -227,9 +227,11 @@ export default function DWSurvey() {
                     <th className="text-right font-semibold px-3 py-2">W (in)</th>
                     <th className="text-right font-semibold px-3 py-2">H (in)</th>
                     <th className="text-right font-semibold px-3 py-2">Qty</th>
+                    <th className="text-right font-semibold px-3 py-2" title="Structural clear height above the aperture">Lintel (in)</th>
                     <th className="text-right font-semibold px-3 py-2">Sqft</th>
                     <th className="text-left font-semibold px-3 py-2">Frame</th>
                     <th className="text-left font-semibold px-3 py-2">Glass</th>
+                    <th className="text-left font-semibold px-3 py-2">Hardware finish</th>
                     <th className="text-left font-semibold px-3 py-2">Handle</th>
                     <th className="text-left font-semibold px-3 py-2">Notes</th>
                     <th className="text-center font-semibold px-3 py-2">Photo</th>
@@ -244,9 +246,11 @@ export default function DWSurvey() {
                       <td className="px-3 py-2"><Inp t="number" v={o.w} oc={(v) => patchOpening(o, { w: parseFloat(v) || 0 })} right /></td>
                       <td className="px-3 py-2"><Inp t="number" v={o.h} oc={(v) => patchOpening(o, { h: parseFloat(v) || 0 })} right /></td>
                       <td className="px-3 py-2"><Inp t="number" v={o.qty} oc={(v) => patchOpening(o, { qty: parseFloat(v) || 0 })} right /></td>
+                      <td className="px-3 py-2"><Inp t="number" v={o.lintel ?? 0} oc={(v) => patchOpening(o, { lintel: parseFloat(v) || 0 })} right /></td>
                       <td className="px-3 py-2 text-right font-mono">{(o.area || 0).toFixed(2)}</td>
                       <td className="px-3 py-2"><Sel v={o.frame} opts={FRAMES} oc={(v) => patchOpening(o, { frame: v })} /></td>
                       <td className="px-3 py-2"><Sel v={o.glass} opts={GLASS} oc={(v) => patchOpening(o, { glass: v })} /></td>
+                      <td className="px-3 py-2 min-w-[120px]"><Inp v={o.hardware_finish || ""} oc={(v) => patchOpening(o, { hardware_finish: v })} /></td>
                       <td className="px-3 py-2">
                         <select value={o.handle_position || ""} onChange={(e) => patchOpening(o, { handle_position: e.target.value })} className="w-full px-2 py-1 rounded border border-[var(--border)] bg-white text-xs">
                           {HANDLE_POSITIONS.map((h) => <option key={h} value={h}>{h || "N/A"}</option>)}
@@ -279,13 +283,13 @@ export default function DWSurvey() {
                       <td className="px-2 py-2"><button onClick={() => removeOpening(o.id)} className="p-1 rounded hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button></td>
                     </tr>
                   ))}
-                  {openings.length === 0 && <tr><td colSpan="11" className="text-center py-8 text-[var(--ink-3)]">No openings yet — add the first.</td></tr>}
+                  {openings.length === 0 && <tr><td colSpan="13" className="text-center py-8 text-[var(--ink-3)]">No openings yet — add the first.</td></tr>}
                 </tbody>
                 {openings.length > 0 && (
                   <tfoot><tr className="border-t-2 border-[var(--border)] font-semibold">
-                    <td className="px-3 py-2" colSpan="5">Total area</td>
+                    <td className="px-3 py-2" colSpan="6">Total area</td>
                     <td className="px-3 py-2 text-right font-mono">{totalArea.toFixed(2)} sqft</td>
-                    <td colSpan="5"></td>
+                    <td colSpan="6"></td>
                   </tr></tfoot>
                 )}
               </table>

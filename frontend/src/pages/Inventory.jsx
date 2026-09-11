@@ -1,13 +1,36 @@
 import { useEffect, useState, useMemo } from "react";
+import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import SearchSelect from "@/components/SearchSelect";
 import api from "@/lib/api";
 import { inrFull } from "@/lib/format";
-import { Package, Grid3x3, List, X, Tag } from "lucide-react";
+import { shrinkImage } from "@/lib/image";
+import { Package, Grid3x3, List, X, Tag, Camera } from "lucide-react";
 import { toast } from "sonner";
 
 const STATUSES = ["In Stock", "Display", "Sold", "Missing", "Reserved"];
+
+// Dimensions are always STORED in mm (the price-tag PDF and every report read
+// *_mm directly). This toggle only changes the unit they are entered and shown
+// in — see InventoryBase.dimension_unit server-side.
+const MM_PER_INCH = 25.4;
+const toDisplay = (mm, unit) =>
+  mm === null || mm === undefined || mm === "" ? "" :
+    unit === "in" ? +(mm / MM_PER_INCH).toFixed(2) : mm;
+const toMm = (value, unit) => {
+  if (value === "" || value === null || value === undefined) return null;
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return null;
+  return unit === "in" ? +(n * MM_PER_INCH).toFixed(1) : n;
+};
+
+// `cost` and `margin` are absent from the response entirely unless the viewer
+// is admin/accountant (server.py redact_inventory) — so, exactly like
+// vendorLabel above, display logic never needs its own role check. It shows
+// what it was given. Note this must test for presence, not truthiness: a
+// genuine cost of 0 is a real value, not a hidden one.
+const canSeeCost = (rows) => rows.some((r) => "cost" in r);
 
 // A row's `vendor` (name) key is only present at all when the API decided this
 // viewer may see it (admin/accountant) — see server.py's redact_vendor_field.
@@ -52,13 +75,41 @@ export default function Inventory() {
   const [vendors, setVendors] = useState([]);
   const [floors, setFloors] = useState([]);
   const [search, setSearch] = useState("");
-  const [fStatus, setFStatus] = useState("All");
-  const [fCat, setFCat] = useState("All");
-  const [view, setView] = useState("grid");
+  const [fStatus, setFStatus] = usePersistedState("inventory.status", "All");
+  const [fCat, setFCat] = usePersistedState("inventory.category", "All");
+  const [fLoc, setFLoc] = usePersistedState("inventory.location", "All");
+  const [view, setView] = usePersistedState("inventory.view", "grid");
   const [show, setShow] = useState(false);
   const [editingId, setEditingId] = useState(null); // null = creating, else the item id being edited
   const [saving, setSaving] = useState(false);
-  const empty = { sku: "", name: "", category: "", vendor_id: "", vendor: "", vendor_code: "", model_no: "", qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "", image_url: "" };
+  const [uploading, setUploading] = useState(false);
+  // null = not creating. Same inline-create pattern the Lead modal uses for
+  // Architects: the sub-form lives inside the parent modal so creating a
+  // vendor never discards the half-filled item form around it.
+  const [vendorDraft, setVendorDraft] = useState(null);
+  const [savingVendor, setSavingVendor] = useState(false);
+
+  const saveVendor = async () => {
+    const name = (vendorDraft?.name || "").trim();
+    if (!name) { toast.error("Vendor name is required"); return; }
+    setSavingVendor(true);
+    try {
+      const { data } = await api.post("/vendors", { name });
+      setVendors((v) => [data, ...v]);
+      // `code` is assigned server-side (lc.next_vendor_code), so it is read
+      // back off the response rather than guessed here.
+      setForm((f) => ({ ...f, vendor_id: data.id, vendor: data.name || "", vendor_code: data.code || "" }));
+      setVendorDraft(null);
+      toast.success(`Vendor ${data.code} created`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail?.toString?.() || "Could not create vendor");
+    } finally { setSavingVendor(false); }
+  };
+  const empty = {
+    sku: "", name: "", category: "", vendor_id: "", vendor: "", vendor_code: "", model_no: "",
+    qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "", image_url: "",
+    width_mm: "", height_mm: "", depth_mm: "", dimension_unit: "mm", material_finish: "",
+  };
   const [form, setForm] = useState(empty);
 
   const vendorOptions = useMemo(() => vendors.map((v) => ({
@@ -74,11 +125,33 @@ export default function Inventory() {
       sku: item.sku || "", name: item.name || "", category: item.category || "",
       vendor_id: item.vendor_id || "", vendor: item.vendor || "", vendor_code: item.vendor_code || "",
       model_no: item.model_no || "", qty: item.qty ?? 1,
-      cost: item.cost ?? 0, mrp: item.mrp ?? 0, margin: item.margin ?? 0,
+      // Only carried into the form when the API actually sent them. A viewer
+      // without cost access must not resubmit cost/margin as 0 on an
+      // unrelated edit and silently wipe the real figures.
+      ...("cost" in item ? { cost: item.cost ?? 0 } : {}),
+      ...("margin" in item ? { margin: item.margin ?? 0 } : {}),
+      mrp: item.mrp ?? 0,
       status: item.status || "In Stock", location: item.location || "", image_url: item.image_url || "",
+      width_mm: item.width_mm ?? "", height_mm: item.height_mm ?? "", depth_mm: item.depth_mm ?? "",
+      dimension_unit: item.dimension_unit || "mm", material_finish: item.material_finish || "",
     });
     setEditingId(item.id);
     setShow(true);
+  };
+
+  const pickImage = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      // Shrunk on-device to a data URL — the same asset convention D&W survey
+      // photos already use in this app. There is no blob store to upload to.
+      const dataUrl = await shrinkImage(file);
+      setForm((f) => ({ ...f, image_url: dataUrl }));
+    } catch {
+      toast.error("Could not read that image");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const load = async () => { const { data } = await api.get("/inventory"); setRows(data); };
@@ -90,15 +163,28 @@ export default function Inventory() {
 
   const categories = useMemo(() => Array.from(new Set(rows.map((r) => r.category).filter(Boolean))).sort(), [rows]);
 
+  // Locations come from the data plus the tenant's own Floor records — this
+  // app has no fixed warehouse list, floors are configurable on Stock Ledger.
+  const locations = useMemo(() => Array.from(new Set([
+    ...rows.map((r) => r.location).filter(Boolean),
+    ...floors.map((f) => f.name),
+  ])).sort(), [rows, floors]);
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return rows.filter((r) =>
       (fStatus === "All" || r.status === fStatus) &&
       (fCat === "All" || r.category === fCat) &&
+      (fLoc === "All" || (r.location || "") === fLoc) &&
       (!q || (r.name || "").toLowerCase().includes(q) || (r.sku || "").toLowerCase().includes(q) || vendorLabel(r).toLowerCase().includes(q))
     );
-  }, [rows, search, fStatus, fCat]);
+  }, [rows, search, fStatus, fCat, fLoc]);
 
+  // One signal for the whole page: whether the API is sending cost at all.
+  // An empty inventory has nothing to reveal either way, so it falls through
+  // as visible and the server still strips the field from every response.
+  const seesCost = rows.length === 0 || canSeeCost(rows);
+  const showCost = seesCost;
   const totalMrp = filtered.reduce((a, b) => a + (b.mrp || 0) * (b.qty || 0), 0);
   const totalCost = filtered.reduce((a, b) => a + (b.cost || 0) * (b.qty || 0), 0);
 
@@ -106,14 +192,30 @@ export default function Inventory() {
     if (saving) return;
     if (!form.sku.trim() || !form.name.trim()) { toast.error("SKU and Name are required"); return; }
     if (!editingId && !form.vendor_code.trim()) { toast.error("Vendor code is required for new items"); return; }
-    const margin = form.cost > 0 ? +(((form.mrp - form.cost) / form.cost) * 100).toFixed(2) : 0;
+    const unit = form.dimension_unit || "mm";
+    const payload = {
+      ...form,
+      // Converted back to the canonical millimetres regardless of the unit
+      // the form happened to be showing.
+      width_mm: toMm(form.width_mm, unit),
+      height_mm: toMm(form.height_mm, unit),
+      depth_mm: toMm(form.depth_mm, unit),
+    };
+    // Margin is only recomputed by someone who can actually see cost;
+    // otherwise neither field is sent at all, leaving the stored values alone.
+    if (showCost) {
+      payload.margin = form.cost > 0 ? +(((form.mrp - form.cost) / form.cost) * 100).toFixed(2) : 0;
+    } else {
+      delete payload.cost;
+      delete payload.margin;
+    }
     setSaving(true);
     try {
       if (editingId) {
-        await api.put(`/inventory/${editingId}`, { ...form, margin });
+        await api.put(`/inventory/${editingId}`, payload);
         toast.success("Item updated");
       } else {
-        await api.post("/inventory", { ...form, margin });
+        await api.post("/inventory", payload);
         toast.success("Item added");
       }
       setShow(false); setForm(empty); setEditingId(null); load();
@@ -135,7 +237,7 @@ export default function Inventory() {
     <>
       <Topbar
         title="Inventory"
-        subtitle={`${filtered.length} items · MRP ${inrFull(totalMrp)} · Cost ${inrFull(totalCost)}`}
+        subtitle={`${filtered.length} items · MRP ${inrFull(totalMrp)}${seesCost ? ` · Cost ${inrFull(totalCost)}` : ""}`}
         onAdd={() => { setForm(empty); setEditingId(null); setShow(true); }}
         addLabel="Add Item"
         actions={
@@ -155,6 +257,11 @@ export default function Inventory() {
           <select value={fCat} onChange={(e) => setFCat(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             <option>All</option>
             {categories.map((c) => <option key={c}>{c}</option>)}
+          </select>
+          <select value={fLoc} onChange={(e) => setFLoc(e.target.value)} aria-label="Filter by location"
+            className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm" data-testid="inv-location-filter">
+            <option value="All">All locations</option>
+            {locations.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
         </div>
 
@@ -206,9 +313,9 @@ export default function Inventory() {
                     <th className="text-left font-semibold px-4 py-2.5">Vendor</th>
                     <th className="text-left font-semibold px-4 py-2.5">Vendor Code</th>
                     <th className="text-right font-semibold px-4 py-2.5">Qty</th>
-                    <th className="text-right font-semibold px-4 py-2.5">Cost</th>
+                    {seesCost && <th className="text-right font-semibold px-4 py-2.5">Cost</th>}
                     <th className="text-right font-semibold px-4 py-2.5">MRP</th>
-                    <th className="text-right font-semibold px-4 py-2.5">Margin</th>
+                    {seesCost && <th className="text-right font-semibold px-4 py-2.5">Margin</th>}
                     <th className="text-left font-semibold px-4 py-2.5">Status</th>
                     <th className="text-left font-semibold px-4 py-2.5">Location</th>
                     <th className="w-12"></th>
@@ -223,9 +330,9 @@ export default function Inventory() {
                       <td className="px-4 py-3 text-[var(--ink-2)]">{i.vendor}</td>
                       <td className="px-4 py-3 font-mono text-xs text-[var(--ink-2)]">{i.vendor_code || "—"}</td>
                       <td className="px-4 py-3 text-right font-mono">{i.qty}</td>
-                      <td className="px-4 py-3 text-right font-mono text-[var(--ink-2)]">{inrFull(i.cost)}</td>
+                      {seesCost && <td className="px-4 py-3 text-right font-mono text-[var(--ink-2)]">{inrFull(i.cost)}</td>}
                       <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(i.mrp)}</td>
-                      <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{i.margin?.toFixed(0)}%</td>
+                      {seesCost && <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{i.margin?.toFixed(0)}%</td>}
                       <td className="px-4 py-3"><StageBadge stage={i.status} /></td>
                       <td className="px-4 py-3 text-[var(--ink-2)] text-xs">{locationBadge(i.location)}</td>
                       <td className="px-2 py-3">
@@ -242,7 +349,7 @@ export default function Inventory() {
                     </tr>
                   ))}
                   {filtered.length === 0 && (
-                    <tr><td colSpan={12} className="text-center py-12 text-[var(--ink-3)]">No inventory items</td></tr>
+                    <tr><td colSpan={seesCost ? 12 : 10} className="text-center py-12 text-[var(--ink-3)]">No inventory items</td></tr>
                   )}
                 </tbody>
               </table>
@@ -268,14 +375,36 @@ export default function Inventory() {
                   options={vendorOptions}
                   value={form.vendor_id}
                   onChange={(id, opt) => setForm({ ...form, vendor_id: id, vendor: opt ? opt.name : "", vendor_code: opt ? opt.code : "" })}
-                  placeholder="Search vendor…"
+                  placeholder="Search vendor, name or code…"
                   emptyLabel="No vendors found"
                   testId="if-vendor"
+                  createLabel="Vendor"
+                  onCreate={(term) => setVendorDraft({ name: term })}
                 />
+                {vendorDraft && (
+                  <div className="mt-2 p-3 rounded-lg border border-[var(--brand)] bg-[var(--brand-soft)]/30 flex items-end gap-2">
+                    <div className="flex-1">
+                      <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">New vendor name</label>
+                      <input
+                        autoFocus
+                        value={vendorDraft.name}
+                        onChange={(e) => setVendorDraft({ name: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveVendor(); } }}
+                        className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]"
+                        data-testid="if-vendor-new-name"
+                      />
+                    </div>
+                    <button type="button" className="btn-primary text-xs shrink-0 disabled:opacity-60"
+                      onClick={saveVendor} disabled={savingVendor} data-testid="if-vendor-new-save">
+                      {savingVendor ? "Saving…" : "Create"}
+                    </button>
+                    <button type="button" className="btn-ghost text-xs shrink-0" onClick={() => setVendorDraft(null)}>Cancel</button>
+                  </div>
+                )}
               </div>
               <F l="Model No" v={form.model_no} oc={(v) => setForm({ ...form, model_no: v })} />
               <F l="Qty" t="number" v={form.qty} oc={(v) => setForm({ ...form, qty: parseInt(v) || 0 })} />
-              <F l="Cost" t="number" v={form.cost} oc={(v) => setForm({ ...form, cost: parseFloat(v) || 0 })} />
+              {showCost && <F l="Cost" t="number" v={form.cost} oc={(v) => setForm({ ...form, cost: parseFloat(v) || 0 })} t2="if-cost" />}
               <F l="MRP" t="number" v={form.mrp} oc={(v) => setForm({ ...form, mrp: parseFloat(v) || 0 })} />
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Status</label>
@@ -294,7 +423,51 @@ export default function Inventory() {
                   <div className="text-[11px] text-[var(--ink-3)] mt-1">No floors yet — create one on the Stock Ledger page.</div>
                 )}
               </div>
-              <F l="Image URL (Product Picture)" v={form.image_url} oc={(v) => setForm({ ...form, image_url: v })} cls="col-span-2" placeholder="https://images.unsplash.com/..." />
+              <div className="col-span-2 grid grid-cols-4 gap-3 items-end">
+                <F l={`Width (${form.dimension_unit})`} t="number" v={toDisplay(form.width_mm, form.dimension_unit)}
+                   oc={(v) => setForm({ ...form, width_mm: v })} t2="if-width" />
+                <F l={`Height (${form.dimension_unit})`} t="number" v={toDisplay(form.height_mm, form.dimension_unit)}
+                   oc={(v) => setForm({ ...form, height_mm: v })} t2="if-height" />
+                <F l={`Depth (${form.dimension_unit})`} t="number" v={toDisplay(form.depth_mm, form.dimension_unit)}
+                   oc={(v) => setForm({ ...form, depth_mm: v })} t2="if-depth" />
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Unit</label>
+                  <select
+                    value={form.dimension_unit}
+                    // Only the displayed unit changes; the stored value stays
+                    // in mm, so the numbers in the boxes re-render converted
+                    // rather than being reinterpreted.
+                    onChange={(e) => setForm({ ...form, dimension_unit: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm"
+                    data-testid="if-unit"
+                  >
+                    <option value="mm">mm</option>
+                    <option value="in">inch</option>
+                  </select>
+                </div>
+              </div>
+              <F l="Material / Finish" v={form.material_finish} oc={(v) => setForm({ ...form, material_finish: v })} cls="col-span-2" placeholder="e.g. Walnut veneer, matte" />
+
+              <div className="col-span-2">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Product picture</label>
+                <div className="flex items-center gap-3">
+                  {form.image_url
+                    ? <img src={form.image_url} alt="" className="w-16 h-12 object-cover rounded border border-[var(--border)]" />
+                    : <div className="w-16 h-12 rounded border border-dashed border-[var(--border)] flex items-center justify-center text-[var(--ink-3)]"><Package size={16} /></div>}
+                  <label className="btn-ghost cursor-pointer text-xs">
+                    <Camera size={14} /> {uploading ? "Processing…" : "Upload"}
+                    <input type="file" accept="image/*" className="hidden" data-testid="if-image"
+                      onChange={(e) => { pickImage(e.target.files?.[0]); e.target.value = ""; }} />
+                  </label>
+                  {form.image_url && (
+                    <button type="button" className="btn-ghost text-xs text-red-600"
+                      onClick={() => setForm({ ...form, image_url: "" })}>Remove</button>
+                  )}
+                </div>
+                <F l="" v={form.image_url?.startsWith("data:") ? "" : form.image_url}
+                   oc={(v) => setForm({ ...form, image_url: v })} cls="mt-2"
+                   placeholder="…or paste an image URL" />
+              </div>
             </div>
             <div className="px-5 py-4 border-t flex items-center gap-2">
               {editingId && (

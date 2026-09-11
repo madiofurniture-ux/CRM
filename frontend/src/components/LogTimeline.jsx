@@ -1,5 +1,6 @@
 import { useState } from "react";
 import api from "@/lib/api";
+import StarRating, { starsFromPct } from "@/components/StarRating";
 import { fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 
@@ -18,7 +19,7 @@ const KINDS = ["Note", "Phone", "WhatsApp", "Email", "Meeting", "Site Visit",
  */
 export default function LogTimeline({ entity, itemId, entries = [], onAppended }) {
   const [text, setText] = useState("");
-  const [confidence, setConfidence] = useState("");
+  const [confidence, setConfidence] = useState(null);
   const [kind, setKind] = useState("Note");
   const [nextFollowUp, setNextFollowUp] = useState("");
   const [busy, setBusy] = useState(false);
@@ -30,10 +31,10 @@ export default function LogTimeline({ entity, itemId, entries = [], onAppended }
     try {
       const { data } = await api.post(`/log/${entity}/${itemId}`, {
         text: text.trim(), kind,
-        confidence_level: confidence === "" ? null : parseFloat(confidence),
+        confidence_level: confidence,
         ...(scheduling ? { next_follow_up: nextFollowUp } : {}),
       });
-      setText(""); setConfidence(""); setNextFollowUp("");
+      setText(""); setConfidence(null); setNextFollowUp("");
       onAppended?.(data.log || [], data);
     } catch { toast.error("Couldn't save follow-up entry"); }
     finally { setBusy(false); }
@@ -51,12 +52,7 @@ export default function LogTimeline({ entity, itemId, entries = [], onAppended }
           <select value={kind} onChange={(e) => setKind(e.target.value)} className="px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white text-xs">
             {KINDS.map((k) => <option key={k}>{k}</option>)}
           </select>
-          <input
-            type="number" min="0" max="100" value={confidence}
-            onChange={(e) => setConfidence(e.target.value)}
-            placeholder="Confidence %"
-            className="px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white text-xs outline-none focus:border-[var(--brand)]"
-          />
+          <StarRating label="" testId="log-confidence" value={confidence} onChange={setConfidence} />
           {scheduling && (
             <input
               type="date" value={nextFollowUp} onChange={(e) => setNextFollowUp(e.target.value)}
@@ -78,8 +74,11 @@ export default function LogTimeline({ entity, itemId, entries = [], onAppended }
               <span className="font-semibold">{e.by || "—"}</span>
               <span>{fmtDate(e.at)}</span>
               {e.kind && <span className="px-1.5 py-0.5 rounded bg-[var(--surface-2)]">{e.kind}</span>}
-              {e.confidence_level != null && e.confidence_level !== "" && (
-                <span className="px-1.5 py-0.5 rounded bg-[var(--brand-soft)] text-[var(--brand)] font-semibold">{e.confidence_level}%</span>
+              {starsFromPct(e.confidence_level) > 0 && (
+                <span className="px-1.5 py-0.5 rounded bg-[var(--brand-soft)] text-[var(--brand)] font-semibold"
+                      title={`Confidence ${e.confidence_level}%`}>
+                  {"★".repeat(starsFromPct(e.confidence_level))}
+                </span>
               )}
             </div>
             <div className="text-sm text-[var(--ink)]">{e.text}</div>

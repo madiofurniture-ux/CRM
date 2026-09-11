@@ -15,7 +15,17 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+# The GST actually charged on a received bank transfer is a property of that
+# payment (it mirrors the tax invoice raised against it), so it keeps a real
+# default rather than 0.
 GST_DEFAULT = 18.0
+
+# Documents (quotes, invoices, PO lines, configurator output) default to 0%
+# instead: a pre-filled 18% silently taxed drafts that were never meant to
+# carry GST, and it is far safer for a rate to be visibly missing than
+# invisibly wrong. The UI offers these slabs as one-click choices.
+GST_DOC_DEFAULT = 0.0
+GST_SLABS = [0.0, 5.0, 12.0, 18.0, 28.0]
 
 
 # ------- Users -------
@@ -188,6 +198,11 @@ class LeadCreate(LeadBase):
     def _valid_name(cls, v):
         return lc.validate_person_name(v)
 
+    @field_validator("confidence_level")
+    @classmethod
+    def _snap_confidence(cls, v):
+        return lc.snap_confidence(v)
+
 
 class Lead(LeadBase):
     id: str
@@ -261,7 +276,7 @@ class QuoteBase(BaseModel):
     remarks: Optional[str] = ""
     line_items: Optional[List[dict]] = []
     subtotal: Optional[float] = 0
-    tax_pct: Optional[float] = GST_DEFAULT
+    tax_pct: Optional[float] = GST_DOC_DEFAULT
     tax_total: Optional[float] = 0
     grand_total: Optional[float] = 0
     # ---- workspace: line-item builder, discount approval, versions ----
@@ -288,7 +303,10 @@ class QuoteBase(BaseModel):
 
 
 class QuoteCreate(QuoteBase):
-    pass
+    @field_validator("confidence_level")
+    @classmethod
+    def _snap_confidence(cls, v):
+        return lc.snap_confidence(v)
 
 
 class Quote(QuoteBase):
@@ -361,10 +379,24 @@ class InventoryBase(BaseModel):
     image_url: Optional[str] = ""
     vendor_code: Optional[str] = ""
     division: Optional[str] = ""  # Division.slug, for the price-tag's division logo/brand color
+    # Always stored in millimetres regardless of what the entry form was set
+    # to — the price-tag PDF and every report read these directly, so a row
+    # whose numbers meant inches would silently corrupt them. `dimension_unit`
+    # records only which unit to DISPLAY and re-edit in; it never changes what
+    # the three *_mm fields mean.
     width_mm: Optional[float] = None
     height_mm: Optional[float] = None
     depth_mm: Optional[float] = None
+    dimension_unit: Optional[str] = "mm"  # "mm" | "in" — display/entry unit only
     material_finish: Optional[str] = ""
+
+    @field_validator("dimension_unit")
+    @classmethod
+    def _valid_dimension_unit(cls, v):
+        v = str(v or "mm")
+        if v not in ("mm", "in"):
+            raise ValueError("dimension_unit must be mm or in")
+        return v
 
 
 class InventoryCreate(InventoryBase):
@@ -425,6 +457,7 @@ class Task(TaskBase):
     id: str
     created_at: str
     created_by: Optional[str] = ""
+    created_by_id: Optional[str] = ""  # stamped server-side; personal-visibility key
 
 
 # ------- Line item (shared by Quotes / Invoices) -------
@@ -436,7 +469,63 @@ class LineItem(BaseModel):
     qty: float = 1
     rate: float = 0
     discount_pct: Optional[float] = 0
-    tax_pct: Optional[float] = GST_DEFAULT  # GST
+    tax_pct: Optional[float] = GST_DOC_DEFAULT  # GST slab for this line (HSN/SAC dependent)
+
+
+# ------- Purchase Orders (outbound: what WE buy from a vendor) -------
+# Reuses LineItem above rather than defining a PO-specific line: it already
+# carries exactly what a PO line needs (sku, description, hsn, qty, rate,
+# discount_pct, tax_pct). Totals are computed server-side via lc.po_totals,
+# never trusted from the client.
+PO_STATUSES = ["Draft", "Issued", "Received", "Cancelled"]
+# A PO only becomes real committed spend once it leaves Draft, and a
+# Cancelled one stops being spend — this is the set project P&L counts.
+PO_COMMITTED_STATUSES = {"Issued", "Received"}
+
+
+class PurchaseOrderBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    po_no: Optional[str] = ""        # PO-YYMM-NNN, assigned server-side
+    date: str = ""
+    vendor_id: str = ""
+    vendor_name: Optional[str] = ""  # derived server-side from vendor_id
+    vendor_code: Optional[str] = ""  # derived server-side from vendor_id
+    project_id: Optional[str] = ""   # when this PO is bought against a project — feeds project P&L
+    division: Optional[str] = ""
+    line_items: List[LineItem] = Field(default_factory=list)
+    subtotal: float = 0
+    tax_total: float = 0
+    grand_total: float = 0
+    payment_terms: Optional[str] = ""
+    delivery_address: Optional[str] = ""
+    expected_date: Optional[str] = ""
+    # Draft never counts as committed spend; Cancelled stops counting. Only
+    # Issued/Received feed project P&L material cost (see compute_project_pnl).
+    status: str = "Draft"            # Draft / Issued / Received / Cancelled
+    by_user: Optional[str] = ""
+    remarks: Optional[str] = ""
+
+    @field_validator("status")
+    @classmethod
+    def _valid_status(cls, v):
+        v = str(v or "Draft")
+        if v not in PO_STATUSES:
+            raise ValueError(f"status must be one of {PO_STATUSES}")
+        return v
+
+
+class PurchaseOrderCreate(PurchaseOrderBase):
+    @field_validator("vendor_id")
+    @classmethod
+    def _vendor_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("A vendor is required on a purchase order")
+        return v
+
+
+class PurchaseOrder(PurchaseOrderBase):
+    id: str
+    created_at: str
 
 
 # ------- Invoice -------
@@ -485,9 +574,15 @@ class MeetBase(BaseModel):
     with_person: Optional[str] = ""
     ref_type: Optional[str] = ""  # Lead / Architect / Customer / Internal
     ref_name: Optional[str] = ""
+    # Direct project linkage. Tasks already had this via their generic
+    # ref/ref_type pair ("project" is one of the accepted ref_type values);
+    # meetings had no equivalent, so a site meeting could not be tied to the
+    # project it was about.
+    project_id: Optional[str] = ""
     agenda: Optional[str] = ""
     status: str = "Scheduled"  # Scheduled / Done / Cancelled
     created_by: Optional[str] = ""
+    created_by_id: Optional[str] = ""  # stamped server-side; personal-visibility key
 
 
 class MeetCreate(MeetBase):
@@ -998,6 +1093,11 @@ class DWOpeningBase(BaseModel):
     frame: str = "uPVC"
     glass: str = "Single"
     mesh: bool = False
+    # Structural clear height above the aperture, in inches like w/h. A
+    # fabricator needs it to know whether the frame can be top-fixed; it was
+    # previously only ever captured in free-text `notes`, if at all.
+    lintel: Optional[float] = 0
+    hardware_finish: Optional[str] = ""  # e.g. "SS Brushed", "Black Matte"
     handle_position: Optional[str] = ""  # "" (N/A) | "RHS" | "LHS"
     notes: Optional[str] = ""
     image_url: Optional[str] = ""
@@ -1018,6 +1118,13 @@ class DWSurveyBase(BaseModel):
     date: str = ""
     customer: str = ""
     phone: Optional[str] = ""
+    # Record linkage. `customer` above stays the plain display string every
+    # existing survey was written with (and what the quote conversion reads);
+    # these ids are additive, so a legacy survey with none of them still
+    # loads and converts exactly as before.
+    customer_id: Optional[str] = ""
+    project_id: Optional[str] = ""
+    architect_id: Optional[str] = ""
     site_address: Optional[str] = ""
     by_user: Optional[str] = ""
     status: str = "Draft"
@@ -1199,7 +1306,7 @@ class ProductConfigBase(BaseModel):
     line_items: List[dict] = []    # computed via lc.calc_line, same shape as quote lines
     subtotal: float = 0
     discount: float = 0
-    tax_pct: float = GST_DEFAULT
+    tax_pct: float = GST_DOC_DEFAULT
     tax_total: float = 0
     grand_total: float = 0
     version: int = 1
@@ -1255,6 +1362,11 @@ class CustomerCreate(CustomerBase):
         if not str(v or "").strip():
             raise ValueError("Phone number is required")
         return v
+
+    @field_validator("confidence_level")
+    @classmethod
+    def _snap_confidence(cls, v):
+        return lc.snap_confidence(v)
 
 
 class Customer(CustomerBase):

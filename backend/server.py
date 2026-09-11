@@ -43,6 +43,7 @@ from models import (
     FloorCreate, Floor,
     TaskCreate, Task,
     InvoiceCreate, Invoice,
+    PurchaseOrderCreate, PurchaseOrder, PO_COMMITTED_STATUSES,
     MeetCreate, Meet,
     PettyCashCreate, PettyCash,
     CashbookCreate, Cashbook, CashbookEntryCreate, CashbookEntry,
@@ -539,9 +540,68 @@ async def _scope_owners(user: dict, roles: list, module: str) -> Optional[list]:
     return [user.get("name", "")]
 
 
+# ---------- Personal-record visibility (tasks, meets) ----------
+# Tasks and meetings are personal records: your own to-do list and your own
+# calendar, not shared reference data like leads or inventory. The generic
+# role scope above does NOT express that, for two reasons:
+#
+#   1. scope_for() returns "all" for any account with no role_id — i.e. every
+#      legacy account, which is most of them — so in practice everyone saw
+#      everyone's tasks and meetings.
+#   2. Even under a restricted scope, the filter is owner_field ("assigned_to"
+#      / "created_by") alone, so a task you raised and delegated vanished from
+#      your own list the moment you assigned it to someone else.
+#
+# This gate is applied on top of, not instead of, the role matrix, and it
+# deliberately ignores role_id: a personal record is personal for legacy
+# accounts too. role == "admin" stays the absolute bypass, consistent with
+# permissions.py.
+PERSONAL_VISIBILITY_FIELDS = {
+    "tasks": ("assigned_to", "created_by"),
+    "meets": ("created_by",),
+}
+
+
+def _personal_clauses(user: dict, collection: str) -> list[dict]:
+    fields = PERSONAL_VISIBILITY_FIELDS[collection]
+    name = (user or {}).get("name", "")
+    # created_by_id is the reliable half — display names are not unique and a
+    # user can be renamed — but the name fields have to be matched too, since
+    # `assigned_to` holds a display name by this codebase's convention and
+    # every pre-existing row predates created_by_id.
+    clauses: list[dict] = [{f: name} for f in fields]
+    clauses.append({"created_by_id": (user or {}).get("id", "")})
+    return clauses
+
+
+def personal_visibility_query(user: dict, collection: str) -> dict:
+    """Mongo fragment restricting a personal collection to records this user
+    created or is assigned. Empty ({}) for admins, who see everything."""
+    if (user or {}).get("role") == "admin":
+        return {}
+    return {"$or": _personal_clauses(user, collection)}
+
+
+def can_see_personal(record: dict, user: dict, collection: str) -> bool:
+    """The same rule as personal_visibility_query, applied to one already
+    fetched record — for update/delete, which look a record up by id first."""
+    if (user or {}).get("role") == "admin":
+        return True
+    return any(record.get(k) == v for clause in _personal_clauses(user, collection)
+               for k, v in clause.items())
+
+
+def _merge_visibility(query: dict, fragment: dict) -> dict:
+    """$and-combine so a visibility $or can never clobber an $or the caller
+    (e.g. fy_query) already put on the query."""
+    if not fragment:
+        return query
+    return {"$and": [query, fragment]}
+
+
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
               after_write=None, module: str = None, owner_field: str = None, on_create=None,
-              normalize=None, redact=None):
+              normalize=None, redact=None, personal: bool = False):
     """`after_write`, when given, runs after a successful create/update with the
     saved document and the acting user — for side effects that must stay in
     lockstep with this collection's own writes (e.g. leads syncing a
@@ -574,6 +634,10 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     collection sends back (list/create/update), for role-gated fields like a
     vendor's name. Must return a new dict, not mutate in place — the caller
     doesn't control aliasing between list entries.
+
+    `personal` — restrict this collection to records the caller created or is
+    assigned (admins exempt), regardless of role_id. See
+    PERSONAL_VISIBILITY_FIELDS above for why the role scope isn't enough.
     """
     @router.get(f"/{base}")
     async def _list(user: dict = Depends(get_current_user)):
@@ -583,6 +647,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
             owners = await _scope_owners(user, roles, module)
             if owners is not None and owner_field:
                 q[owner_field] = {"$in": owners}
+        if personal:
+            q = _merge_visibility(q, personal_visibility_query(user, collection))
         items = await db[collection].find(q, {"_id": 0}).sort("created_at", -1).to_list(3000)
         return [redact(i, user) for i in items] if redact else items
 
@@ -593,6 +659,13 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         doc = payload.model_dump()
         doc["id"] = new_id()
         doc["created_at"] = now_iso()
+        if personal:
+            # Stamped server-side, never taken from the payload: on a personal
+            # collection `created_by` decides who can see the record, so a
+            # client-supplied value would let a caller write itself into (or
+            # out of) someone else's visibility.
+            doc["created_by"] = user.get("name", "")
+            doc["created_by_id"] = user.get("id", "")
         if normalize:
             await normalize(doc, None, user)
         await validate_stage(collection, doc, user)
@@ -621,11 +694,18 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         existing = await db[collection].find_one(owned)
         if not existing:
             raise HTTPException(status_code=404, detail="Not found")
+        if personal and not can_see_personal(existing, user, collection):
+            raise HTTPException(status_code=404, detail="Not found")
         if module:
             roles = await _require_permission(module, "edit", user)
             owners = await _scope_owners(user, roles, module)
             if owners is not None and owner_field and existing.get(owner_field) not in owners:
                 raise HTTPException(status_code=404, detail="Not found")
+        if personal:
+            # created_by/created_by_id are the visibility keys — a PUT must
+            # not be able to rewrite them.
+            payload.pop("created_by", None)
+            payload.pop("created_by_id", None)
         if normalize:
             await normalize(payload, existing, user)
         payload = validate_partial_update(create_model, existing, payload)
@@ -645,10 +725,13 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     async def _delete(item_id: str, user: dict = Depends(get_current_user)):
         # Scoped so one tenant can never delete another's record by id.
         owned = tenancy.scope({"id": item_id}, collection, user)
-        if module:
+        if module or personal:
             existing = await db[collection].find_one(owned)
             if not existing:
                 raise HTTPException(status_code=404, detail="Not found")
+            if personal and not can_see_personal(existing, user, collection):
+                raise HTTPException(status_code=404, detail="Not found")
+        if module:
             roles = await _require_permission(module, "delete", user)
             owners = await _scope_owners(user, roles, module)
             if owners is not None and owner_field and existing.get(owner_field) not in owners:
@@ -673,7 +756,7 @@ ALL_MODULE_IDS = [
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
-    "finance-payments",
+    "finance-payments", "purchase-orders",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -1287,6 +1370,42 @@ def redact_vendor_field(item: dict, user: dict) -> dict:
     return item
 
 
+# ---------- Inventory: landing/cost price visible to admin/accountant only ----------
+# Same role pair as vendor names above, and for the same reason: both are
+# purchase-side commercial terms. Cost is the stronger boundary of the two —
+# a floor salesperson knowing the landing price can discount straight through
+# the margin — so it is enforced here, server-side, and the field is absent
+# from the response rather than blanked in the UI.
+def _can_see_cost_prices(user: dict) -> bool:
+    return (user or {}).get("role") in ("admin", "accountant")
+
+
+# `cost` is not the only field that carries it. `margin` is stored as
+# ((mrp - cost) / cost) * 100, so cost = mrp / (1 + margin/100) — dropping
+# `cost` alone while leaving `margin` and `mrp` in the same response hands the
+# figure straight back, exactly the inversion mask_pnl()/mask_settlement()
+# had to close. Both fields go, together.
+COST_FIELDS = ("cost", "margin")
+
+
+def redact_cost(item: dict, user: dict) -> dict:
+    """Strip landing cost (and the margin it inverts from) for anyone who
+    isn't admin/accountant. Returns a new dict — never mutates in place."""
+    if _can_see_cost_prices(user):
+        return item
+    item = dict(item)
+    for field in COST_FIELDS:
+        item.pop(field, None)
+    return item
+
+
+def redact_inventory(item: dict, user: dict) -> dict:
+    """The single outbound shaper for an inventory row: vendor name and cost
+    price are independently gated, so one item can lose either, both, or
+    neither. Wired into make_crud(redact=) so list/create/update all get it."""
+    return redact_cost(redact_vendor_field(item, user), user)
+
+
 async def normalize_vendor(doc: dict, existing: dict | None, user: dict) -> None:
     if existing is None and not str(doc.get("code") or "").strip():
         current = await db.vendors.find(
@@ -1623,7 +1742,7 @@ make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_fi
 make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user",
           on_create=_notify_order_confirmed)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory",
-          normalize=normalize_inventory, redact=redact_vendor_field)
+          normalize=normalize_inventory, redact=redact_inventory)
 
 
 def _render_price_tag_pdf(item: dict, division: Optional[dict]) -> bytes:
@@ -1691,10 +1810,145 @@ async def inventory_price_tag(item_id: str, user: dict = Depends(get_current_use
         content=pdf_bytes, media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="price-tag-{item.get("sku", item_id)}.pdf"'},
     )
+# ---------- Purchase Orders ----------
+async def normalize_purchase_order(doc: dict, existing: dict | None, user: dict) -> None:
+    """Vendor identity and every money figure are derived server-side.
+
+    Totals in particular are never trusted from the client: a PO is the
+    document a vendor payment is authorised against, so a tampered
+    grand_total sent from a browser would be a straight financial hole.
+    They are always recomputed from the lines via lc.po_totals.
+    """
+    vid = doc.get("vendor_id", (existing or {}).get("vendor_id", ""))
+    if vid:
+        vendor = await db.vendors.find_one(tenancy.scope({"id": vid}, "vendors", user), {"_id": 0})
+        if not vendor:
+            raise HTTPException(status_code=400, detail="Selected vendor not found")
+        doc["vendor_name"] = vendor.get("name", "")
+        doc["vendor_code"] = vendor.get("code", "")
+
+    if doc.get("project_id"):
+        project = await db.projects.find_one(
+            tenancy.scope({"id": doc["project_id"]}, "projects", user), {"_id": 0, "id": 1})
+        if not project:
+            raise HTTPException(status_code=400, detail="Linked project not found")
+
+    if existing is None:
+        if not doc.get("date"):
+            doc["date"] = lc.today_iso()
+        if not doc.get("by_user"):
+            doc["by_user"] = user.get("name", "")
+        # Sequence is assigned here, not client-side: two people drafting a PO
+        # at once must never be handed the same number.
+        existing_pos = await db.purchase_orders.find(
+            tenancy.scope({}, "purchase_orders", user), {"po_no": 1, "_id": 0}).to_list(5000)
+        doc["po_no"] = lc.next_po_no(existing_pos)
+    else:
+        doc.pop("po_no", None)  # a PO number is immutable once issued
+
+    lines = doc.get("line_items", (existing or {}).get("line_items", [])) or []
+    doc.update({k: v for k, v in lc.po_totals(lines).items() if k != "tax_breakup"})
+
+
+# Gated on the existing "inventory" role module rather than a new one: role
+# permissions are opt-in (permissions.permission_for returns all-denied for a
+# module a role has no entry for), so a brand-new module id would 403 every
+# role-governed account until an admin edited every role. Procurement is the
+# buy side of stock, so inventory is the honest home for it.
+make_crud(api, "purchase-orders", "purchase_orders", PurchaseOrderCreate, PurchaseOrder,
+          module="inventory", owner_field="by_user", normalize=normalize_purchase_order)
+
+
+def _render_po_pdf(po: dict, tenant: dict) -> bytes:
+    """A4 purchase order, same ReportLab platypus approach as the price tag
+    above (no new dependency, no outbound image fetch)."""
+    from io import BytesIO
+    from reportlab.lib.units import mm
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=14 * mm, bottomMargin=14 * mm,
+                            leftMargin=14 * mm, rightMargin=14 * mm,
+                            title=f"Purchase Order {po.get('po_no', '')}")
+    styles = getSampleStyleSheet()
+    story = [Paragraph(f"<b>{tenant.get('name') or 'Purchase Order'}</b>", styles["Title"]),
+             Paragraph(f"Purchase Order <b>{po.get('po_no', '')}</b> &nbsp;·&nbsp; {po.get('date', '')}",
+                       styles["Normal"]),
+             Spacer(1, 5 * mm)]
+
+    meta = [["Vendor", po.get("vendor_name") or po.get("vendor_code") or "—"],
+            ["Payment terms", po.get("payment_terms") or "—"],
+            ["Delivery address", po.get("delivery_address") or "—"],
+            ["Expected", po.get("expected_date") or "—"],
+            ["Status", po.get("status", "")]]
+    meta_table = Table(meta, colWidths=[35 * mm, 145 * mm])
+    meta_table.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story += [meta_table, Spacer(1, 5 * mm)]
+
+    rows = [["#", "Description", "HSN/SAC", "Qty", "Rate", "Disc%", "GST%", "Amount"]]
+    for i, line in enumerate(po.get("line_items") or [], start=1):
+        rows.append([
+            str(i), line.get("description", "") or line.get("sku", ""), line.get("hsn", "") or "—",
+            f"{lc.money(line.get('qty')):g}", f"{lc.money(line.get('rate')):,.2f}",
+            f"{lc.money(line.get('discount_pct')):g}", f"{lc.money(line.get('tax_pct')):g}",
+            f"{lc.po_line_amount(line):,.2f}",
+        ])
+    line_table = Table(rows, colWidths=[8 * mm, 62 * mm, 20 * mm, 15 * mm, 25 * mm, 15 * mm, 15 * mm, 25 * mm],
+                       repeatRows=1)
+    line_table.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEF2F7")),
+        ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#D6DDE6")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story += [line_table, Spacer(1, 4 * mm)]
+
+    totals = lc.po_totals(po.get("line_items") or [])
+    summary = [["Subtotal", f"Rs. {totals['subtotal']:,.2f}"]]
+    summary += [[f"GST @ {slab['rate']:g}%", f"Rs. {slab['tax']:,.2f}"] for slab in totals["tax_breakup"]]
+    summary.append(["Grand Total", f"Rs. {totals['grand_total']:,.2f}"])
+    sum_table = Table(summary, colWidths=[145 * mm, 35 * mm])
+    sum_table.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+        ("LINEABOVE", (0, -1), (-1, -1), 0.6, colors.black),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+    ]))
+    story.append(sum_table)
+    if po.get("remarks"):
+        story += [Spacer(1, 4 * mm), Paragraph(f"<b>Remarks:</b> {po['remarks']}", styles["Normal"])]
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+@api.get("/purchase-orders/{po_id}/pdf")
+async def purchase_order_pdf(po_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("inventory", "view", user)
+    po = await db.purchase_orders.find_one(
+        tenancy.scope({"id": po_id}, "purchase_orders", user), {"_id": 0})
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    tenant = await db.tenants.find_one({"id": tenancy.tenant_of(user)}, {"_id": 0}) or {}
+    return Response(
+        content=_render_po_pdf(po, tenant), media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{po.get("po_no", po_id)}.pdf"'},
+    )
+
+
 make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to",
-          normalize=normalize_task)
+          normalize=normalize_task, personal=True)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user")
-make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by")
+make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by",
+          personal=True)
 
 
 # ---------- Daily Task Planner — a date-scoped view over the same `tasks`
@@ -1708,6 +1962,9 @@ async def daily_planner_list(date: str = "", user: dict = Depends(get_current_us
     q = tenancy.scope({"date": day}, "tasks", user)
     if owners is not None:
         q["assigned_to"] = {"$in": owners}
+    # Same personal gate as the /tasks list — this route reads the same
+    # collection directly, so without it the planner is a way around it.
+    q = _merge_visibility(q, personal_visibility_query(user, "tasks"))
     rows = await db.tasks.find(q, {"_id": 0}).sort("created_at", 1).to_list(500)
     total = len(rows)
     completed = sum(1 for r in rows if r.get("status") == "Completed")
@@ -1731,6 +1988,8 @@ async def daily_planner_create(payload: TaskCreate, user: dict = Depends(get_cur
         doc["date"] = lc.today_iso()
     if not doc.get("assigned_to"):
         doc["assigned_to"] = user.get("name", "")
+    doc["created_by"] = user.get("name", "")
+    doc["created_by_id"] = user.get("id", "")
     doc["status"] = "Completed" if doc.get("done") else "Pending"
     doc["completed_at"] = now_iso() if doc.get("done") else ""
     tenancy.stamp(doc, "tasks", user)
@@ -1744,7 +2003,9 @@ async def daily_planner_toggle(task_id: str, user: dict = Depends(get_current_us
     await _require_permission("tasks", "edit", user)
     owned = tenancy.scope({"id": task_id}, "tasks", user)
     task = await db.tasks.find_one(owned, {"_id": 0})
-    if not task:
+    if not task or not can_see_personal(task, user, "tasks"):
+        # 404, not 403: a task outside your visibility should look exactly
+        # like one that doesn't exist.
         raise HTTPException(status_code=404, detail="Task not found")
     now_done = not task.get("done")
     updates = {
@@ -1770,6 +2031,7 @@ async def daily_planner_rollover(user: dict = Depends(get_current_user)):
     q = tenancy.scope({"date": yesterday, "status": {"$in": ["Pending", "In Progress"]}}, "tasks", user)
     if owners is not None:
         q["assigned_to"] = {"$in": owners}
+    q = _merge_visibility(q, personal_visibility_query(user, "tasks"))
     stale = await db.tasks.find(q, {"_id": 0}).to_list(500)
     created = []
     for t in stale:
@@ -2010,9 +2272,16 @@ async def append_log(entity: str, item_id: str, payload: dict, user: dict = Depe
     record = await coll.find_one(owned, {"_id": 0})
     if not record:
         raise HTTPException(status_code=404, detail="Not found")
+    # Snapped to a star bucket here too: a log entry's confidence is
+    # denormalized onto the quote itself below, so an unsnapped value would
+    # land on the record and defeat the validator on QuoteCreate.
+    try:
+        confidence = lc.snap_confidence(payload.get("confidence_level"))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     entry = {
         "at": now_iso(), "by": user.get("name", ""), "by_id": user.get("id", ""),
-        "text": text, "confidence_level": payload.get("confidence_level"),
+        "text": text, "confidence_level": confidence,
         "kind": str(payload.get("kind") or "note"),
     }
     update = {"$push": {"log": entry}}
@@ -2138,6 +2407,72 @@ def _haversine_m(lat1, lng1, lat2, lng2):
 
 def _today():
     return now_iso()[:10]
+
+
+# Below which a day is not counted as worked at all. A stray check-in that is
+# never checked out (duration_min unset) is a half day: it evidences presence
+# but not hours. Deliberately generous — attendance disputes should be settled
+# by a human looking at the log, not silently by a threshold here.
+PAYROLL_FULL_DAY_MIN = 4 * 60
+
+
+@api.get("/attendance/payroll")
+async def attendance_payroll(month: str = "", user_id: str = "",
+                             user: dict = Depends(get_current_user)):
+    """Effective working days/hours per user for a month (YYYY-MM).
+
+    Aggregates ONLY — no GPS coordinates and no selfie URLs appear in this
+    response, so a payroll consumer never needs the raw location/biometric
+    records to do its job. Cross-user access is admin-only, exactly like
+    /attendance above.
+
+    NOTE: this stops at effective days/hours on purpose. This codebase has no
+    salary, wage or pay-rate model anywhere to multiply them by, and what a
+    "day" is worth (monthly salary / day rate, overtime treatment, paid
+    leave) is a business policy decision, not one to infer here.
+    """
+    if user_id and user["role"] != "admin" and user_id != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    month = month or now_iso()[:7]
+    if len(month) != 7 or month[4] != "-":
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+
+    q: dict = {"date": {"$regex": f"^{re.escape(month)}"}}
+    if user_id:
+        q["user_id"] = user_id
+    elif user["role"] != "admin":
+        q["user_id"] = user["id"]
+    rows = await db.attendance.find(
+        tenancy.scope(q, "attendance", user), {"_id": 0}).to_list(5000)
+
+    by_user: dict[str, dict] = {}
+    for r in rows:
+        uid = r.get("user_id", "")
+        acc = by_user.setdefault(uid, {
+            "user_id": uid, "name": r.get("name", ""), "username": r.get("username", ""),
+            "effective_days": 0.0, "total_minutes": 0, "days_present": 0,
+            "days_incomplete": 0, "days_outside_geofence": 0,
+        })
+        if not r.get("check_in_at"):
+            continue
+        acc["days_present"] += 1
+        minutes = r.get("duration_min") or 0
+        acc["total_minutes"] += minutes
+        if not r.get("check_out_at"):
+            acc["days_incomplete"] += 1
+            acc["effective_days"] += 0.5
+        else:
+            acc["effective_days"] += 1.0 if minutes >= PAYROLL_FULL_DAY_MIN else 0.5
+        if r.get("check_in_within") is False:
+            acc["days_outside_geofence"] += 1
+
+    out = []
+    for acc in by_user.values():
+        acc["effective_hours"] = round(acc.pop("total_minutes") / 60, 2)
+        acc["effective_days"] = round(acc["effective_days"], 1)
+        out.append(acc)
+    out.sort(key=lambda a: a["name"])
+    return {"month": month, "full_day_minutes": PAYROLL_FULL_DAY_MIN, "users": out}
 
 
 @api.get("/attendance/today")
@@ -2351,8 +2686,9 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
         return sorted([{"name": k, "value": v} for k, v in d.items()], key=lambda x: -x["value"])[:n]
 
     top_items = sorted(items, key=lambda item: -((item.get("mrp") or 0) * (item.get("qty") or 0)))[:10]
-    if not see_names:
-        top_items = [redact_vendor_field(i, user) for i in top_items]
+    # Same gating as the /inventory list — these are whole inventory rows, so
+    # without this they'd carry the cost/margin the list route strips.
+    top_items = [redact_inventory(i, user) for i in top_items]
 
     # Aging: days since created_at for items still sitting In Stock — how
     # long unsold stock has been on hand, not a lifecycle age for Sold/
@@ -2380,7 +2716,10 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
         "total_items": len(items),
         "total_qty": sum((item.get("qty") or 0) for item in items),
         "total_mrp": sum((item.get("mrp") or 0) * (item.get("qty") or 0) for item in items),
-        "total_cost": sum((item.get("cost") or 0) * (item.get("qty") or 0) for item in items),
+        # None, not 0, for a viewer without cost access — a zero would render
+        # as a real figure and read as "this stock cost nothing".
+        "total_cost": (sum((item.get("cost") or 0) * (item.get("qty") or 0) for item in items)
+                       if _can_see_cost_prices(user) else None),
         "by_category": top(by_category),
         "by_vendor": top(by_vendor),
         "by_location": top(by_location),
@@ -2747,7 +3086,7 @@ from models import (
     CommissionRuleCreate, CommissionRule,
     CommissionPayoutCreate, CommissionPayout,
     RequirementCreate, Requirement, ProductConfigCreate, ProductConfig,
-    CustomerCreate, Customer, GST_DEFAULT,
+    CustomerCreate, Customer, GST_DOC_DEFAULT,
 )
 
 make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
@@ -2904,7 +3243,7 @@ async def requirement_to_configurator(requirement_id: str, user: dict = Depends(
         "name": req.get("title") or f"Config for {req.get('customer', '')}",
         "division": req.get("division", "Furniture"),
         "inputs": {"items": req.get("items") or []}, "line_items": lines,
-        "subtotal": subtotal, "discount": 0, "tax_pct": GST_DEFAULT,
+        "subtotal": subtotal, "discount": 0, "tax_pct": GST_DOC_DEFAULT,
         "tax_total": 0, "grand_total": subtotal, "version": 1, "status": "Draft",
         "by_user": user.get("name", ""),
     }
@@ -2941,7 +3280,8 @@ async def configurator_to_quote(config_id: str, user: dict = Depends(get_current
         tenancy.scope({"id": config.get("requirement_id")}, "requirements", user), {"_id": 0}) or {}
     subtotal = lc.money(config.get("subtotal"))
     discount = lc.money(config.get("discount"))
-    totals = lc.quote_total(subtotal, discount, config.get("tax_pct") or GST_DEFAULT)
+    tax_pct = lc.money(config.get("tax_pct"))
+    totals = lc.quote_total(subtotal, discount, tax_pct)
     approval = "pending" if lc.needs_approval(subtotal, discount) else ""
 
     existing_quotes = await db.quotes.find(
@@ -2956,7 +3296,7 @@ async def configurator_to_quote(config_id: str, user: dict = Depends(get_current
         "lead_id": req.get("lead_id", ""), "requirement_id": req.get("id", ""),
         "config_id": config_id, "version": 1,
         "subtotal": totals["subtotal"], "discount": totals["discount"],
-        "tax_pct": config.get("tax_pct") or GST_DEFAULT, "tax_total": totals["tax_total"],
+        "tax_pct": tax_pct, "tax_total": totals["tax_total"],
         "grand_total": totals["grand_total"], "value": totals["value"],
         "approval": approval,
         "line_items": config.get("line_items") or [],
