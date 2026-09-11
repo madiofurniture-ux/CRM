@@ -29,6 +29,7 @@ import notifications as notif
 import agent_tasks
 import csv_engine
 import quotation_templates
+import tally
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -50,6 +51,8 @@ from models import (
     CashbookEntryApproval, CashbookTopUp, CashbookExpense,
     RecordContactCreate, RecordContact,
     AttendanceCheckIn, OfficeSettings,
+    SiteCreate, Site, PayrollRequest,
+    CashbookTxnCreate, CashbookTxn,
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
     TeamCreate, Team, RoleCreate, Role,
     SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
@@ -2218,6 +2221,163 @@ async def project_petty_cash_summary(project_id: str, user: dict = Depends(get_c
     }
 
 
+# ---------- Cashbook transactions -> Tally ----------
+# The Tally destination comes from configuration and ONLY from configuration.
+# Accepting a host from the request body would turn this endpoint into an
+# SSRF primitive: any authenticated user could make the server POST arbitrary
+# XML to an arbitrary address inside the deployment's network. There is
+# deliberately no override parameter anywhere below.
+TALLY_URL = os.environ.get("TALLY_URL", "http://localhost:9000")
+TALLY_COMPANY = os.environ.get("TALLY_COMPANY", "")
+TALLY_TIMEOUT_S = float(os.environ.get("TALLY_TIMEOUT_S", "15"))
+
+
+def _post_to_tally(xml: str) -> tuple[bool, str]:
+    """Blocking POST of one envelope. Returns (accepted, message) and never
+    raises: an unreachable Tally is an expected operational state (the gateway
+    is a desktop app someone has to have open), not a server error.
+
+    urllib rather than requests — this is one plain POST of a known body to a
+    configured URL, which the stdlib does without adding a runtime import this
+    backend doesn't otherwise need.
+    """
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(
+        TALLY_URL, data=xml.encode("utf-8"), method="POST",
+        headers={"Content-Type": "text/xml;charset=utf-8"})
+    try:
+        with urllib.request.urlopen(req, timeout=TALLY_TIMEOUT_S) as resp:
+            if resp.status != 200:
+                return False, f"Tally returned HTTP {resp.status}"
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        return False, f"Tally returned HTTP {e.code}"
+    except Exception as e:
+        return False, f"Tally gateway unreachable at {TALLY_URL}: {e}"
+    return tally.parse_sync_response(body)
+
+
+async def _sync_one(txn: dict, user: dict) -> dict:
+    """Push one transaction and record the outcome. A UPI row still awaiting
+    review is refused here rather than at the route, so the batch endpoint
+    cannot be used to sidestep the check one row at a time."""
+    if txn.get("tally_synced"):
+        return {"id": txn["id"], "synced": True, "message": "Already synced"}
+    if txn.get("needs_review"):
+        return {"id": txn["id"], "synced": False,
+                "message": "Transaction needs review before it can be synced to Tally"}
+
+    xml = tally.build_voucher_xml(txn, TALLY_COMPANY)
+    accepted, message = await asyncio.to_thread(_post_to_tally, xml)
+
+    owned = tenancy.scope({"id": txn["id"]}, "cashbook_transactions", user)
+    if accepted:
+        await db.cashbook_transactions.update_one(owned, {"$set": {
+            "tally_synced": True, "tally_sync_time": now_iso(),
+            "tally_voucher_type": tally.classify_voucher(txn), "tally_error": "",
+        }})
+    else:
+        await db.cashbook_transactions.update_one(owned, {"$set": {"tally_error": message}})
+    return {"id": txn["id"], "synced": accepted, "message": message,
+            "voucher_type": tally.classify_voucher(txn)}
+
+
+@api.get("/finance/cashbook")
+async def list_cashbook_transactions(
+    needs_review: Optional[bool] = None,
+    payment_mode: Optional[str] = None,
+    tally_synced: Optional[bool] = None,
+    user: dict = Depends(get_current_user),
+):
+    await _require_permission("cashbook", "view", user)
+    q: dict = {}
+    if needs_review is not None:
+        q["needs_review"] = needs_review
+    if payment_mode:
+        q["payment_mode"] = payment_mode
+    if tally_synced is not None:
+        q["tally_synced"] = tally_synced
+    return await db.cashbook_transactions.find(
+        tenancy.scope(q, "cashbook_transactions", user), {"_id": 0}
+    ).sort("created_at", -1).to_list(2000)
+
+
+@api.post("/finance/cashbook")
+async def create_cashbook_transaction(payload: CashbookTxnCreate,
+                                      user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "create", user)
+    doc = payload.model_dump()
+    doc.update(id=new_id(), created_at=now_iso(), date=doc.get("date") or _today())
+    # needs_review is derived, not taken on trust: a client that posts a UPI
+    # row with needs_review=false would otherwise sync it unreviewed.
+    doc["needs_review"] = doc["payment_mode"] == "UPI"
+    doc.update(tally_synced=False, tally_sync_time="", tally_error="",
+               reviewed_by="", reviewed_at="",
+               tally_voucher_type=tally.classify_voucher(doc))
+    tenancy.stamp(doc, "cashbook_transactions", user)
+    await db.cashbook_transactions.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.post("/finance/cashbook/{txn_id}/review")
+async def review_cashbook_transaction(txn_id: str, user: dict = Depends(get_current_user)):
+    """Clear a UPI transaction for sync. `approve` is the right action here —
+    this is a sign-off that the ledgers on an auto-captured row are correct,
+    not an edit of it."""
+    await _require_permission("cashbook", "approve", user)
+    owned = tenancy.scope({"id": txn_id}, "cashbook_transactions", user)
+    txn = await db.cashbook_transactions.find_one(owned, {"_id": 0})
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    await db.cashbook_transactions.update_one(owned, {"$set": {
+        "needs_review": False, "reviewed_by": user.get("name", ""), "reviewed_at": now_iso(),
+    }})
+    return await db.cashbook_transactions.find_one(owned, {"_id": 0})
+
+
+@api.get("/finance/tally/preview/{txn_id}")
+async def tally_preview(txn_id: str, user: dict = Depends(get_current_user)):
+    """The exact envelope that would be sent — so a reviewer can check the
+    ledger mapping before anything reaches the accounts."""
+    await _require_permission("cashbook", "view", user)
+    txn = await db.cashbook_transactions.find_one(
+        tenancy.scope({"id": txn_id}, "cashbook_transactions", user), {"_id": 0})
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    return {"id": txn_id, "voucher_type": tally.classify_voucher(txn),
+            "xml": tally.build_voucher_xml(txn, TALLY_COMPANY)}
+
+
+@api.post("/finance/tally/sync/{txn_id}")
+async def tally_sync_one(txn_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "approve", user)
+    txn = await db.cashbook_transactions.find_one(
+        tenancy.scope({"id": txn_id}, "cashbook_transactions", user), {"_id": 0})
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    result = await _sync_one(txn, user)
+    if not result["synced"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
+
+
+@api.post("/finance/tally/sync-batch")
+async def tally_sync_batch(user: dict = Depends(get_current_user)):
+    """Sync every reviewed, unsynced transaction. Partial success is the
+    normal outcome and is reported per row rather than failing the batch —
+    one bad ledger name shouldn't strand the other forty vouchers."""
+    await _require_permission("cashbook", "approve", user)
+    pending = await db.cashbook_transactions.find(
+        tenancy.scope({"tally_synced": False, "needs_review": False},
+                      "cashbook_transactions", user), {"_id": 0}).to_list(500)
+    results = [await _sync_one(t, user) for t in pending]
+    synced = sum(1 for r in results if r["synced"])
+    return {"attempted": len(results), "synced": synced,
+            "failed": len(results) - synced, "results": results}
+
+
 @api.get("/cashbook-entries/export.csv")
 async def cashbook_entries_export(user: dict = Depends(get_current_user)):
     await _require_permission("cashbook", "export", user)
@@ -2415,6 +2575,75 @@ def _today():
 # by a human looking at the log, not silently by a threshold here.
 PAYROLL_FULL_DAY_MIN = 4 * 60
 
+# A standard paid day. Minutes beyond it on a completed day are overtime, and
+# it is the divisor that turns any pay rate into an hourly one (brief:
+# hourly_rate = day_rate / 8.0).
+STANDARD_WORKDAY_MIN = 8 * 60
+STANDARD_WORKDAY_HOURS = STANDARD_WORKDAY_MIN / 60
+
+
+# ---------- Sites: named geofences a user can be assigned to ----------
+make_crud(api, "sites", "sites", SiteCreate, Site, module="attendance")
+
+
+async def _resolve_geofence(user: dict, lat: float, lng: float) -> dict:
+    """Which fence this check-in is judged against.
+
+    A user with assigned_site_ids is judged against the NEAREST of their own
+    sites — a fitter assigned to three sites shouldn't be flagged for being at
+    the second one. A user with none is judged against the single office
+    geofence in OfficeSettings, which is exactly how attendance behaved before
+    sites existed, so no existing account changes behavior.
+    """
+    site_ids = (user or {}).get("assigned_site_ids") or []
+    if site_ids:
+        sites = await db.sites.find(
+            tenancy.scope({"id": {"$in": site_ids}}, "sites", user), {"_id": 0}).to_list(50)
+        sites = [s for s in sites if s.get("active", True)]
+        if sites:
+            best = min(sites, key=lambda s: _haversine_m(
+                lat, lng, s.get("latitude", 0.0), s.get("longitude", 0.0)))
+            return {
+                "site_id": best.get("id", ""), "site_name": best.get("site_name", ""),
+                "lat": best.get("latitude", 0.0), "lng": best.get("longitude", 0.0),
+                "radius_m": best.get("radius_meters", 150),
+            }
+    settings = await _get_settings()
+    return {"site_id": "", "site_name": settings.get("name", "Office"),
+            "lat": settings["lat"], "lng": settings["lng"],
+            "radius_m": settings["radius_m"]}
+
+
+# ---------- Attendance privacy boundary ----------
+# Raw coordinates and the selfie blob are the two fields on an attendance row
+# that are personal data rather than an attendance outcome. Whether someone
+# was where they said they were is a management fact; the exact lat/long they
+# stood at and a photo of their face is surveillance material, and a list
+# endpoint hands back hundreds of rows of it at once.
+#
+# Same rule as redact_cost(): the fields are ABSENT from the response, not
+# blanked in the UI. The verified outcome computed from them stays — nothing
+# downstream (payroll, geofence reporting) needs the raw values to do its job.
+# The one exception is the single-record admin detail route below, which is
+# what an actual attendance dispute gets settled with.
+ATTENDANCE_RAW_FIELDS = (
+    "check_in_lat", "check_in_lng", "check_in_photo",
+    "check_out_lat", "check_out_lng", "check_out_photo",
+)
+
+
+def redact_attendance(rec: dict) -> dict:
+    """Strip raw GPS/selfie from an attendance row, keeping the outcome they
+    were collected to establish. Returns a new dict — never mutates."""
+    if not rec:
+        return rec
+    out = {k: v for k, v in rec.items() if k not in ATTENDANCE_RAW_FIELDS}
+    out["distance_variance_m"] = rec.get("check_in_distance")
+    out["verified"] = rec.get("check_in_within")
+    out["selfie_verified"] = bool(rec.get("check_in_photo"))
+    out["device_id"] = rec.get("device_id", "")
+    return out
+
 
 @api.get("/attendance/payroll")
 async def attendance_payroll(month: str = "", user_id: str = "",
@@ -2445,13 +2674,30 @@ async def attendance_payroll(month: str = "", user_id: str = "",
     rows = await db.attendance.find(
         tenancy.scope(q, "attendance", user), {"_id": 0}).to_list(5000)
 
+    return {"month": month, "full_day_minutes": PAYROLL_FULL_DAY_MIN,
+            "users": _aggregate_effective_days(rows)}
+
+
+def _aggregate_effective_days(rows: list[dict]) -> list[dict]:
+    """Attendance rows -> one effective-days/hours row per user.
+
+    The single definition of what a worked day is worth, shared by
+    /attendance/payroll and /payroll/calculate — the pay engine multiplies
+    what this returns instead of re-deriving attendance from raw rows, so
+    the two can never disagree about whether someone showed up.
+
+    present = 1.0, half day = 0.5, absent = 0.0 (an absent day has no row at
+    all, so it contributes nothing and never reaches this loop). A day short
+    of PAYROLL_FULL_DAY_MIN, or checked in but never out, is the half day.
+    Overtime is whatever was worked beyond a full day, summed in minutes.
+    """
     by_user: dict[str, dict] = {}
     for r in rows:
         uid = r.get("user_id", "")
         acc = by_user.setdefault(uid, {
             "user_id": uid, "name": r.get("name", ""), "username": r.get("username", ""),
             "effective_days": 0.0, "total_minutes": 0, "days_present": 0,
-            "days_incomplete": 0, "days_outside_geofence": 0,
+            "days_incomplete": 0, "days_outside_geofence": 0, "overtime_minutes": 0,
         })
         if not r.get("check_in_at"):
             continue
@@ -2463,6 +2709,10 @@ async def attendance_payroll(month: str = "", user_id: str = "",
             acc["effective_days"] += 0.5
         else:
             acc["effective_days"] += 1.0 if minutes >= PAYROLL_FULL_DAY_MIN else 0.5
+            # Overtime accrues only on a completed day. An open check-in has no
+            # measured end, so treating its unbounded duration as OT would pay
+            # for a forgotten check-out.
+            acc["overtime_minutes"] += max(0, minutes - STANDARD_WORKDAY_MIN)
         if r.get("check_in_within") is False:
             acc["days_outside_geofence"] += 1
 
@@ -2470,16 +2720,126 @@ async def attendance_payroll(month: str = "", user_id: str = "",
     for acc in by_user.values():
         acc["effective_hours"] = round(acc.pop("total_minutes") / 60, 2)
         acc["effective_days"] = round(acc["effective_days"], 1)
+        acc["overtime_hours"] = round(acc.pop("overtime_minutes") / 60, 2)
         out.append(acc)
     out.sort(key=lambda a: a["name"])
-    return {"month": month, "full_day_minutes": PAYROLL_FULL_DAY_MIN, "users": out}
+    return out
+
+
+# ---------- Payroll: effective days x pay rate ----------
+# Same role pair as cost prices and vendor names (_can_see_cost_prices), and
+# for the same reason: a payroll run exposes every colleague's salary, which
+# is the most sensitive commercial figure in the system. The brief called this
+# "admin/finance"; this codebase's finance role is "accountant" (see
+# DEFAULT_ROLES' "Accounts" and _can_see_cost_prices), so that is what gates it
+# rather than inventing a role that doesn't exist here.
+def _can_run_payroll(user: dict) -> bool:
+    return (user or {}).get("role") in ("admin", "accountant")
+
+
+def compute_gross_pay(*, pay_model: str, base_pay_rate: float, effective_days: float,
+                      overtime_hours: float, overtime_eligible: bool,
+                      overtime_rate_multiplier: float, working_days_in_month: int) -> dict:
+    """Itemized pay for one employee-month. Pure arithmetic, no DB.
+
+    Daily:   day_rate = base_pay_rate            (rate IS the daily wage)
+    Monthly: day_rate = base_pay_rate / working_days_in_month
+    Both:    hourly_rate = day_rate / 8
+             gross = day_rate * effective_days + hourly * ot_hours * multiplier
+
+    A monthly employee is paid per effective day rather than a flat salary on
+    purpose: that is what makes unpaid leave and half days actually reduce the
+    payout, which is the entire point of running payroll off attendance.
+    """
+    rate = float(base_pay_rate or 0)
+    if (pay_model or "monthly") == "daily":
+        day_rate = rate
+    else:
+        day_rate = rate / working_days_in_month if working_days_in_month else 0.0
+    hourly_rate = day_rate / STANDARD_WORKDAY_HOURS
+
+    base_earnings = day_rate * float(effective_days or 0)
+    ot_hours = float(overtime_hours or 0) if overtime_eligible else 0.0
+    ot_pay = hourly_rate * ot_hours * float(overtime_rate_multiplier or 1.0)
+    return {
+        "day_rate": round(day_rate, 2),
+        "hourly_rate": round(hourly_rate, 2),
+        "base_earnings": round(base_earnings, 2),
+        "overtime_hours": round(ot_hours, 2),
+        "overtime_pay": round(ot_pay, 2),
+        "gross_pay": round(base_earnings + ot_pay, 2),
+    }
+
+
+@api.post("/payroll/calculate")
+async def payroll_calculate(payload: PayrollRequest, user: dict = Depends(get_current_user)):
+    """Itemized payroll for a month, built on /attendance/payroll's own
+    effective-days aggregation (_aggregate_effective_days) rather than a
+    second reading of the attendance rows.
+
+    Employees with no attendance in the month still appear, at zero — a
+    missing row is the signal that someone wasn't paid, and silently omitting
+    them is how a person falls off a payroll run unnoticed.
+    """
+    if not _can_run_payroll(user):
+        raise HTTPException(status_code=403, detail="Not permitted: run payroll")
+
+    month_key = f"{payload.year:04d}-{payload.month:02d}"
+    rows = await db.attendance.find(
+        tenancy.scope({"date": {"$regex": f"^{re.escape(month_key)}"}}, "attendance", user),
+        {"_id": 0}).to_list(20000)
+    attendance_by_user = {a["user_id"]: a for a in _aggregate_effective_days(rows)}
+
+    # `users` is tenant-filtered explicitly everywhere in this file rather
+    # than through tenancy.scope() (it isn't in TENANT_COLLECTIONS) — matching
+    # that here, because scope() would have returned this query UNFILTERED and
+    # run payroll across every tenant on the deployment.
+    staff_q: dict = {"tenant_id": tenancy.tenant_of(user) or "__no_tenant__", "active": True}
+    if payload.division:
+        staff_q["division"] = payload.division
+    staff = await db.users.find(staff_q, {"_id": 0, "pin_hash": 0}).to_list(2000)
+
+    items, total = [], 0.0
+    for s in staff:
+        att = attendance_by_user.get(s["id"], {})
+        pay = compute_gross_pay(
+            pay_model=s.get("pay_model", "monthly"),
+            base_pay_rate=s.get("base_pay_rate", 0.0),
+            effective_days=att.get("effective_days", 0.0),
+            overtime_hours=att.get("overtime_hours", 0.0),
+            overtime_eligible=s.get("overtime_eligible", False),
+            overtime_rate_multiplier=s.get("overtime_rate_multiplier", 1.0),
+            working_days_in_month=payload.working_days_in_month,
+        )
+        total += pay["gross_pay"]
+        items.append({
+            "user_id": s["id"], "name": s.get("name", ""), "username": s.get("username", ""),
+            "division": s.get("division", ""),
+            "pay_model": s.get("pay_model", "monthly"),
+            "base_pay_rate": s.get("base_pay_rate", 0.0),
+            "overtime_eligible": s.get("overtime_eligible", False),
+            "overtime_rate_multiplier": s.get("overtime_rate_multiplier", 1.0),
+            "effective_days": att.get("effective_days", 0.0),
+            "days_present": att.get("days_present", 0),
+            **pay,
+        })
+    items.sort(key=lambda i: i["name"])
+    return {
+        "month": payload.month, "year": payload.year, "period": month_key,
+        "division": payload.division or "",
+        "working_days_in_month": payload.working_days_in_month,
+        "standard_workday_hours": STANDARD_WORKDAY_HOURS,
+        "employee_count": len(items),
+        "total_gross_payout": round(total, 2),
+        "items": items,
+    }
 
 
 @api.get("/attendance/today")
 async def attendance_today(user: dict = Depends(get_current_user)):
     rec = await db.attendance.find_one(
         tenancy.scope({"user_id": user["id"], "date": _today()}, "attendance", user), {"_id": 0})
-    return rec
+    return redact_attendance(rec)
 
 
 @api.get("/attendance")
@@ -2508,15 +2868,66 @@ async def list_attendance(
         from datetime import date as _date, timedelta
         cutoff = (_date.today() - timedelta(days=days)).isoformat()
         q["date"] = {"$gte": cutoff}
-    return await db.attendance.find(
+    rows = await db.attendance.find(
         tenancy.scope(q, "attendance", user), {"_id": 0}).sort("date", -1).to_list(500)
+    # Bulk read: outcomes only, never the raw coordinates/selfies themselves.
+    return [redact_attendance(r) for r in rows]
+
+
+@api.get("/attendance/{record_id}/raw")
+async def attendance_raw_record(record_id: str, user: dict = Depends(require_admin)):
+    """The one route that returns raw GPS and the selfie, one record at a time,
+    admin only. This exists so a contested check-in can actually be
+    investigated — the reason the data is collected — without a list endpoint
+    handing back the same material in bulk for every member of staff.
+    """
+    rec = await db.attendance.find_one(
+        tenancy.scope({"id": record_id}, "attendance", user), {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    await _audit("attendance_raw_viewed", user, f"{rec.get('name', '')} {rec.get('date', '')}")
+    return rec
+
+
+# Raw location/selfie is kept only as long as a check-in can realistically be
+# disputed. After that the outcome (present/flagged, distance, verified) is
+# the permanent record and the surveillance material is deleted.
+ATTENDANCE_RAW_RETENTION_DAYS = 60
+
+
+@api.post("/admin/attendance/cleanup")
+async def attendance_cleanup(days: int = ATTENDANCE_RAW_RETENTION_DAYS,
+                             user: dict = Depends(require_admin)):
+    """Purge raw GPS/selfie blobs older than `days`, keeping every attendance
+    OUTCOME intact — the row, its status, verified flag and distance all
+    survive; only the coordinates and the photo are unset. Payroll run against
+    a purged month produces identical numbers.
+
+    ADAPTATION: the brief called for a retention job. This codebase has no
+    Celery, no APScheduler and no cron runner (agent_tasks is a DB-backed
+    to-do queue for humans, not a scheduler), so this is an admin-triggered
+    endpoint rather than a new heavyweight scheduling dependency. Point any
+    external scheduler at it if unattended purging is wanted later.
+    """
+    if days < 1:
+        raise HTTPException(status_code=400, detail="days must be >= 1")
+    from datetime import date as _date, timedelta
+    cutoff = (_date.today() - timedelta(days=days)).isoformat()
+    res = await db.attendance.update_many(
+        tenancy.scope({"date": {"$lt": cutoff},
+                       "$or": [{f: {"$nin": [None, ""]}} for f in ATTENDANCE_RAW_FIELDS]},
+                      "attendance", user),
+        {"$set": {f: None for f in ATTENDANCE_RAW_FIELDS} | {"raw_purged_at": now_iso()}},
+    )
+    await _audit("attendance_raw_purged", user, f"{res.modified_count} records before {cutoff}")
+    return {"purged": res.modified_count, "cutoff_date": cutoff, "retention_days": days}
 
 
 @api.post("/attendance/check-in")
 async def check_in(payload: AttendanceCheckIn, user: dict = Depends(get_current_user)):
-    settings = await _get_settings()
-    dist = _haversine_m(payload.lat, payload.lng, settings["lat"], settings["lng"])
-    within = dist <= settings["radius_m"]
+    fence = await _resolve_geofence(user, payload.lat, payload.lng)
+    dist = _haversine_m(payload.lat, payload.lng, fence["lat"], fence["lng"])
+    within = dist <= fence["radius_m"]
     today = _today()
     existing = await db.attendance.find_one(
         tenancy.scope({"user_id": user["id"], "date": today}, "attendance", user))
@@ -2534,6 +2945,13 @@ async def check_in(payload: AttendanceCheckIn, user: dict = Depends(get_current_
         "check_in_within": within,
         "check_in_distance": round(dist, 1),
         "check_in_photo": payload.photo_url or "",
+        # An out-of-bounds punch is recorded and flagged, never refused: a
+        # fitter genuinely sent to an unregistered site still worked that day,
+        # and a hard block would just teach staff to stop punching at all.
+        "status": "present" if within else "flagged_out_of_bounds",
+        "site_id": fence["site_id"],
+        "site_name": fence["site_name"],
+        "device_id": payload.device_id or "",
         "note": payload.note,
         "created_at": now_iso(),
     }
@@ -2542,17 +2960,17 @@ async def check_in(payload: AttendanceCheckIn, user: dict = Depends(get_current_
         await db.attendance.update_one({"_id": existing["_id"]}, {"$set": {k: v for k, v in doc.items() if k != "id"}})
         rec = await db.attendance.find_one(
             tenancy.scope({"user_id": user["id"], "date": today}, "attendance", user), {"_id": 0})
-        return rec
+        return redact_attendance(rec)
     await db.attendance.insert_one(doc)
     doc.pop("_id", None)
-    return doc
+    return redact_attendance(doc)
 
 
 @api.post("/attendance/check-out")
 async def check_out(payload: AttendanceCheckIn, user: dict = Depends(get_current_user)):
-    settings = await _get_settings()
-    dist = _haversine_m(payload.lat, payload.lng, settings["lat"], settings["lng"])
-    within = dist <= settings["radius_m"]
+    fence = await _resolve_geofence(user, payload.lat, payload.lng)
+    dist = _haversine_m(payload.lat, payload.lng, fence["lat"], fence["lng"])
+    within = dist <= fence["radius_m"]
     today = _today()
     rec = await db.attendance.find_one(
         tenancy.scope({"user_id": user["id"], "date": today}, "attendance", user))
@@ -2577,7 +2995,7 @@ async def check_out(payload: AttendanceCheckIn, user: dict = Depends(get_current
         "check_out_photo": payload.photo_url or "",
         "duration_min": duration,
     }})
-    return await db.attendance.find_one({"_id": rec["_id"]}, {"_id": 0})
+    return redact_attendance(await db.attendance.find_one({"_id": rec["_id"]}, {"_id": 0}))
 
 
 # ---------- Helper Calculators ----------

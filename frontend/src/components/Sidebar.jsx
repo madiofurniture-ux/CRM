@@ -5,7 +5,7 @@ import {
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
   CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
   SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2, HandCoins, LayoutTemplate,
-  Landmark, ShieldCheck,
+  Landmark, ShieldCheck, ArrowLeftRight,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -57,6 +57,7 @@ const SECTIONS = [
       { id: "finance-payments", to: "/payments", label: "Payments & Tax Invoices", icon: Landmark },
       { id: "invoice-gen", to: "/invoices", label: "Tax Invoices", icon: FileSpreadsheet },
       { id: "petty", to: "/petty-cash", label: "Petty Cash & Wallets", icon: IndianRupee },
+      { id: "cashbook", to: "/finance/tally", label: "Cashbook & Tally Sync", icon: ArrowLeftRight },
       { id: "outstanding", to: "/outstanding", label: "Outstanding", icon: AlertTriangle },
       { id: "project-pnl", to: "/reports/project-pnl", label: "Project P&L", icon: LineChart },
       { id: "incentives", to: "/incentives", label: "Incentives & Commissions", icon: HandCoins },

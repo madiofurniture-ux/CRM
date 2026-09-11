@@ -36,6 +36,7 @@ const Outstanding = lazy(() => import("@/pages/Outstanding"));
 const Invoices = lazy(() => import("@/pages/Invoices"));
 const PettyCash = lazy(() => import("@/pages/PettyCash"));
 const Cashbook = lazy(() => import("@/pages/Cashbook"));
+const TallyLedger = lazy(() => import("@/pages/TallyLedger"));
 const Meets = lazy(() => import("@/pages/Meets"));
 
 // Recovered parity modules
@@ -111,6 +112,7 @@ function App() {
           <Route path="/invoices" element={<ProtectedRoute page="invoice-gen"><Layout><Invoices /></Layout></ProtectedRoute>} />
           <Route path="/petty-cash" element={<ProtectedRoute page="petty"><Layout><PettyCash /></Layout></ProtectedRoute>} />
           <Route path="/cashbook" element={<ProtectedRoute page="cashbook"><Layout><Cashbook /></Layout></ProtectedRoute>} />
+          <Route path="/finance/tally" element={<ProtectedRoute page="cashbook"><Layout><TallyLedger /></Layout></ProtectedRoute>} />
           <Route path="/meets" element={<ProtectedRoute page="meetplan"><Layout><Meets /></Layout></ProtectedRoute>} />
 
           {/* Recovered parity modules */}

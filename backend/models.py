@@ -42,6 +42,18 @@ class UserBase(BaseModel):
     phone: Optional[str] = ""
     email: Optional[str] = ""
     active: bool = True
+    # --- Payroll (all optional with defaults: every account that existed
+    # before this feature reads back as an unpaid 'monthly' record with a zero
+    # rate, which produces a zero payout rather than a crash or a guess.) ---
+    division: Optional[str] = ""          # Furniture / Finishes / Doors & Windows — payroll filter
+    pay_model: str = "monthly"            # "monthly" (salaried) | "daily" (wage)
+    base_pay_rate: float = 0.0            # monthly salary, or per-day wage
+    overtime_eligible: bool = False
+    overtime_rate_multiplier: float = 1.0
+    # Sites this user may check in at. Empty == fall back to the single office
+    # geofence in OfficeSettings, which is how attendance worked before sites
+    # existed. String ids (new_id()), consistent with every other link here.
+    assigned_site_ids: List[str] = Field(default_factory=list)
 
 
 class UserCreate(UserBase):
@@ -60,6 +72,12 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     active: Optional[bool] = None
+    division: Optional[str] = None
+    pay_model: Optional[str] = None
+    base_pay_rate: Optional[float] = None
+    overtime_eligible: Optional[bool] = None
+    overtime_rate_multiplier: Optional[float] = None
+    assigned_site_ids: Optional[List[str]] = None
 
 
 class UserPublic(UserBase):
@@ -688,6 +706,66 @@ class CashbookEntry(CashbookEntryBase):
     created_at: str
 
 
+# ------- Cashbook transactions (Tally-bound double-entry ledger) -------
+# Deliberately NOT the same collection as CashbookEntry above. A CashbookEntry
+# is a movement of a *specific physical cash box* and mutates that box's
+# current_balance; it has no counter-ledger, so it cannot express the
+# Dr/Cr pair a Tally voucher requires. This is the accounting-export ledger:
+# every row names both sides (from_ledger -> to_ledger) and carries its own
+# Tally sync state. The two coexist; neither writes to the other.
+TALLY_PAYMENT_MODES = ("UPI", "CASH", "BANK_TRANSFER")
+
+
+class CashbookTxnBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    date: str = ""                       # YYYY-MM-DD; defaults to today on create
+    type: str = "OUT"                    # IN (money received) | OUT (money paid)
+    payment_mode: str = "CASH"           # UPI | CASH | BANK_TRANSFER
+    amount: float = 0
+    from_ledger: str = ""                # credited ledger (source of funds)
+    to_ledger: str = ""                  # debited ledger (destination)
+    reference_no: Optional[str] = ""     # UTR / UPI ref / voucher no
+    narration: Optional[str] = ""
+    # UPI lands from a payment app with no human in the loop, so it is parked
+    # for review by default; cash and bank transfers are entered by a person
+    # who already saw the counterparty. Sync is blocked until review clears.
+    needs_review: bool = True
+    reviewed_by: Optional[str] = ""
+    reviewed_at: Optional[str] = ""
+    tally_synced: bool = False
+    tally_sync_time: Optional[str] = ""
+    tally_voucher_type: Optional[str] = ""   # Contra / Receipt / Payment
+    tally_error: Optional[str] = ""
+
+
+class CashbookTxnCreate(CashbookTxnBase):
+    @field_validator("type")
+    @classmethod
+    def _valid_type(cls, v):
+        if v not in ("IN", "OUT"):
+            raise ValueError("type must be IN or OUT")
+        return v
+
+    @field_validator("payment_mode")
+    @classmethod
+    def _valid_mode(cls, v):
+        if v not in TALLY_PAYMENT_MODES:
+            raise ValueError(f"payment_mode must be one of {', '.join(TALLY_PAYMENT_MODES)}")
+        return v
+
+    @field_validator("amount")
+    @classmethod
+    def _positive_amount(cls, v):
+        if v <= 0:
+            raise ValueError("amount must be greater than zero")
+        return v
+
+
+class CashbookTxn(CashbookTxnBase):
+    id: str
+    created_at: str
+
+
 class CashbookEntryApproval(BaseModel):
     approved: bool
     utr_number: Optional[str] = ""  # bank UTR once the payout is actually made
@@ -818,6 +896,7 @@ class AttendanceCheckIn(BaseModel):
     lng: float
     note: Optional[str] = ""
     photo_url: Optional[str] = ""
+    device_id: Optional[str] = ""  # safe to surface in list views, unlike lat/lng/photo
 
 
 class AttendanceRecord(BaseModel):
@@ -843,6 +922,66 @@ class AttendanceRecord(BaseModel):
     note: Optional[str] = ""
     created_at: str
 
+
+# ------- Sites (named geofences for field staff) -------
+# OfficeSettings already carried ONE lat/lng/radius — the head office — and
+# attendance geofenced against it. A site is the same shape, but there can be
+# many and a user is assigned the ones they work at. A user with no assigned
+# site still geofences against OfficeSettings, unchanged.
+class SiteBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    site_name: str
+    latitude: float = 0.0
+    longitude: float = 0.0
+    radius_meters: int = 150
+    division: Optional[str] = ""
+    active: bool = True
+
+
+class SiteCreate(SiteBase):
+    @field_validator("site_name")
+    @classmethod
+    def _name_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Site name is required")
+        return v
+
+
+class Site(SiteBase):
+    id: str
+    created_at: str
+
+
+class PayrollRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    month: int
+    year: int
+    division: Optional[str] = ""
+    # Statutory paid days in the month for monthly staff. 26 is the common
+    # Indian convention (30 days less 4 weekly offs); configurable because it
+    # is a policy choice, not arithmetic.
+    working_days_in_month: int = 26
+
+    @field_validator("month")
+    @classmethod
+    def _valid_month(cls, v):
+        if not 1 <= int(v) <= 12:
+            raise ValueError("month must be 1-12")
+        return int(v)
+
+    @field_validator("year")
+    @classmethod
+    def _valid_year(cls, v):
+        if not 2000 <= int(v) <= 2100:
+            raise ValueError("year out of range")
+        return int(v)
+
+    @field_validator("working_days_in_month")
+    @classmethod
+    def _valid_working_days(cls, v):
+        if not 1 <= int(v) <= 31:
+            raise ValueError("working_days_in_month must be 1-31")
+        return int(v)
 
 
 # ------- Settings -------

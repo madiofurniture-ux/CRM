@@ -10,6 +10,17 @@ import { toast } from "sonner";
 // This used to be a second, hardcoded copy of the office geofence.
 const HQ_FALLBACK = { lat: 17.4065, lng: 78.4772, name: "Head Office", radius: 200 };
 
+// A stable per-browser id sent with each punch, so an attendance dispute can
+// be tied to a device without the server keeping the raw location trail.
+function deviceId() {
+  let id = localStorage.getItem("crm_device_id");
+  if (!id) {
+    id = `web-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem("crm_device_id", id);
+  }
+  return id;
+}
+
 function haversineMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000; // meters
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -90,10 +101,13 @@ export default function Attendance() {
         lat: loc.lat,
         lng: loc.lng,
         note,
-        photo_url: photoUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=60",
+        photo_url: photoUrl,
+        device_id: deviceId(),
       };
       const { data } = await api.post("/attendance/check-in", payload);
-      toast.success(data.check_in_within ? "Checked in within Geofence!" : "Checked in (Outside Geofence recorded)");
+      toast.success(data.verified
+        ? `Checked in at ${data.site_name || "office"} — inside geofence`
+        : `Checked in ${data.distance_variance_m}m away — flagged for review`);
       setPhotoUrl("");
       setNote("");
       loadLogs();
@@ -112,7 +126,8 @@ export default function Attendance() {
         lat: loc.lat,
         lng: loc.lng,
         note,
-        photo_url: photoUrl || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=60",
+        photo_url: photoUrl,
+        device_id: deviceId(),
       };
       await api.post("/attendance/check-out", payload);
       toast.success("Checked out successfully");
@@ -213,11 +228,13 @@ export default function Attendance() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
+              {/* Stacked full-width on a phone — this is punched one-handed
+                  at a site gate, so the targets are thumb-sized there. */}
+              <div className="flex flex-col sm:flex-row items-stretch gap-3">
                 <button
                   onClick={handleCheckIn}
                   disabled={!!todayRec?.check_in_at || punching}
-                  className={`flex-1 py-2.5 rounded-xl font-semibold text-xs transition flex items-center justify-center gap-2 ${
+                  className={`flex-1 py-3.5 sm:py-2.5 rounded-xl font-semibold text-sm sm:text-xs transition flex items-center justify-center gap-2 ${
                     todayRec?.check_in_at || punching
                       ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200"
                       : "bg-[var(--brand)] text-white hover:opacity-90 shadow-sm"
@@ -230,7 +247,7 @@ export default function Attendance() {
                 <button
                   onClick={handleCheckOut}
                   disabled={!todayRec?.check_in_at || !!todayRec?.check_out_at || punching}
-                  className={`flex-1 py-2.5 rounded-xl font-semibold text-xs transition flex items-center justify-center gap-2 ${
+                  className={`flex-1 py-3.5 sm:py-2.5 rounded-xl font-semibold text-sm sm:text-xs transition flex items-center justify-center gap-2 ${
                     !todayRec?.check_in_at || todayRec?.check_out_at || punching
                       ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200"
                       : "bg-[var(--ink)] text-white hover:bg-black shadow-sm"
@@ -255,9 +272,10 @@ export default function Attendance() {
                   <div className="font-mono text-sm font-bold text-[var(--ink)]">
                     {todayRec?.check_in_at ? todayRec.check_in_at.slice(11, 19) : "Not Recorded"}
                   </div>
-                  {todayRec?.check_in_distance != null && (
+                  {todayRec?.distance_variance_m != null && (
                     <div className="text-[11px] text-[var(--ink-2)] mt-1">
-                      Distance: <span className="font-semibold">{todayRec.check_in_distance}m</span> ({todayRec.check_in_within ? "In Range" : "Outside Range"})
+                      Distance: <span className="font-semibold">{todayRec.distance_variance_m}m</span> ({todayRec.verified ? "In Range" : "Outside Range"})
+                      {todayRec.site_name ? ` · ${todayRec.site_name}` : ""}
                     </div>
                   )}
                 </div>
@@ -276,10 +294,13 @@ export default function Attendance() {
               </div>
             </div>
 
-            {todayRec?.check_in_photo && (
-              <div className="mt-4 pt-3 border-t border-[var(--border-light)]">
-                <div className="text-[10px] uppercase font-mono text-[var(--ink-3)] mb-1">Attendance Verification Photo</div>
-                <img src={todayRec.check_in_photo} alt="Verification" className="w-full h-28 object-cover rounded-xl border border-[var(--border)]" />
+            {/* The selfie itself is never returned to the browser — only
+                whether one was captured. Raw GPS and the photo are readable
+                only through the admin-gated single-record audit route. */}
+            {todayRec?.selfie_verified && (
+              <div className="mt-4 pt-3 border-t border-[var(--border-light)] flex items-center gap-2">
+                <ShieldCheck size={15} className="text-[var(--brand)]" />
+                <span className="text-xs font-semibold text-[var(--ink-2)]">Verification selfie captured</span>
               </div>
             )}
           </div>
@@ -300,8 +321,9 @@ export default function Attendance() {
                   <th className="px-4 py-3 text-left font-semibold">Date</th>
                   <th className="px-4 py-3 text-left font-semibold">Check-In</th>
                   <th className="px-4 py-3 text-left font-semibold">Check-Out</th>
+                  <th className="px-4 py-3 text-left font-semibold">Site</th>
                   <th className="px-4 py-3 text-left font-semibold">Geofence Status</th>
-                  <th className="px-4 py-3 text-left font-semibold">Photo Audit</th>
+                  <th className="px-4 py-3 text-left font-semibold">Selfie</th>
                   <th className="px-4 py-3 text-left font-semibold">Notes</th>
                 </tr>
               </thead>
@@ -316,24 +338,30 @@ export default function Attendance() {
                     <td className="px-4 py-3 font-mono text-xs">
                       {r.check_out_at ? r.check_out_at.slice(11, 16) : "-"}
                     </td>
+                    <td className="px-4 py-3 text-xs text-[var(--ink-2)]">{r.site_name || "Office"}</td>
                     <td className="px-4 py-3">
-                      {r.check_in_within ? (
+                      {r.verified ? (
                         <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
                           <CheckCircle2 size={12} />
-                          Inside Geofence ({r.check_in_distance}m)
+                          Inside Geofence ({r.distance_variance_m}m)
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md">
                           <AlertCircle size={12} />
-                          Outside ({r.check_in_distance}m)
+                          Outside ({r.distance_variance_m}m)
                         </span>
                       )}
                     </td>
+                    {/* Selfie and GPS are deliberately NOT in this response —
+                        the server returns the verification outcome only. */}
                     <td className="px-4 py-3">
-                      {r.check_in_photo ? (
-                        <img src={r.check_in_photo} alt="" className="w-8 h-8 rounded-lg object-cover border border-[var(--border)]" />
+                      {r.selfie_verified ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--brand)] bg-[var(--brand-light)] px-2 py-0.5 rounded-md">
+                          <ShieldCheck size={12} />
+                          Verified
+                        </span>
                       ) : (
-                        <span className="text-xs text-[var(--ink-3)]">-</span>
+                        <span className="text-xs text-[var(--ink-3)]">None</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-[var(--ink-2)] truncate max-w-xs">{r.note || "-"}</td>
@@ -341,12 +369,12 @@ export default function Attendance() {
                 ))}
                 {loading && (
                   <tr>
-                    <td colSpan={7} className="text-center py-10 text-[var(--ink-3)] text-xs">Loading attendance…</td>
+                    <td colSpan={8} className="text-center py-10 text-[var(--ink-3)] text-xs">Loading attendance…</td>
                   </tr>
                 )}
                 {!loading && logs.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="text-center py-10 text-[var(--ink-3)] text-xs">No attendance records logged yet.</td>
+                    <td colSpan={8} className="text-center py-10 text-[var(--ink-3)] text-xs">No attendance records logged yet.</td>
                   </tr>
                 )}
               </tbody>
