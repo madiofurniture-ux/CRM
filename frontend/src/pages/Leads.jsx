@@ -10,7 +10,9 @@ import CustomerResolver from "@/components/CustomerResolver";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
 import CsvImportModal from "@/components/CsvImportModal";
+import RemarksTimeline from "@/components/RemarksTimeline";
 import EmptyState from "@/components/EmptyState";
+import { useAuth } from "@/context/AuthContext";
 import { Skeleton } from "@/components/ui/skeleton";
 import useCustomFields from "@/hooks/useCustomFields";
 import api, { formatApiError } from "@/lib/api";
@@ -44,16 +46,24 @@ export default function Leads() {
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [users, setUsers] = useState([]);
-  const [teams, setTeams] = useState([]);
   const [logLead, setLogLead] = useState(null);
   const { defs: customFieldDefs } = useCustomFields("lead");
   const [customFilters, setCustomFilters] = useState({});
   const [showImport, setShowImport] = useState(false);
+  const { user } = useAuth();
+  // null = the inline "new architect" sub-form is closed. It lives in its own
+  // state so opening or cancelling it never touches `form` — the lead being
+  // edited keeps every unsaved field the user has already typed.
+  const [archDraft, setArchDraft] = useState(null);
+  const [archSaving, setArchSaving] = useState(false);
+  // `team_id` is intentionally absent: the Team row was removed from this
+  // modal. It stays on the Lead record (CSV export still reads it) and rides
+  // through untouched on edit via the `...l` spread in openEdit below.
   const empty = {
     date: new Date().toISOString().slice(0, 10), name: "", phone: "", source: "Walk-in",
     architect_id: "", architect_name: "",
-    reference: "", attended_by: "", confidence_level: "", team_id: "",
-    stage: "New", follow_up_date: "", remarks: "", assigned_to: "", assigned_to_id: "", value: 0,
+    reference: "", attended_by: "", confidence_level: "",
+    stage: "New", follow_up_date: "", remarks_history: [], assigned_to: "", assigned_to_id: "", value: 0,
     custom_fields: {},
   };
   const [form, setForm] = useState(empty);
@@ -68,7 +78,6 @@ export default function Leads() {
     api.get("/architects").then(({ data }) => setArchitects(data));
     api.get("/staff").then(({ data }) => setStaff(data));
     api.get("/users/directory").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
-    api.get("/teams").then(({ data }) => setTeams(data)).catch(() => setTeams([]));
   }, []);
   const userName = (id) => users.find((u) => u.id === id)?.name || "";
 
@@ -94,7 +103,10 @@ export default function Leads() {
     return rows.filter((r) => {
       const stage = String(r.stage || "New").trim().toLowerCase();
       if (fStage !== "All" && stage !== fStage.toLowerCase()) return false;
-      if (q && !(r.name || "").toLowerCase().includes(q) && !(r.remarks || "").toLowerCase().includes(q)) return false;
+      // Search the legacy flat remark AND every entry in the history, so a
+      // note added after this change is still findable.
+      const remarkText = [r.remarks || "", ...(r.remarks_history || []).map((e) => e.text || "")].join(" ").toLowerCase();
+      if (q && !(r.name || "").toLowerCase().includes(q) && !remarkText.includes(q)) return false;
       for (const [key, val] of Object.entries(customFilters)) {
         if (!val) continue;
         if (String((r.custom_fields || {})[key] ?? "") !== String(val)) return false;
@@ -105,8 +117,41 @@ export default function Leads() {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  const openNew = () => { setEditing(null); setForm(empty); setShow(true); };
-  const openEdit = (l) => { setEditing(l); setForm({ ...empty, ...l, custom_fields: l.custom_fields || {} }); setShow(true); };
+  const openNew = () => { setEditing(null); setForm(empty); setArchDraft(null); setShow(true); };
+  const openEdit = (l) => {
+    setEditing(l);
+    setForm({ ...empty, ...l, custom_fields: l.custom_fields || {}, remarks_history: l.remarks_history || [] });
+    setArchDraft(null);
+    setShow(true);
+  };
+
+  // "+ Create …" in the architect picker. Posts to the same /architects
+  // endpoint the Architects page uses, with type "Architect" — the field that
+  // distinguishes an architect from a Builder/Designer/Vendor contact — then
+  // selects the result. setForm is functional so nothing else the user has
+  // typed into the lead form is lost.
+  const saveArchitect = async () => {
+    if (archSaving) return;
+    const name = archDraft.name.trim();
+    if (!name) return toast.error("Architect name is required");
+    const phoneOk = validateIndianPhone(archDraft.phone);
+    if (!phoneOk.valid) return toast.error(phoneOk.message);
+    setArchSaving(true);
+    try {
+      const { data } = await api.post("/architects", {
+        name, phone: phoneOk.normalized, firm: archDraft.firm.trim(),
+        email: archDraft.email.trim(), type: "Architect",
+      });
+      setArchitects((p) => [data, ...p]);
+      setForm((f) => ({ ...f, architect_id: data.id, architect_name: data.name }));
+      setArchDraft(null);
+      toast.success("Architect created");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Could not create architect");
+    } finally {
+      setArchSaving(false);
+    }
+  };
 
   const save = async () => {
     if (saving) return;
@@ -338,9 +383,28 @@ export default function Leads() {
                       return { ...f, architect_id: id, architect_name: opt.name, ...staffFill };
                     })}
                     placeholder="Search architect by name or phone…"
-                    emptyLabel="No architects found — add one on the Architects page"
+                    emptyLabel="No architects found"
                     testId="lf-architect"
+                    createLabel="Architect"
+                    onCreate={(term) => setArchDraft({ name: term, phone: "", firm: "", email: "" })}
                   />
+                  {archDraft && (
+                    <div className="mt-2 border border-[var(--brand)] rounded-lg p-3 bg-[var(--surface-2)]" data-testid="lf-architect-new">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-2">New Architect</div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <Fld l="Name *" v={archDraft.name} oc={(v) => setArchDraft((d) => ({ ...d, name: v }))} t2="lf-arch-name" />
+                        <Fld l="Phone *" v={archDraft.phone} oc={(v) => setArchDraft((d) => ({ ...d, phone: v }))} t2="lf-arch-phone" />
+                        <Fld l="Firm Name" v={archDraft.firm} oc={(v) => setArchDraft((d) => ({ ...d, firm: v }))} t2="lf-arch-firm" />
+                        <Fld l="Email" t="email" v={archDraft.email} oc={(v) => setArchDraft((d) => ({ ...d, email: v }))} t2="lf-arch-email" />
+                      </div>
+                      <div className="flex justify-end gap-2 mt-3">
+                        <button type="button" className="btn-ghost" onClick={() => setArchDraft(null)}>Cancel</button>
+                        <button type="button" className="btn-primary disabled:opacity-60" onClick={saveArchitect} disabled={archSaving} data-testid="lf-arch-save">
+                          {archSaving ? "Saving…" : "Save & Select"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               <Fld l="Reference *" v={form.reference} oc={(v) => setForm({ ...form, reference: v })} />
@@ -373,15 +437,14 @@ export default function Leads() {
                 )}
               </div>
               <Fld l="Confidence %" t="number" v={form.confidence_level} oc={(v) => setForm({ ...form, confidence_level: v === "" ? "" : parseFloat(v) || 0 })} />
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Team</label>
-                <select value={form.team_id} onChange={(e) => setForm({ ...form, team_id: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
-                  <option value="">— None —</option>
-                  {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
               <Fld l="Value" t="number" v={form.value} oc={(v) => setForm({ ...form, value: parseFloat(v) || 0 })} />
-              <Fld l="Remarks" v={form.remarks} oc={(v) => setForm({ ...form, remarks: v })} cls="col-span-2" />
+              <div className="col-span-2">
+                <RemarksTimeline
+                  entries={form.remarks_history}
+                  authorName={user?.name || ""}
+                  onAdd={(entry) => setForm((f) => ({ ...f, remarks_history: [...(f.remarks_history || []), entry] }))}
+                />
+              </div>
               {customFieldDefs.filter((d) => d.show_detail).map((d) => (
                 <CustomFieldInput
                   key={d.key}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown, Plus, X } from "lucide-react";
 
 /**
  * A searchable dropdown for picking one item from an existing list — used by
@@ -9,8 +9,12 @@ import { ChevronDown, X } from "lucide-react";
  * options: [{ id, label, sub }]   sub is optional secondary text (firm/type…)
  * value:   the selected id (or "" for none)
  * onChange(id, option)
+ * onCreate(searchTerm)  optional — when given, a "+ Create …" row is pinned to
+ *                       the bottom of the list and hands back whatever was
+ *                       typed, so the caller can prefill an inline sub-form.
+ * createLabel           noun for that row when nothing has been typed yet.
  */
-export default function SearchSelect({ options, value, onChange, placeholder = "Search…", emptyLabel = "No matches", testId }) {
+export default function SearchSelect({ options, value, onChange, placeholder = "Search…", emptyLabel = "No matches", testId, onCreate, createLabel = "Entry" }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const rootRef = useRef(null);
@@ -79,6 +83,19 @@ export default function SearchSelect({ options, value, onChange, placeholder = "
               </button>
             ))}
           </div>
+          {onCreate && (
+            // Pinned outside the scroll area so it stays reachable no matter
+            // how long the list is.
+            <button
+              type="button"
+              onClick={() => { const term = q.trim(); setOpen(false); setQ(""); onCreate(term); }}
+              className="shrink-0 w-full text-left px-3 py-2 text-sm border-t border-[var(--border-light)] text-[var(--brand)] hover:bg-[var(--surface-2)] flex items-center gap-1.5"
+              data-testid={testId ? `${testId}-create` : undefined}
+            >
+              <Plus size={13} className="shrink-0" />
+              <span className="truncate">{q.trim() ? `Create “${q.trim()}”` : `New ${createLabel}`}</span>
+            </button>
+          )}
         </div>
       )}
     </div>

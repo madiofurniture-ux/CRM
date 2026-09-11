@@ -53,6 +53,7 @@ from models import (
     TeamCreate, Team, RoleCreate, Role,
     SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
     SplitPaymentCreate, PrivacyPinSet, PrivacyPinVerify, normalize_settlement, mask_settlement,
+    normalize_remarks_history,
     ProjectDailyLogCreate,
     TenantBusinessProfile, TenantBusinessProfileUpdate,
 )
@@ -1147,6 +1148,40 @@ def _shape_remarks(remarks) -> list:
     return shaped
 
 
+def _shape_remark_history(entries, user: dict) -> list:
+    """Lead.remarks_history entries: {id, text, created_at, author_name}.
+
+    Separate from _shape_remarks above because Lead records *who* wrote each
+    note. Entries that already carry a stamp keep it (the client resends the
+    whole history on every save, and an append must not restamp the notes
+    that came before it); anything new is stamped from the acting user here,
+    so a client can't forge an author or backdate an entry.
+    """
+    if isinstance(entries, str):
+        entries = [{"text": entries}] if entries.strip() else []
+    if not isinstance(entries, list):
+        return []
+    shaped = []
+    for r in entries:
+        if isinstance(r, str):
+            r = {"text": r}
+        if not isinstance(r, dict) or not str(r.get("text", "")).strip():
+            continue
+        shaped.append({
+            "id": r.get("id") or new_id(),
+            "text": str(r["text"]).strip(),
+            "created_at": r.get("created_at") or now_iso(),
+            "author_name": str(r.get("author_name") or user.get("name") or ""),
+        })
+    return shaped
+
+
+def _lead_out(item: dict, user: dict) -> dict:
+    """Outbound shaping for every lead the CRUD routes return — upgrades a
+    legacy flat `remarks` string into a single remarks_history entry."""
+    return normalize_remarks_history(dict(item))
+
+
 async def normalize_visitor(doc: dict, existing: dict | None, user: dict) -> None:
     if "phone" in doc:
         raw = doc.get("phone")
@@ -1179,9 +1214,11 @@ async def normalize_lead(doc: dict, existing: dict | None, user: dict) -> None:
     if "source" in doc and doc.get("source") != "Architect":
         doc["architect_id"] = ""
         doc["architect_name"] = ""
-    # Lead.remarks is deliberately a plain string (see LeadBase) — not shaped
-    # into the dated-entries list here the way Visitor.remarks is; the dated
-    # multi-entry history for Lead lives in the separate `log` field instead.
+    # Lead.remarks stays a plain string (see LeadBase) — CSV export and the
+    # list filter read it. New notes append to remarks_history instead, which
+    # is stamped here so a client can't forge an author or a timestamp.
+    if "remarks_history" in doc:
+        doc["remarks_history"] = _shape_remark_history(doc["remarks_history"], user)
 
 
 async def normalize_architect(doc: dict, existing: dict | None, user: dict) -> None:
@@ -1399,7 +1436,7 @@ _TASK_HANDLERS["lead_followup_reminder"] = _handle_lead_followup_reminder
 make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, module="visitors", normalize=normalize_visitor)
 make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task,
           module="leads", owner_field="assigned_to", on_create=_schedule_lead_followup_reminder,
-          normalize=normalize_lead)
+          normalize=normalize_lead, redact=_lead_out)
 make_crud(api, "architects", "architects", ArchitectCreate, Architect, module="architects", normalize=normalize_architect)
 
 
@@ -3353,8 +3390,9 @@ async def delete_dw_survey(item_id: str, user: dict = Depends(get_current_user))
 # request. Fixed for consistency; the live behaviour was already correct.
 @api.get("/leads")
 async def list_leads(user: dict = Depends(get_current_user)):
-    return await db.leads.find(
+    rows = await db.leads.find(
         tenancy.scope({}, "leads", user), {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return [_lead_out(r, user) for r in rows]
 @api.get("/payments")
 async def list_payments(user: dict = Depends(get_current_user)):
     q = await fy_query("payments", user=user)

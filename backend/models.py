@@ -110,6 +110,18 @@ class Visitor(VisitorBase):
 
 
 # ------- Leads -------
+class RemarkEntry(BaseModel):
+    """One timestamped remark on a Lead. Leads carry a list of these so a
+    follow-up note never overwrites the one before it. Distinct from
+    VisitorRemark above: that one predates this and uses {id, text, at}; this
+    also records who wrote it, the same way `log` entries carry `by`."""
+    model_config = ConfigDict(extra="ignore")
+    id: Optional[str] = None
+    text: str
+    created_at: Optional[str] = None   # ISO timestamp, stamped server-side if missing
+    author_name: Optional[str] = ""    # acting user's name, stamped server-side if missing
+
+
 class LeadBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     date: str
@@ -121,11 +133,12 @@ class LeadBase(BaseModel):
     reference: Optional[str] = ""  # the specific person/campaign/handle, e.g. "Ramesh Kumar" / "@madiointeriors"
     stage: str = "New"  # New, Contacted, Qualified, Quoted, Won, Lost
     follow_up_date: Optional[str] = ""
-    # Deliberately a plain string, not the dated-entries list shape some other
-    # normalize_*() hooks use — every list/search/CSV path built around Lead
-    # already assumes remarks is text; the dated multi-entry history lives in
-    # `log` below instead.
+    # Kept a plain string on purpose: CSV export and the leads list filter
+    # still read it, and old rows only have this. New notes are appended to
+    # `remarks_history` instead — a legacy string surfaces there as the first
+    # entry on read (see normalize_remarks_history), never migrated in place.
     remarks: Optional[str] = ""
+    remarks_history: List[RemarkEntry] = Field(default_factory=list)
     assigned_to: Optional[str] = ""     # display name, kept for legacy rows / CSV export
     assigned_to_id: Optional[str] = ""  # Staff (users) id when linked via the picker
     attended_by: Optional[str] = ""       # who met the lead — linked to Team/Users by name
@@ -205,6 +218,7 @@ class ArchitectBase(BaseModel):
     type: Optional[str] = "Architect"  # Architect / Builder / Designer / Vendor
     location: Optional[str] = ""
     phone: Optional[str] = ""
+    email: Optional[str] = ""   # optional; captured by the Lead modal's inline create sub-form
     # Optional extra contacts, e.g. a site PM or second number — [{name, phone}].
     alternate_contacts: Optional[Any] = Field(default_factory=list)
     last_contact: Optional[str] = ""
@@ -1483,6 +1497,31 @@ def normalize_settlement(doc: dict) -> dict:
     if legacy and not doc.get("other_component"):
         legacy["other_amount"] = legacy.pop("cash_amount", legacy.get("other_amount", 0))
         doc["other_component"] = legacy
+    return doc
+
+
+def normalize_remarks_history(doc: dict) -> dict:
+    """Surface a Lead's legacy flat `remarks` string as the first entry of
+    `remarks_history`. Mutates and returns `doc`.
+
+    Applied on read rather than as a one-shot data migration — same reason as
+    normalize_settlement above: rows written by an older server instance
+    mid-deploy are handled too. `remarks` is deliberately left in place; CSV
+    export and the leads list filter still read it.
+    """
+    if doc.get("remarks_history"):
+        return doc
+    legacy = str(doc.get("remarks") or "").strip()
+    doc["remarks_history"] = [{
+        "id": f"legacy-{doc.get('id') or ''}",
+        "text": legacy,
+        # No timestamp was ever recorded for a flat remark, so fall back to
+        # when the lead itself was created rather than inventing "now".
+        "created_at": doc.get("created_at") or doc.get("date") or "",
+        # Nor an author — left blank rather than misattributed to whoever
+        # happens to be assigned to the lead today.
+        "author_name": "",
+    }] if legacy else []
     return doc
 
 
