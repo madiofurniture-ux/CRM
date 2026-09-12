@@ -5,9 +5,12 @@ import { fmtDate } from "@/lib/format";
 import { MapPin, Navigation, Camera, CheckCircle2, AlertCircle, Clock, ShieldCheck, UserCheck, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
-// Placeholder only — overwritten from GET /settings/office on mount below,
-// the same admin-configurable office record invoices/office settings use.
-// This used to be a second, hardcoded copy of the office geofence.
+// Placeholder only — overwritten from GET /attendance/geofence as soon as GPS
+// lands. That endpoint runs the server's own _resolve_geofence, which is what
+// the punch is judged against: the nearest of the user's assigned sites, or
+// the office when they have none. The preview used to measure against
+// /settings/office regardless, so anyone with an assigned site saw a distance
+// to a place their check-in was never going to be compared with.
 const HQ_FALLBACK = { lat: 17.4065, lng: 78.4772, name: "Head Office", radius: 200 };
 
 // A stable per-browser id sent with each punch, so an attendance dispute can
@@ -38,39 +41,58 @@ export default function Attendance() {
   const [loading, setLoading] = useState(true);
   const [hq, setHq] = useState(HQ_FALLBACK);
   const [loc, setLoc] = useState({ lat: HQ_FALLBACK.lat, lng: HQ_FALLBACK.lng });
-  const [dist, setDist] = useState(0);
-  const [withinGeofence, setWithinGeofence] = useState(true);
+  // null = not known yet (no GPS / fence unresolved) — deliberately not
+  // "inside", so the card can't claim a verdict it hasn't earned.
+  const [dist, setDist] = useState(null);
+  const [withinGeofence, setWithinGeofence] = useState(null);
   const [photoUrl, setPhotoUrl] = useState("");
   const [note, setNote] = useState("");
   const [gpsStatus, setGpsStatus] = useState("Fetching GPS...");
   const [punching, setPunching] = useState(false);
 
+  // Ask the server which fence this punch would be judged against, then
+  // measure to that. The resolution rules (nearest assigned site, skip
+  // inactive, fall back to the office) stay in one place — re-deriving them
+  // here is how the preview drifted out of step with check-in to begin with.
+  const applyResolvedFence = async (latitude, longitude) => {
+    const { data } = await api.get("/attendance/geofence", { params: { lat: latitude, lng: longitude } });
+    const fence = { lat: data.lat, lng: data.lng, name: data.site_name || HQ_FALLBACK.name, radius: data.radius_m };
+    setHq(fence);
+    const d = haversineMeters(latitude, longitude, fence.lat, fence.lng);
+    setDist(d);
+    setWithinGeofence(d <= fence.radius);
+  };
+
   const getGPS = () => {
     setGpsStatus("Locating device...");
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const latitude = pos.coords.latitude;
-          const longitude = pos.coords.longitude;
-          setLoc({ lat: latitude, lng: longitude });
-          const d = haversineMeters(latitude, longitude, hq.lat, hq.lng);
-          setDist(d);
-          setWithinGeofence(d <= hq.radius);
+    if (!("geolocation" in navigator)) return setGpsStatus("GPS Not Supported");
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const latitude = pos.coords.latitude;
+        const longitude = pos.coords.longitude;
+        setLoc({ lat: latitude, lng: longitude });
+        try {
+          await applyResolvedFence(latitude, longitude);
           setGpsStatus("GPS Acquired");
           toast.success("Location updated");
-        },
-        () => {
-          // Fallback to HQ simulated location for demo
-          setLoc({ lat: hq.lat, lng: hq.lng });
-          setDist(45);
-          setWithinGeofence(true);
-          setGpsStatus("GPS Standard Mode (HQ Office)");
-        },
-        { enableHighAccuracy: true, timeout: 8000 }
-      );
-    } else {
-      setGpsStatus("GPS Not Supported");
-    }
+        } catch {
+          // Don't invent a verdict from a fence we couldn't resolve — the
+          // punch itself still validates server-side.
+          setDist(null);
+          setWithinGeofence(null);
+          setGpsStatus("Could not resolve your site — check-in will still verify");
+        }
+      },
+      () => {
+        // No position, so "nearest assigned site" has no meaning and neither
+        // does a distance. The old code invented 45m/inside here, which is
+        // the same misleading preview this screen is being fixed for.
+        setDist(null);
+        setWithinGeofence(null);
+        setGpsStatus("GPS unavailable — distance is checked when you punch");
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
   };
 
   const loadLogs = async () => {
@@ -87,11 +109,7 @@ export default function Attendance() {
     }
   };
 
-  useEffect(() => {
-    api.get("/settings/office").then(({ data }) => {
-      if (data?.lat && data?.lng) setHq({ lat: data.lat, lng: data.lng, name: data.name || HQ_FALLBACK.name, radius: data.radius_m || HQ_FALLBACK.radius });
-    }).catch(() => {}).finally(() => { getGPS(); loadLogs(); });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { getGPS(); loadLogs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCheckIn = async () => {
     if (punching) return;
@@ -172,7 +190,11 @@ export default function Attendance() {
               {/* Status Badge */}
               <div className="bg-[var(--surface-2)] p-4 rounded-xl border border-[var(--border-light)] mb-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  {withinGeofence ? (
+                  {withinGeofence === null ? (
+                    <span className="w-10 h-10 rounded-full bg-[var(--surface)] text-[var(--ink-3)] flex items-center justify-center shrink-0">
+                      <Navigation size={22} />
+                    </span>
+                  ) : withinGeofence ? (
                     <span className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
                       <ShieldCheck size={22} />
                     </span>
@@ -182,11 +204,14 @@ export default function Attendance() {
                     </span>
                   )}
                   <div>
-                    <div className="font-bold text-sm text-[var(--ink)]">
-                      {withinGeofence ? "INSIDE OFFICE GEOFENCE" : "OUTSIDE GEOFENCE RANGE"}
+                    <div className="font-bold text-sm text-[var(--ink)]" data-testid="geofence-verdict">
+                      {withinGeofence === null ? "LOCATION NOT CONFIRMED"
+                        : withinGeofence ? `INSIDE ${hq.name.toUpperCase()} GEOFENCE` : "OUTSIDE GEOFENCE RANGE"}
                     </div>
                     <div className="text-xs text-[var(--ink-2)]">
-                      Distance to office: <span className="font-mono font-semibold">{dist.toFixed(1)} meters</span> (Limit: {hq.radius}m)
+                      {dist === null
+                        ? gpsStatus
+                        : <>Distance to {hq.name}: <span className="font-mono font-semibold">{dist.toFixed(1)} meters</span> (Limit: {hq.radius}m)</>}
                     </div>
                   </div>
                 </div>

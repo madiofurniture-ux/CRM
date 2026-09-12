@@ -8,6 +8,7 @@ import { shrinkImage } from "@/lib/image";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
+import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import {
   Plus, ArrowDownCircle, ArrowUpCircle, Download, Trash2, X, Wallet,
   Check, Ban, Briefcase, Smartphone,
@@ -31,8 +32,22 @@ function buildUpiUri({ upiId, amount, tenantName, projectId, category }) {
 const emptyEntry = { amount: "", category: CATEGORIES[0], payment_mode: "CASH", remark: "", receipt_url: "", entry_person: "", custodian_upi_id: "" };
 const emptyBook = { book_name: "", description: "", initial_balance: "", project_id: "", imprest_limit: "", strict_overdraft: false };
 
+// Under privacy mode the server sends null for every ledger amount and wallet
+// balance (see csv_engine.mask_cashbook*), so the figure is genuinely not in
+// the browser — this is the redaction glyph, not the masking itself.
+const HIDDEN = "••••••";
+const money = (v) => (v == null ? HIDDEN : inrFull(v));
+
+// Sum a masked-aware column: null once any input is masked, so a partial
+// total can never be mistaken for a real one.
+const sum = (rows, pick) => rows.reduce((a, r) => {
+  const v = pick(r);
+  return a == null || v == null ? null : a + v;
+}, 0);
+
 export default function Cashbook() {
   const { user, tenant } = useAuth();
+  const { isOtherHidden, requestUnlock } = usePrivacyMode();
   const isAdmin = user?.role === "admin";
   const [searchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
@@ -62,33 +77,33 @@ export default function Cashbook() {
     // cache-invalidation prefix with GET /cashbooks/... in lib/api.js's
     // resource-prefix cache — without this, the balance/status shown here
     // can lag up to CACHE_TTL_MS behind what the mutation actually did.
-    const { data } = await api.get("/cashbooks", { skipCache: true });
+    const { data } = await api.get("/cashbooks", { skipCache: true, params: { mask_other: isOtherHidden } });
     setBooks(data);
     if (!selectedId && data.length) setSelectedId(data[0].id);
     // Pending-approval total across every wallet — small fan-out, fine at
     // this scale; add a dedicated aggregate endpoint if the list ever grows large.
-    const perBook = await Promise.all(data.map((b) => api.get(`/cashbooks/${b.id}/entries`, { skipCache: true }).then((r) => r.data).catch(() => [])));
-    const pending = perBook.flat().filter((e) => e.type === "CASH_OUT" && e.status === "Pending").reduce((a, e) => a + e.amount, 0);
-    setPendingTotal(pending);
+    const perBook = await Promise.all(data.map((b) => api.get(`/cashbooks/${b.id}/entries`, { skipCache: true, params: { mask_other: isOtherHidden } }).then((r) => r.data).catch(() => [])));
+    setPendingTotal(sum(perBook.flat().filter((e) => e.type === "CASH_OUT" && e.status === "Pending"), (e) => e.amount));
   };
-  const loadEntries = (id) => { if (id) api.get(`/cashbooks/${id}/entries`, { skipCache: true }).then((r) => setEntries(r.data)); };
+  const loadEntries = (id) => { if (id) api.get(`/cashbooks/${id}/entries`, { skipCache: true, params: { mask_other: isOtherHidden } }).then((r) => setEntries(r.data)); };
 
   useEffect(() => {
-    loadBooks();
     api.get("/users/directory").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
     api.get("/projects").then(({ data }) => setProjects(data)).catch(() => setProjects([]));
   }, []); // eslint-disable-line
-  useEffect(() => loadEntries(selectedId), [selectedId]);
+  // Amounts are masked server-side, so the payload itself changes with
+  // privacy mode — refetch on unlock/relock rather than holding stale rows.
+  useEffect(() => { loadBooks(); }, [isOtherHidden]); // eslint-disable-line
+  useEffect(() => loadEntries(selectedId), [selectedId, isOtherHidden]); // eslint-disable-line
 
   const userName = (id) => users.find((u) => u.id === id)?.name || id;
   const projectLabel = (id) => projects.find((p) => p.id === id)?.project_no || projects.find((p) => p.id === id)?.customer || "";
 
   const book = books.find((b) => b.id === selectedId);
-  const totals = useMemo(() => {
-    const totalIn = entries.filter((e) => e.type === "CASH_IN").reduce((a, e) => a + e.amount, 0);
-    const totalOut = entries.filter((e) => e.type === "CASH_OUT" && e.status !== "Rejected").reduce((a, e) => a + e.amount, 0);
-    return { totalIn, totalOut };
-  }, [entries]);
+  const totals = useMemo(() => ({
+    totalIn: sum(entries.filter((e) => e.type === "CASH_IN"), (e) => e.amount),
+    totalOut: sum(entries.filter((e) => e.type === "CASH_OUT" && e.status !== "Rejected"), (e) => e.amount),
+  }), [entries]);
 
   const visibleBooks = useMemo(() => (
     projectFilter === "All" ? books : books.filter((b) => (b.project_id || "") === projectFilter)
@@ -99,7 +114,7 @@ export default function Cashbook() {
   ), [entries, categoryFilter]);
 
   const headerStats = useMemo(() => ({
-    totalFloat: books.reduce((a, b) => a + (b.current_balance || 0), 0),
+    totalFloat: sum(books, (b) => b.current_balance),
     activeProjectWallets: books.filter((b) => b.project_id && b.status === "ACTIVE").length,
   }), [books]);
 
@@ -191,19 +206,22 @@ export default function Cashbook() {
     projectId: projectLabel(book?.project_id), category: payReview.category,
   }) : "";
   const upiIdValid = /^[\w.\-]+@[\w.\-]+$/.test(reviewUpiId.trim());
+  // A masked amount is null, and buildUpiUri would quietly turn that into a
+  // ₹0.00 payment request. No figure, no pay button — unlock first.
+  const canPay = upiIdValid && payReview?.amount != null;
 
   useEffect(() => {
-    if (!payReview || IS_TOUCH_DEVICE || !upiIdValid || !qrCanvasRef.current) return;
+    if (!payReview || IS_TOUCH_DEVICE || !canPay || !qrCanvasRef.current) return;
     QRCode.toCanvas(qrCanvasRef.current, upiUri, { width: 180, margin: 1 }).catch(() => {});
-  }, [payReview, upiUri, upiIdValid]);
+  }, [payReview, upiUri, canPay]);
 
   const payViaUpi = () => {
-    if (!upiIdValid) return;
+    if (!canPay) return;
     if (IS_TOUCH_DEVICE) window.location.href = upiUri;
   };
 
   const removeEntry = async (entry) => {
-    if (!window.confirm(`Delete this ${entry.type === "CASH_IN" ? "cash in" : "cash out"} entry of ${inrFull(entry.amount)}? This reverses the book balance.`)) return;
+    if (!window.confirm(`Delete this ${entry.type === "CASH_IN" ? "cash in" : "cash out"} entry of ${money(entry.amount)}? This reverses the book balance.`)) return;
     try {
       await api.delete(`/cashbook-entries/${entry.id}`);
       toast.success("Entry deleted, balance reversed");
@@ -212,7 +230,9 @@ export default function Cashbook() {
   };
 
   const downloadReport = async () => {
-    const { data } = await api.get("/cashbook-entries/export.csv", { skipCache: true, responseType: "blob" });
+    // Honours privacy mode: an export that ignored it would be a one-click
+    // bypass of the on-screen mask (same reason as the P&L export).
+    const { data } = await api.get("/cashbook-entries/export.csv", { skipCache: true, responseType: "blob", params: { mask_other: isOtherHidden } });
     const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -227,9 +247,10 @@ export default function Cashbook() {
         actions={<button onClick={downloadReport} className="btn-ghost"><Download size={14} /> Export CSV</button>} />
       <div className="p-6 space-y-6" data-testid="cashbook-page">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <KpiCard label="Total Cash in Float" value={inrFull(headerStats.totalFloat)} icon={Wallet} />
+          <KpiCard label="Total Cash in Float" value={money(headerStats.totalFloat)} icon={Wallet}
+            hint={isOtherHidden ? <button onClick={requestUnlock} className="text-blue-600 underline">Unlock amounts</button> : null} />
           <KpiCard label="Active Project Wallets" value={headerStats.activeProjectWallets} icon={Briefcase} accent="moss" />
-          <KpiCard label="Pending Approval" value={inrFull(pendingTotal)} accent="danger" icon={ArrowUpCircle} />
+          <KpiCard label="Pending Approval" value={money(pendingTotal)} accent="danger" icon={ArrowUpCircle} />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -243,7 +264,8 @@ export default function Cashbook() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {visibleBooks.map((b) => {
-            const pct = b.imprest_limit > 0 ? Math.min(100, Math.max(0, (b.current_balance / b.imprest_limit) * 100)) : null;
+            const pct = b.imprest_limit > 0 && b.current_balance != null
+              ? Math.min(100, Math.max(0, (b.current_balance / b.imprest_limit) * 100)) : null;
             return (
               <button key={b.id} onClick={() => setSelectedId(b.id)} data-testid={`cashbook-tab-${b.id}`}
                 className={`text-left p-4 rounded-xl border transition-colors ${selectedId === b.id ? "border-[var(--brand)] bg-[var(--brand-soft)]" : "border-[var(--border)] bg-[var(--surface)]"}`}>
@@ -253,7 +275,7 @@ export default function Cashbook() {
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--ink-2)] shrink-0">{projectLabel(b.project_id)}</span>
                   )}
                 </div>
-                <div className="font-mono text-lg font-semibold mb-1">{inrFull(b.current_balance)}</div>
+                <div className="font-mono text-lg font-semibold mb-1">{money(b.current_balance)}</div>
                 {pct != null && (
                   <div className="h-1.5 rounded-full bg-[var(--surface-2)] overflow-hidden mb-1">
                     <div className={`h-full ${pct >= 90 ? "bg-[var(--danger)]" : "bg-[var(--brand)]"}`} style={{ width: `${pct}%` }} />
@@ -279,8 +301,8 @@ export default function Cashbook() {
         {book && (
           <>
             <div className="grid grid-cols-2 gap-4">
-              <KpiCard label="Total In" value={inrFull(totals.totalIn)} accent="moss" icon={ArrowDownCircle} />
-              <KpiCard label="Total Out" value={inrFull(totals.totalOut)} accent="danger" icon={ArrowUpCircle} />
+              <KpiCard label="Total In" value={money(totals.totalIn)} accent="moss" icon={ArrowDownCircle} />
+              <KpiCard label="Total Out" value={money(totals.totalOut)} accent="danger" icon={ArrowUpCircle} />
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -321,7 +343,7 @@ export default function Cashbook() {
                               : "bg-emerald-100 text-emerald-700"}`}>{e.status || "Approved"}</span>
                         </td>
                         <td className={`px-4 py-3 text-right font-mono font-semibold ${e.type === "CASH_IN" ? "text-[var(--moss)]" : "text-[var(--danger)]"}`}>
-                          {e.type === "CASH_IN" ? "+" : "-"}{inrFull(e.amount)}
+                          {e.amount == null ? HIDDEN : `${e.type === "CASH_IN" ? "+" : "-"}${inrFull(e.amount)}`}
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap">
                           {isAdmin && e.status === "Pending" ? (
@@ -443,12 +465,19 @@ export default function Cashbook() {
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-[var(--ink-2)]">{payReview.category || "Expense"} · {payReview.entry_person || "—"}</span>
-                <span className="font-mono font-semibold text-lg">{inrFull(payReview.amount)}</span>
+                <span className="font-mono font-semibold text-lg">{money(payReview.amount)}</span>
               </div>
               {payReview.remark && <div className="text-xs text-[var(--ink-3)]">{payReview.remark}</div>}
               <Field label="Payee UPI ID" value={reviewUpiId} onChange={setReviewUpiId} />
 
-              {upiIdValid && (
+              {upiIdValid && payReview.amount == null && (
+                <div className="text-[11px] text-[var(--ink-3)]" data-testid="upi-masked-notice">
+                  Amount hidden in Privacy Mode.{" "}
+                  <button onClick={requestUnlock} className="text-blue-600 underline">Unlock</button>{" "}
+                  to pay via UPI.
+                </div>
+              )}
+              {canPay && (
                 IS_TOUCH_DEVICE ? (
                   <button onClick={payViaUpi} className="btn-primary w-full justify-center" data-testid="pay-via-upi">
                     <Smartphone size={15} /> Pay via UPI

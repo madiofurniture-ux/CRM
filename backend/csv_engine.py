@@ -114,11 +114,58 @@ CASHBOOK_ENTRY_FIELDS = [
 ]
 
 
-async def stream_cashbook_entries_csv(db, user: dict) -> AsyncGenerator[str, None]:
+# ---------- Cashbook masking (privacy mode) ----------
+# The cashbook IS the ledger mask_pnl redacts a summary of. Same tenant, same
+# user, same `cashbook:view` grant — so a viewer whose P&L just hid
+# approved_petty_cash could open the wallet the P&L deep-links to
+# (Cashbook.jsx honours ?book=<id>) and add the CASH_OUT lines back up by
+# hand. c155c78 recorded that as a known residual; this closes it by masking
+# the ledger itself under the same mask_other flag.
+#
+# What goes, and why nothing left over inverts to the figure:
+#   * entry `amount` — on BOTH directions. The CASH_OUT side sums straight to
+#     approved_petty_cash; the CASH_IN side is the Other-settlement credit
+#     paid into the wallet, which is why mask_pnl already dropped the whole of
+#     recent_entries rather than just its debits.
+#   * `current_balance` and `initial_balance` on the wallet — the balance is
+#     the running result of those same lines, so
+#         approved_out = initial_balance + top_ups - current_balance
+#     and on a wallet that was never topped up that collapses to a plain
+#     subtraction of two visible numbers. This is the total_collected defect
+#     from mask_settlement one collection over: a figure that "reconciles" is
+#     a figure that inverts.
+#
+# What stays: every non-monetary column (date, category, mode, remark, staff,
+# status, type) and `imprest_limit`, a configured policy ceiling that is an
+# input to the wallet rather than a result of its spend — the same line
+# mask_pnl draws when it keeps contract_value.
+#
+# Masked fields are None, not 0 and not dropped, matching mask_pnl and
+# mask_settlement: a zero would render as a real figure and read as "no
+# spend", which is worse than an obvious redaction.
+CASHBOOK_ENTRY_MASKED_FIELDS = ("amount",)
+CASHBOOK_MASKED_FIELDS = ("current_balance", "initial_balance")
+
+
+def mask_cashbook_entry(entry: dict) -> dict:
+    """Redact the amount from one cashbook ledger line. Returns a new dict."""
+    return {**entry, **{f: None for f in CASHBOOK_ENTRY_MASKED_FIELDS}}
+
+
+def mask_cashbook(book: dict) -> dict:
+    """Redact a wallet's balance figures. Returns a new dict — make_crud's
+    list hands out shared references, so this must never mutate in place."""
+    return {**book, **{f: None for f in CASHBOOK_MASKED_FIELDS}}
+
+
+async def stream_cashbook_entries_csv(db, user: dict, mask_other: bool = True) -> AsyncGenerator[str, None]:
     """Export-only — deliberately no import counterpart. A generic CSV
     import would insert_one straight into cashbook_entries and skip the
     $inc balance/approval side effects that cashbook_top_up/expense/approve
-    enforce, silently corrupting a book's running balance."""
+    enforce, silently corrupting a book's running balance.
+
+    Masked by default for the same reason the P&L export is: an export that
+    ignored privacy mode would be a one-click bypass of the on-screen mask."""
     header_buf = io.StringIO()
     csv.writer(header_buf).writerow(CASHBOOK_ENTRY_FIELDS)
     yield header_buf.getvalue()
@@ -126,6 +173,8 @@ async def stream_cashbook_entries_csv(db, user: dict) -> AsyncGenerator[str, Non
     cursor = db.cashbook_entries.find(
         tenancy.scope({}, "cashbook_entries", user), {"_id": 0}).sort("created_at", -1).batch_size(500)
     async for doc in cursor:
+        if mask_other:
+            doc = mask_cashbook_entry(doc)
         buf = io.StringIO()
         csv.writer(buf).writerow([lc.csv_cell(doc.get(f)) for f in CASHBOOK_ENTRY_FIELDS])
         yield buf.getvalue()
@@ -296,6 +345,13 @@ def mask_pnl(pnl: dict) -> dict:
     itemises the very CASH_OUT lines that add up to the figure, and its
     CASH_IN side carries Other-settlement credits.
 
+    `float_balance` (the sum of the linked wallets' current balances) goes
+    too. It is not spend, but it is what spend leaves behind: paired with an
+    opening balance — which the person who created the wallet knows by
+    construction — it gives back the movement through it. Masking it here
+    keeps the boundary the same on both surfaces, so closing the ledger leak
+    in the Cashbook routes cannot be walked around via this report.
+
     Revenue, pending exposure and incentives are NOT masked — they are
     separate quantities that do not reconstruct spend on their own.
 
@@ -305,7 +361,8 @@ def mask_pnl(pnl: dict) -> dict:
     pnl["summary"].update(total_field_settlement_spend=None, aggregate_margin_pct=None)
     for row in pnl["projects"]:
         row.update(approved_petty_cash=None, gross_profit=None, margin_pct=None,
-                   net_margin=None, category_breakdown=[], recent_entries=[])
+                   net_margin=None, float_balance=None,
+                   category_breakdown=[], recent_entries=[])
     return pnl
 
 

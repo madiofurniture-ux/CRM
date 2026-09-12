@@ -154,7 +154,9 @@ export default function ProjectPnL() {
                             {isOtherHidden ? "••••••" : `${p.margin_pct}%`}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-right font-mono">{inrFull(p.float_balance)}</td>
+                        {/* Masked alongside the spend: the float left in a
+                            wallet is what the spend took out of it. */}
+                        <td className="px-4 py-3 text-right font-mono">{isOtherHidden ? "••••••" : inrFull(p.float_balance)}</td>
                         <td className="px-4 py-3"><StageBadge stage={p.stage} /></td>
                       </tr>
                       {isOpen && (

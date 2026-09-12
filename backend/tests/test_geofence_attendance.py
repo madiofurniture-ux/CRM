@@ -286,3 +286,61 @@ def test_cleanup_does_not_cross_tenants():
         out = await server.attendance_cleanup(user=other)
         assert out["purged"] == 0
     asyncio.run(run())
+
+
+# ---------------------------------------- pre-punch preview (/attendance/geofence)
+# Attendance.jsx's radar used to measure against GET /settings/office — the
+# single office record — while check_in has judged against _resolve_geofence
+# since 31fce74. For anyone with assigned_site_ids the preview was therefore
+# measuring to a different place than the punch would, which is how a fitter
+# standing inside his own site got shown as kilometres out of range.
+#
+# These pin the property that actually matters: whatever the preview says,
+# the punch agrees with it.
+def test_geofence_preview_returns_the_assigned_site_not_the_office():
+    async def run():
+        await server.db.office_settings.insert_one(
+            {"lat": FAR_LAT, "lng": FAR_LNG, "radius_m": 200, "name": "Head Office"})
+        await _site()
+        fence = await server.attendance_geofence(
+            lat=NEAR_LAT, lng=NEAR_LNG, user=_staff_at(["s1"]))
+        assert fence["site_name"] == "Site A"
+        assert fence["radius_m"] == 150
+        assert (fence["lat"], fence["lng"]) == (SITE_LAT, SITE_LNG)
+    asyncio.run(run())
+
+
+def test_geofence_preview_agrees_with_what_the_punch_actually_validates():
+    """The whole point of the fix — preview and check-in must not disagree."""
+    async def run():
+        await _site()
+        await _site(site_id="s2", name="Site B", lat=FAR_LAT, lng=FAR_LNG)
+        staff = _staff_at(["s1", "s2"])
+
+        fence = await server.attendance_geofence(lat=NEAR_LAT, lng=NEAR_LNG, user=staff)
+        preview_dist = server._haversine_m(NEAR_LAT, NEAR_LNG, fence["lat"], fence["lng"])
+
+        rec = await server.check_in(AttendanceCheckIn(lat=NEAR_LAT, lng=NEAR_LNG), user=staff)
+        assert rec["site_name"] == fence["site_name"]
+        assert round(preview_dist, 1) == rec["distance_variance_m"]
+        assert (preview_dist <= fence["radius_m"]) is rec["verified"]
+    asyncio.run(run())
+
+
+def test_geofence_preview_falls_back_to_the_office_for_an_unassigned_user():
+    async def run():
+        await server.db.office_settings.insert_one(
+            {"lat": SITE_LAT, "lng": SITE_LNG, "radius_m": 200, "name": "Head Office"})
+        fence = await server.attendance_geofence(lat=NEAR_LAT, lng=NEAR_LNG, user=STAFF)
+        assert fence["site_id"] == ""
+        assert fence["radius_m"] == 200
+    asyncio.run(run())
+
+
+def test_geofence_preview_does_not_leak_another_tenants_site():
+    async def run():
+        await _site(user={"id": "u9", "tenant_id": "globex", "name": "GX", "role": "admin"})
+        fence = await server.attendance_geofence(
+            lat=NEAR_LAT, lng=NEAR_LNG, user=_staff_at(["s1"]))
+        assert fence["site_id"] == ""        # scoped out, so it fell back to the office
+    asyncio.run(run())

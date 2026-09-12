@@ -604,7 +604,7 @@ def _merge_visibility(query: dict, fragment: dict) -> dict:
 
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
               after_write=None, module: str = None, owner_field: str = None, on_create=None,
-              normalize=None, redact=None, personal: bool = False):
+              normalize=None, redact=None, mask=None, personal: bool = False):
     """`after_write`, when given, runs after a successful create/update with the
     saved document and the acting user — for side effects that must stay in
     lockstep with this collection's own writes (e.g. leads syncing a
@@ -638,12 +638,22 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     vendor's name. Must return a new dict, not mutate in place — the caller
     doesn't control aliasing between list entries.
 
+    `mask(item) -> dict` — optional sync hook for privacy-mode masking, the
+    `mask_other` family (mask_pnl / mask_settlement). Unlike `redact`, which
+    is decided by the caller's ROLE, this is decided per request by the
+    `mask_other` query flag the PIN-protected privacy toggle sets, so it is
+    applied on the routes that READ server-maintained state — `_list` and the
+    `_update` readback — and defaults to masked so a client that sends no
+    flag fails closed. Not applied on `_create`: that response only echoes
+    fields the caller just submitted, so it carries nothing they didn't
+    already have. Must return a new dict, not mutate in place.
+
     `personal` — restrict this collection to records the caller created or is
     assigned (admins exempt), regardless of role_id. See
     PERSONAL_VISIBILITY_FIELDS above for why the role scope isn't enough.
     """
     @router.get(f"/{base}")
-    async def _list(user: dict = Depends(get_current_user)):
+    async def _list(mask_other: bool = True, user: dict = Depends(get_current_user)):
         q = await fy_query(collection, user=user)
         if module:
             roles = await _require_permission(module, "view", user)
@@ -653,6 +663,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         if personal:
             q = _merge_visibility(q, personal_visibility_query(user, collection))
         items = await db[collection].find(q, {"_id": 0}).sort("created_at", -1).to_list(3000)
+        if mask and mask_other:
+            items = [mask(i) for i in items]
         return [redact(i, user) for i in items] if redact else items
 
     @router.post(f"/{base}")
@@ -687,7 +699,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         return redact(doc, user) if redact else doc
 
     @router.put(f"/{base}/{{item_id}}")
-    async def _update(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    async def _update(item_id: str, payload: dict, mask_other: bool = True,
+                      user: dict = Depends(get_current_user)):
         payload.pop("_id", None)
         payload.pop("id", None)
         payload.pop("tenant_id", None)   # a caller may never move a record between tenants
@@ -722,6 +735,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         out = await db[collection].find_one(owned, {"_id": 0})
         if after_write:
             await after_write(out, user)
+        if mask and mask_other:
+            out = mask(out)
         return redact(out, user) if redact else out
 
     @router.delete(f"/{base}/{{item_id}}")
@@ -2078,14 +2093,24 @@ async def _init_cashbook_balance(doc: dict, user: dict):
 
 
 make_crud(api, "cashbooks", "cashbooks", CashbookCreate, Cashbook, module="cashbook",
-          on_create=_init_cashbook_balance)
+          on_create=_init_cashbook_balance, mask=csv_engine.mask_cashbook)
 
 
 @api.get("/cashbooks/{cashbook_id}/entries")
-async def list_cashbook_entries(cashbook_id: str, user: dict = Depends(get_current_user)):
+async def list_cashbook_entries(cashbook_id: str, mask_other: bool = True,
+                                user: dict = Depends(get_current_user)):
+    """mask_other=true (default) redacts the ledger amounts server-side.
+
+    This is the route mask_pnl's redaction was reachable around: the same
+    `cashbook:view` grant, one hop from the P&L screen's own "View Linked
+    Wallet" deep-link, itemising the exact CASH_OUT lines that sum to the
+    masked approved_petty_cash. See csv_engine.mask_cashbook_entry for what
+    goes and why the remainder does not invert. Defaults to masked so a
+    client that sends no flag fails closed."""
     await _require_permission("cashbook", "view", user)
     q = tenancy.scope({"cashbook_id": cashbook_id}, "cashbook_entries", user)
-    return await db.cashbook_entries.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    rows = await db.cashbook_entries.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    return [csv_engine.mask_cashbook_entry(r) for r in rows] if mask_other else rows
 
 
 @api.post("/cashbooks/{cashbook_id}/entries")
@@ -2392,10 +2417,10 @@ async def tally_sync_batch(user: dict = Depends(get_current_user)):
 
 
 @api.get("/cashbook-entries/export.csv")
-async def cashbook_entries_export(user: dict = Depends(get_current_user)):
+async def cashbook_entries_export(mask_other: bool = True, user: dict = Depends(get_current_user)):
     await _require_permission("cashbook", "export", user)
     return StreamingResponse(
-        csv_engine.stream_cashbook_entries_csv(db, user),
+        csv_engine.stream_cashbook_entries_csv(db, user, mask_other),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="cashbook_entries_{lc.today_iso()}.csv"'},
     )
@@ -2934,6 +2959,26 @@ async def attendance_cleanup(days: int = ATTENDANCE_RAW_RETENTION_DAYS,
     )
     await _audit("attendance_raw_purged", user, f"{res.modified_count} records before {cutoff}")
     return {"purged": res.modified_count, "cutoff_date": cutoff, "retention_days": days}
+
+
+@api.get("/attendance/geofence")
+async def attendance_geofence(lat: float, lng: float, user: dict = Depends(get_current_user)):
+    """The fence this caller's next punch will actually be judged against.
+
+    Attendance.jsx's pre-punch radar used to measure against GET
+    /settings/office — the single office record — while check_in has judged
+    against _resolve_geofence since 31fce74. For anyone with
+    assigned_site_ids that made the preview measure to the wrong place: a
+    fitter standing inside his assigned site could be shown as kilometres
+    outside, then punch in and be told he was fine.
+
+    It returns _resolve_geofence's own answer rather than letting the browser
+    re-derive it, because the resolution rules (nearest of the assigned
+    sites, skip inactive ones, fall back to the office when unassigned) are
+    exactly the kind of thing that goes stale when it exists twice. lat/lng
+    are required because "nearest assigned site" is only defined relative to
+    where the caller is standing."""
+    return await _resolve_geofence(user, lat, lng)
 
 
 @api.post("/attendance/check-in")
