@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
 import { X, Search } from "lucide-react";
+import useFocusTrap from "@/hooks/useFocusTrap";
 
 /** Self-contained search-and-link overlay for one stakeholder slot on a
  * project. Given a role hint, searches architects/customers/record_contacts
@@ -9,6 +10,7 @@ export default function StakeholderLinkModal({ role, onLink, onClose }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const trapRef = useFocusTrap(true);
 
   useEffect(() => {
     if (query.trim().length < 2) {
@@ -25,12 +27,18 @@ export default function StakeholderLinkModal({ role, onLink, onClose }) {
     return () => clearTimeout(t);
   }, [query, role]);
 
+  useEffect(() => {
+    const onKeyDown = (e) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
     <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div ref={trapRef} role="dialog" aria-modal="true" aria-labelledby="stakeholder-link-title" className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b">
-          <h3 className="font-heading font-semibold text-sm">Link stakeholder</h3>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+          <h3 id="stakeholder-link-title" className="font-heading font-semibold text-sm">Link stakeholder</h3>
+          <button onClick={onClose} aria-label="Close link stakeholder dialog" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
         </div>
         <div className="p-4 space-y-3">
           <div className="relative">
@@ -38,6 +46,7 @@ export default function StakeholderLinkModal({ role, onLink, onClose }) {
             <input
               autoFocus
               type="text"
+              aria-label="Search stakeholders by name or phone"
               placeholder="Search by name or phone…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}

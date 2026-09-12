@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse, Response
 from pydantic import ValidationError as PydanticValidationError
 from pymongo.errors import DuplicateKeyError
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 
@@ -3096,12 +3097,16 @@ def _calc_monthly_revenue(sales: List[dict]) -> List[dict]:
 async def dashboard_stats(user: dict = Depends(get_current_user)):
     # These five reads are independent, so running them concurrently costs one
     # round trip instead of five stacked end-to-end.
+    # Projected to just the fields this function and its helpers actually read
+    # (below) — the full documents carry line_items/remarks/log/photos that
+    # add nothing to these sums but bulk up the initial dashboard payload.
     quotes, sales, inventory, leads, visitors = await asyncio.gather(
-        db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000),
-        db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
-        db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000),
-        db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000),
-        db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0}).to_list(5000),
+        db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0, "stage": 1, "value": 1}).to_list(5000),
+        db.sales.find(tenancy.scope({}, "sales", user),
+                      {"_id": 0, "value": 1, "paid": 1, "balance": 1, "division": 1, "date": 1}).to_list(5000),
+        db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0, "mrp": 1, "cost": 1, "qty": 1}).to_list(5000),
+        db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0, "stage": 1, "follow_up_date": 1}).to_list(5000),
+        db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0, "date": 1}).to_list(5000),
     )
 
     today = now_iso()[:10]
@@ -5164,6 +5169,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Dashboard/list responses are JSON arrays of full documents — compressing them
+# shrinks the initial-load payload substantially over the wire.
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 # ------- Agent task dispatch loop (generic background-job queue; see
@@ -5242,6 +5250,21 @@ async def startup():
         await db.inventory.create_index([("tenant_id", 1), ("vendor_code", 1)])
     except Exception as e:
         logger.warning(f"Search indexes not created: {e}")
+
+    # Compound indexes behind the initial dashboard load and login: these
+    # collections are scanned tenant-wide on every dashboard visit and (for
+    # users) on every login, so an index here is a first-paint win, not just
+    # a query-time one. Field names verified against models.py — User has no
+    # `email` field (login is by `username`) and Project's lifecycle field
+    # is `stage`, not `status`.
+    try:
+        await db.users.create_index([("tenant_id", 1), ("username", 1)])
+        await db.attendance.create_index([("tenant_id", 1), ("user_id", 1), ("check_in_at", -1)])
+        await db.leads.create_index([("tenant_id", 1), ("stage", 1), ("created_at", -1)])
+        await db.projects.create_index([("tenant_id", 1), ("stage", 1)])
+        await db.cashbook_transactions.create_index([("tenant_id", 1), ("needs_review", 1), ("tally_synced", 1)])
+    except Exception as e:
+        logger.warning(f"Dashboard/session indexes not created: {e}")
 
 
 @app.on_event("shutdown")

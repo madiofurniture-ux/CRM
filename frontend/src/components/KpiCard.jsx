@@ -1,4 +1,6 @@
-export default function KpiCard({ label, value, hint, accent = "brand", icon: Icon, testid }) {
+import { memo } from "react";
+
+function KpiCard({ label, value, hint, accent = "brand", icon: Icon, testid }) {
   const accents = {
     brand: { dot: "bg-[var(--brand)]", text: "text-[var(--brand)]" },
     moss: { dot: "bg-[var(--moss)]", text: "text-[var(--moss)]" },
@@ -26,3 +28,5 @@ export default function KpiCard({ label, value, hint, accent = "brand", icon: Ic
     </div>
   );
 }
+
+export default memo(KpiCard);

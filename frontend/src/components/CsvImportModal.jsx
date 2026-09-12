@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { X } from "lucide-react";
 import api from "@/lib/api";
+import useFocusTrap from "@/hooks/useFocusTrap";
 
 const FIELD_LABEL = { id: "ID (match existing row)" };
 
@@ -14,6 +15,7 @@ export default function CsvImportModal({ entity, onClose, onImported }) {
   const [mapping, setMapping] = useState({});
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const trapRef = useFocusTrap(true);
 
   const doPreview = async () => {
     if (!file) return toast.error("Choose a CSV file first");
@@ -50,17 +52,17 @@ export default function CsvImportModal({ entity, onClose, onImported }) {
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={onClose}>
-      <div className="bg-white rounded-t-2xl sm:rounded-xl border border-[var(--border)] w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div ref={trapRef} role="dialog" aria-modal="true" aria-labelledby="csv-import-title" className="bg-white rounded-t-2xl sm:rounded-xl border border-[var(--border)] w-full max-w-2xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b">
-          <h3 className="font-heading font-semibold text-lg">Import CSV</h3>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+          <h3 id="csv-import-title" className="font-heading font-semibold text-lg">Import CSV</h3>
+          <button onClick={onClose} aria-label="Close CSV import dialog" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
         </div>
 
         {!result ? (
           <div className="p-5 space-y-4">
             {!preview ? (
               <>
-                <input type="file" accept=".csv,text/csv" onChange={(e) => setFile(e.target.files?.[0] || null)}
+                <input type="file" accept=".csv,text/csv" aria-label="Choose CSV file to import" onChange={(e) => setFile(e.target.files?.[0] || null)}
                        className="w-full text-sm" data-testid="csv-file-input" />
                 <div className="flex justify-end gap-2">
                   <button className="btn-ghost" onClick={onClose}>Cancel</button>
@@ -87,6 +89,7 @@ export default function CsvImportModal({ entity, onClose, onImported }) {
                             <td className="px-3 py-2 text-[var(--ink-3)] truncate max-w-[10rem]">{preview.sample_rows[0]?.[h] || ""}</td>
                             <td className="px-3 py-2">
                               <select value={mapping[h] || ""} onChange={(e) => setMapping((m) => ({ ...m, [h]: e.target.value }))}
+                                      aria-label={`Map CSV column ${h} to field`}
                                       className="w-full px-2 py-1 rounded-md border border-[var(--border)] bg-white text-sm"
                                       data-testid={`csv-map-${h}`}>
                                 <option value="">— Skip —</option>

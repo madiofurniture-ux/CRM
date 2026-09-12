@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Topbar from "@/components/Topbar";
 import KpiCard from "@/components/KpiCard";
 import StageBadge from "@/components/StageBadge";
@@ -49,7 +49,14 @@ export default function Dashboard() {
   useEffect(() => { load(); }, []);
 
   const today = new Date().toISOString().slice(0, 10);
-  const overdue = leads.filter((l) => l.follow_up_date && l.follow_up_date < today && !["Won", "Lost"].includes(l.stage)).slice(0, 6);
+  const overdue = useMemo(
+    () => leads.filter((l) => l.follow_up_date && l.follow_up_date < today && !["Won", "Lost"].includes(l.stage)).slice(0, 6),
+    [leads, today]
+  );
+  const pipelineMax = useMemo(
+    () => Math.max(...(stats?.by_stage || []).map((x) => x.value), 1),
+    [stats]
+  );
 
   return (
     <>
@@ -140,8 +147,7 @@ export default function Dashboard() {
             <div className="font-heading font-semibold text-[var(--ink)] mb-4">Pipeline Pulse</div>
             <div className="space-y-3">
               {(stats?.by_stage || []).map((s) => {
-                const max = Math.max(...(stats?.by_stage || []).map((x) => x.value), 1);
-                const pct = (s.value / max) * 100;
+                const pct = (s.value / pipelineMax) * 100;
                 return (
                   <div key={s.stage}>
                     <div className="flex items-center justify-between text-xs mb-1.5">

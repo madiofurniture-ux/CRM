@@ -20,7 +20,9 @@ const MAP = {
   High: { bg: "bg-orange-600", text: "text-white", dot: "bg-white" },
 };
 
-export default function StageBadge({ stage }) {
+import { memo } from "react";
+
+function StageBadge({ stage }) {
   const m = MAP[stage] || MAP.New;
   return (
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${m.bg} ${m.text}`}>
@@ -29,3 +31,5 @@ export default function StageBadge({ stage }) {
     </span>
   );
 }
+
+export default memo(StageBadge);

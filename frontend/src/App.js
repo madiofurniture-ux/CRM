@@ -79,6 +79,12 @@ function App() {
     <AuthProvider>
       <TenantConfigProvider>
       <PrivacyModeProvider>
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[200] focus:px-4 focus:py-2 focus:rounded-xl focus:bg-blue-600 focus:text-white focus:outline-none focus:ring-2 focus:ring-white"
+      >
+        Skip to main content
+      </a>
       <Toaster position="top-right" richColors closeButton />
       <PrivacyPinModal />
       <BrowserRouter>

@@ -40,7 +40,7 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
   };
 
   return (
-    <div className="sticky top-0 z-30 h-16 bg-white/85 backdrop-blur-md border-b border-[var(--border)] flex items-center px-3 sm:px-6 gap-2 sm:gap-4" data-testid="topbar">
+    <header className="sticky top-0 z-30 h-16 bg-white/85 backdrop-blur-md border-b border-[var(--border)] flex items-center px-3 sm:px-6 gap-2 sm:gap-4" data-testid="topbar">
       <button
         onClick={() => setOpen(true)}
         className="p-2 -ml-1 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-2)] lg:hidden shrink-0"
@@ -111,6 +111,6 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
           <span className="hidden sm:inline">{addLabel}</span>
         </button>
       )}
-    </div>
+    </header>
   );
 }

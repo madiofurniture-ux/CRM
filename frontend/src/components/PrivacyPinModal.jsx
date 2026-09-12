@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Shield, X } from "lucide-react";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import api, { formatApiError } from "@/lib/api";
+import useFocusTrap from "@/hooks/useFocusTrap";
 
 export default function PrivacyPinModal() {
   const { showPinModal, setShowPinModal, unlockWithPin } = usePrivacyMode();
@@ -9,6 +10,7 @@ export default function PrivacyPinModal() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const trapRef = useFocusTrap(showPinModal);
 
   if (!showPinModal) return null;
 
@@ -40,13 +42,13 @@ export default function PrivacyPinModal() {
 
   return (
     <div className="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center p-4" onClick={close} onKeyDown={(e) => e.key === "Escape" && close()}>
-      <div role="dialog" aria-modal="true" aria-labelledby="privacy-pin-title" className="bg-white rounded-2xl border border-[var(--border)] w-full max-w-xs p-6" onClick={(e) => e.stopPropagation()}>
+      <div ref={trapRef} role="dialog" aria-modal="true" aria-labelledby="privacy-pin-title" className="bg-white rounded-2xl border border-[var(--border)] w-full max-w-xs p-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Shield size={18} className="text-[var(--brand)]" />
             <h3 id="privacy-pin-title" className="font-heading font-semibold">{needsSetup ? "Set Privacy PIN" : "Unlock Other Amounts"}</h3>
           </div>
-          <button onClick={close} aria-label="Close"><X size={16} /></button>
+          <button onClick={close} aria-label="Close privacy PIN modal"><X size={16} /></button>
         </div>
         <p className="text-xs text-[var(--ink-3)] mb-4">
           {needsSetup ? "Choose a 4-digit PIN to protect Other amounts going forward." : "Enter your privacy PIN to view masked Other amounts."}

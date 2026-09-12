@@ -12,7 +12,9 @@
   --surface-hover: rgba(239, 246, 255, 0.7); /* blue-50/70 — Aura Blue soft hover */
   --ink: #0f172a;
   --ink-2: #475569;
-  --ink-3: #94a3b8;
+  /* slate-500, not slate-400 (#94a3b8) — that was ~2.56:1 against white,
+     failing WCAG AA's 4.5:1 for normal text; this is ~4.76:1. */
+  --ink-3: #64748b;
   --brand: #0062d2;
   --brand-hover: #0055d6;
   --brand-soft: #eff6ff;
@@ -160,5 +162,13 @@ body {
 @layer base {
   * {
     border-color: hsl(var(--border));
+  }
+
+  /* High-contrast focus ring for keyboard navigation — mouse/touch clicks
+     don't trigger :focus-visible, so this never shows as a stray box on click. */
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 }

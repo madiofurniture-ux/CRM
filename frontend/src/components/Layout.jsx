@@ -21,7 +21,7 @@ export default function Layout({ children }) {
       )}
       <div className={`flex min-h-screen bg-[var(--bg)] ${IS_STAGING ? "pt-6" : ""}`}>
         <Sidebar />
-        <main className="flex-1 min-w-0 pb-16 lg:pb-0">
+        <main id="main-content" tabIndex={-1} className="flex-1 min-w-0 pb-16 lg:pb-0 outline-none">
           <ErrorBoundary key={pathname}>{children}</ErrorBoundary>
         </main>
       </div>
