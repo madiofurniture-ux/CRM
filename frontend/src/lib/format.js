@@ -12,6 +12,18 @@ export const inrFull = (n) => {
   return "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 };
 
+// Format a Date as YYYY-MM-DD from its *local* calendar fields. Never use
+// `d.toISOString().slice(0, 10)` for this: that renders in UTC, which for
+// any timezone ahead of UTC (IST is +5:30) shifts the date back by a day —
+// local midnight on the 12th is 18:30 UTC on the 11th. That bug made
+// meetings scheduled for "today" render/save under the wrong day.
+export const localDateStr = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
 export const fmtDate = (s) => {
   if (!s) return "—";
   try {

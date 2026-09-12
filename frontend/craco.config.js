@@ -23,6 +23,15 @@ if (config.enableHealthCheck) {
 }
 
 let webpackConfig = {
+  jest: {
+    configure: {
+      // Mirror the webpack '@' alias below — without this, jest can't
+      // resolve any `@/...` import and every test importing a page fails.
+      moduleNameMapper: {
+        "^@/(.*)$": "<rootDir>/src/$1",
+      },
+    },
+  },
   eslint: {
     configure: {
       extends: ["plugin:react-hooks/recommended"],
