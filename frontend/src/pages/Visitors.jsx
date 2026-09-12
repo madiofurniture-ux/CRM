@@ -35,8 +35,12 @@ export default function Visitors() {
     date: new Date().toISOString().slice(0, 10), name: "", customer_type: "Male", location: "",
     reference: "", reference_id: "", phone: "", requirement: "",
     attend_person: "", attend_person_id: "", remarks: [], status: "New", stage: "New", ticket_value: 0,
+    customer_id: "",
   };
   const [form, setForm] = useState(empty);
+  // true once "None of these — create new customer" is chosen; cleared again
+  // if the user then picks an existing customer from the dropdown instead.
+  const [createNewCustomer, setCreateNewCustomer] = useState(false);
 
   const saveArchitect = async () => {
     const name = (archDraft?.name || "").trim();
@@ -109,10 +113,11 @@ export default function Visitors() {
 
   const phoneCheck = useMemo(() => validateIndianPhone(form.phone), [form.phone]);
 
-  const openNew = () => { setEditing(null); setForm(empty); setShow(true); };
+  const openNew = () => { setEditing(null); setForm(empty); setCreateNewCustomer(false); setShow(true); };
   const openEdit = (v) => {
     setEditing(v);
     setForm({ ...empty, ...v, customer_type: v.customer_type || "Male" });
+    setCreateNewCustomer(false);
     setShow(true);
   };
 
@@ -120,8 +125,19 @@ export default function Visitors() {
     if (saving) return;
     if (!phoneCheck.valid) { toast.error(phoneCheck.message); return; }
     setSaving(true);
-    const payload = { ...form, phone: phoneCheck.normalized, remarks: toRemarksArray(form.remarks) };
+    let { customer_id } = form;
     try {
+      // "None of these — create new customer" was chosen and nothing was
+      // picked from the dropdown afterwards: create the customer record
+      // first so the visitor can link to a real customer_id.
+      if (createNewCustomer && !customer_id) {
+        if (!form.name.trim()) { toast.error("Name is required to create a new customer"); setSaving(false); return; }
+        const { data: customer } = await api.post("/customers", {
+          name: form.name.trim(), phone: phoneCheck.normalized,
+        });
+        customer_id = customer.id;
+      }
+      const payload = { ...form, customer_id, phone: phoneCheck.normalized, remarks: toRemarksArray(form.remarks) };
       if (editing) {
         await api.put(`/visitors/${editing.id}`, payload);
         toast.success("Visitor updated");
@@ -129,7 +145,7 @@ export default function Visitors() {
         await api.post("/visitors", payload);
         toast.success("Visitor logged");
       }
-      setShow(false); setEditing(null); setForm(empty); load();
+      setShow(false); setEditing(null); setForm(empty); setCreateNewCustomer(false); load();
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail) || "Save failed");
     } finally {
@@ -223,7 +239,18 @@ export default function Visitors() {
             </div>
             <div className="px-5 pt-4">
               <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Search Existing Customer</label>
-              <CustomerResolver onSelect={(c) => setForm({ ...form, name: c.name, phone: c.phone })} />
+              <CustomerResolver
+                onSelect={(c) => { setForm({ ...form, name: c.name, phone: c.phone, customer_id: c.id }); setCreateNewCustomer(false); }}
+                onCreateNew={(query) => {
+                  setForm((f) => ({ ...f, name: f.name.trim() ? f.name : query, customer_id: "" }));
+                  setCreateNewCustomer(true);
+                }}
+              />
+              {createNewCustomer && (
+                <div className="mt-2 text-xs text-[var(--brand)] bg-[var(--brand-soft)] border border-[var(--brand)]/20 rounded-lg px-3 py-2" data-testid="vf-new-customer-banner">
+                  A new customer record will be created and linked when you save.
+                </div>
+              )}
             </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <div className="col-span-2">

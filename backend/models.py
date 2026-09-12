@@ -120,6 +120,7 @@ class VisitorBase(BaseModel):
     attend_person: Optional[str] = ""     # display name, kept for legacy rows / CSV export
     attend_person_id: Optional[str] = ""  # Staff (users) id when linked via the picker
     site_visit: Optional[str] = ""
+    customer_id: Optional[str] = ""       # Customer.id — set when resolved to (or created as) an existing customer
     # Accepts either the new list-of-entries shape or a legacy plain string;
     # normalize_visitor() upgrades a legacy string to a single entry on write.
     remarks: Optional[Any] = Field(default_factory=list)

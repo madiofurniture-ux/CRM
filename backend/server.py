@@ -3680,7 +3680,7 @@ async def customer_resolver(q: str = "", user: dict = Depends(get_current_user))
     auto-merges: the caller always confirms before linking.
     """
     q = q.strip()
-    if len(q) < 2:
+    if len(q) < 1:
         return []
     import re as _re
     pattern = _re.escape(q)

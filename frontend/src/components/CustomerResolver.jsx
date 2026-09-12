@@ -7,9 +7,9 @@ import { Search, UserCheck } from "lucide-react";
  * Quotation creation all use this instead of rolling their own dedup check.
  * Search by phone or name; picking a result calls onSelect(customer).
  *
- * Usage: <CustomerResolver onSelect={(c) => prefillFrom(c)} />
+ * Usage: <CustomerResolver onSelect={(c) => prefillFrom(c)} onCreateNew={(query) => ...} />
  */
-export default function CustomerResolver({ onSelect, placeholder = "Search phone or name…" }) {
+export default function CustomerResolver({ onSelect, onCreateNew, placeholder = "Search phone or name…" }) {
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
@@ -18,7 +18,7 @@ export default function CustomerResolver({ onSelect, placeholder = "Search phone
   const onChange = (v) => {
     setQ(v);
     clearTimeout(timer.current);
-    if (v.trim().length < 2) { setResults([]); setOpen(false); return; }
+    if (v.trim().length < 1) { setResults([]); setOpen(false); return; }
     timer.current = setTimeout(async () => {
       try {
         // The literal query string is part of the cache key in lib/api.js's
@@ -62,7 +62,12 @@ export default function CustomerResolver({ onSelect, placeholder = "Search phone
               </div>
             </button>
           ))}
-          <button type="button" onClick={() => setOpen(false)} className="w-full text-left px-3 py-2 text-xs text-[var(--brand)] font-medium hover:bg-[var(--surface-hover)] flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => { onCreateNew?.(q.trim()); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-xs text-[var(--brand)] font-medium hover:bg-[var(--surface-hover)] flex items-center gap-1.5"
+            data-testid="customer-resolver-create-new"
+          >
             <UserCheck size={12} /> None of these — create new customer
           </button>
         </div>
