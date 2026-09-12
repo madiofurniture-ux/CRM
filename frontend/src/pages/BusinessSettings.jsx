@@ -21,7 +21,8 @@ const MODULES = [
   { id: "tasks", label: "Tasks" }, { id: "meetplan", label: "Meet Planner" },
   { id: "customers", label: "Customers" }, { id: "invoice-gen", label: "Tax Invoices" },
   { id: "petty", label: "Petty Cash" }, { id: "outstanding", label: "Outstanding" },
-  { id: "data-centre", label: "Data Centre" }, { id: "financial-year", label: "Financial Year" },
+  { id: "data-centre", label: "Data Centre" }, { id: "master-data", label: "Master Data" },
+  { id: "financial-year", label: "Financial Year" },
   { id: "workflows", label: "Workflows" }, { id: "roles", label: "Role Manager" },
   { id: "teams", label: "Teams" }, { id: "roles-permissions", label: "Roles & Permissions" },
 ];

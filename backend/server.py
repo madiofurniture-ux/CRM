@@ -756,7 +756,7 @@ ALL_MODULE_IDS = [
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
-    "finance-payments", "purchase-orders",
+    "finance-payments", "purchase-orders", "master-data",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
