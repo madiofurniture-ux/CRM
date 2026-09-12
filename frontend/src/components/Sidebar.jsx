@@ -72,6 +72,7 @@ const SECTIONS = [
       { id: "roles-permissions", to: "/admin/roles-permissions", label: "Roles & Permissions", icon: Lock, adminOnly: true },
       { id: "roles", to: "/admin/roles", label: "Users", icon: Users, adminOnly: true },
       { id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database, adminOnly: true },
+      { id: "master-data", to: "/admin/master-data", label: "Master Data", icon: MapPin, adminOnly: true },
       { id: "data-health", to: "/admin/data-health", label: "Data Health", icon: ShieldCheck, adminOnly: true },
       { id: "financial-year", to: "/admin/financial-year", label: "Financial Year", icon: CalendarRange, adminOnly: true },
       { id: "workflows", to: "/admin/workflows", label: "Workflows", icon: Workflow, adminOnly: true },

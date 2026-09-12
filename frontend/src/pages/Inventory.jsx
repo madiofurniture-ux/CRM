@@ -420,7 +420,7 @@ export default function Inventory() {
                   {floors.map((f) => <option key={f.id} value={f.name}>{f.name}</option>)}
                 </select>
                 {floors.length === 0 && (
-                  <div className="text-[11px] text-[var(--ink-3)] mt-1">No floors yet — create one on the Stock Ledger page.</div>
+                  <div className="text-[11px] text-[var(--ink-3)] mt-1">No floors yet — create one on the Master Data page.</div>
                 )}
               </div>
               <div className="col-span-2 grid grid-cols-4 gap-3 items-end">
