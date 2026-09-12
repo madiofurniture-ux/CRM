@@ -54,6 +54,7 @@ from models import (
     TeamCreate, Team, RoleCreate, Role,
     SavedViewCreate, CustomFieldDefCreate, CustomFieldDefUpdate,
     SplitPaymentCreate, PrivacyPinSet, PrivacyPinVerify, normalize_settlement, mask_settlement,
+    mask_cashbook_entry,
     normalize_remarks_history,
     ProjectDailyLogCreate,
     TenantBusinessProfile, TenantBusinessProfileUpdate,
@@ -2066,10 +2067,16 @@ make_crud(api, "cashbooks", "cashbooks", CashbookCreate, Cashbook, module="cashb
 
 
 @api.get("/cashbooks/{cashbook_id}/entries")
-async def list_cashbook_entries(cashbook_id: str, user: dict = Depends(get_current_user)):
+async def list_cashbook_entries(cashbook_id: str, mask_other: bool = True, user: dict = Depends(get_current_user)):
+    """mask_other=true (default) redacts the amount of any entry credited
+    from a masked Other/Direct Settlement collection (category="Payment
+    Collection") — otherwise the figure masked on /finance/payments and the
+    P&L report is still readable in plain text here, in the wallet it lands
+    in. Defaulting to masked means an older client fails closed, not open."""
     await _require_permission("cashbook", "view", user)
     q = tenancy.scope({"cashbook_id": cashbook_id}, "cashbook_entries", user)
-    return await db.cashbook_entries.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    rows = await db.cashbook_entries.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    return [mask_cashbook_entry(r) for r in rows] if mask_other else rows
 
 
 @api.post("/cashbooks/{cashbook_id}/entries")
@@ -2219,10 +2226,10 @@ async def project_petty_cash_summary(project_id: str, user: dict = Depends(get_c
 
 
 @api.get("/cashbook-entries/export.csv")
-async def cashbook_entries_export(user: dict = Depends(get_current_user)):
+async def cashbook_entries_export(mask_other: bool = True, user: dict = Depends(get_current_user)):
     await _require_permission("cashbook", "export", user)
     return StreamingResponse(
-        csv_engine.stream_cashbook_entries_csv(db, user),
+        csv_engine.stream_cashbook_entries_csv(db, user, mask_other),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="cashbook_entries_{lc.today_iso()}.csv"'},
     )
@@ -4746,11 +4753,13 @@ async def startup():
     # phones in seeded data) must not abort the seed/backfill block above,
     # and vice versa. partialFilterExpression (not sparse) so a blank phone
     # never collides — only actual non-blank duplicates within the same
-    # tenant are rejected.
+    # tenant are rejected. Mongo partial-index filters only support a small
+    # operator set ($eq/$exists/$gt/$gte/$lt/$lte/$type, no $ne), so "not
+    # blank" is expressed as $gt "" (the empty string sorts lowest).
     try:
         await db.customers.create_index(
             [("tenant_id", 1), ("phone", 1)], unique=True,
-            partialFilterExpression={"phone": {"$exists": True, "$ne": ""}})
+            partialFilterExpression={"phone": {"$exists": True, "$gt": ""}})
     except Exception as e:
         logger.warning(f"Customer phone-uniqueness index not created: {e}")
 

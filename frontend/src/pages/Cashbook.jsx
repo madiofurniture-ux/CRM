@@ -8,6 +8,7 @@ import { shrinkImage } from "@/lib/image";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
+import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import {
   Plus, ArrowDownCircle, ArrowUpCircle, Download, Trash2, X, Wallet,
   Check, Ban, Briefcase, Smartphone,
@@ -33,6 +34,7 @@ const emptyBook = { book_name: "", description: "", initial_balance: "", project
 
 export default function Cashbook() {
   const { user, tenant } = useAuth();
+  const { isOtherHidden, requestUnlock } = usePrivacyMode();
   const isAdmin = user?.role === "admin";
   const [searchParams] = useSearchParams();
   const [books, setBooks] = useState([]);
@@ -71,22 +73,25 @@ export default function Cashbook() {
     const pending = perBook.flat().filter((e) => e.type === "CASH_OUT" && e.status === "Pending").reduce((a, e) => a + e.amount, 0);
     setPendingTotal(pending);
   };
-  const loadEntries = (id) => { if (id) api.get(`/cashbooks/${id}/entries`, { skipCache: true }).then((r) => setEntries(r.data)); };
+  const loadEntries = (id) => {
+    if (!id) return;
+    api.get(`/cashbooks/${id}/entries`, { skipCache: true, params: { mask_other: isOtherHidden } }).then((r) => setEntries(r.data));
+  };
 
   useEffect(() => {
     loadBooks();
     api.get("/users/directory").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
     api.get("/projects").then(({ data }) => setProjects(data)).catch(() => setProjects([]));
   }, []); // eslint-disable-line
-  useEffect(() => loadEntries(selectedId), [selectedId]);
+  useEffect(() => loadEntries(selectedId), [selectedId, isOtherHidden]); // eslint-disable-line
 
   const userName = (id) => users.find((u) => u.id === id)?.name || id;
   const projectLabel = (id) => projects.find((p) => p.id === id)?.project_no || projects.find((p) => p.id === id)?.customer || "";
 
   const book = books.find((b) => b.id === selectedId);
   const totals = useMemo(() => {
-    const totalIn = entries.filter((e) => e.type === "CASH_IN").reduce((a, e) => a + e.amount, 0);
-    const totalOut = entries.filter((e) => e.type === "CASH_OUT" && e.status !== "Rejected").reduce((a, e) => a + e.amount, 0);
+    const totalIn = entries.filter((e) => e.type === "CASH_IN").reduce((a, e) => a + (e.amount || 0), 0);
+    const totalOut = entries.filter((e) => e.type === "CASH_OUT" && e.status !== "Rejected").reduce((a, e) => a + (e.amount || 0), 0);
     return { totalIn, totalOut };
   }, [entries]);
 
@@ -313,7 +318,11 @@ export default function Cashbook() {
                         <td className="px-4 py-3">{e.category || "—"}</td>
                         <td className="px-4 py-3 text-[var(--ink-2)]">{e.payment_mode}</td>
                         <td className="px-4 py-3 text-[var(--ink-2)] max-w-[220px] truncate">{e.remark || "—"}</td>
-                        <td className="px-4 py-3 text-[var(--ink-2)]">{e.entry_person || "—"}</td>
+                        <td className="px-4 py-3 text-[var(--ink-2)]">
+                          {e.category === "Payment Collection" && e.amount === null
+                            ? <button onClick={requestUnlock} className="text-blue-600 underline">••••••</button>
+                            : (e.entry_person || "—")}
+                        </td>
                         <td className="px-4 py-3">
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase ${
                             e.status === "Pending" ? "bg-amber-100 text-amber-700"
@@ -321,7 +330,7 @@ export default function Cashbook() {
                               : "bg-emerald-100 text-emerald-700"}`}>{e.status || "Approved"}</span>
                         </td>
                         <td className={`px-4 py-3 text-right font-mono font-semibold ${e.type === "CASH_IN" ? "text-[var(--moss)]" : "text-[var(--danger)]"}`}>
-                          {e.type === "CASH_IN" ? "+" : "-"}{inrFull(e.amount)}
+                          {e.amount === null ? "••••••" : <>{e.type === "CASH_IN" ? "+" : "-"}{inrFull(e.amount)}</>}
                         </td>
                         <td className="px-4 py-3 text-right whitespace-nowrap">
                           {isAdmin && e.status === "Pending" ? (

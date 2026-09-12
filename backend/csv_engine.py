@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 import lifecycle as lc
 import tenancy
-from models import LeadCreate, CustomerCreate, new_id, now_iso, PO_COMMITTED_STATUSES
+from models import LeadCreate, CustomerCreate, new_id, now_iso, PO_COMMITTED_STATUSES, mask_cashbook_entry
 
 logger = logging.getLogger("madio")
 
@@ -114,11 +114,15 @@ CASHBOOK_ENTRY_FIELDS = [
 ]
 
 
-async def stream_cashbook_entries_csv(db, user: dict) -> AsyncGenerator[str, None]:
+async def stream_cashbook_entries_csv(db, user: dict, mask_other: bool = True) -> AsyncGenerator[str, None]:
     """Export-only — deliberately no import counterpart. A generic CSV
     import would insert_one straight into cashbook_entries and skip the
     $inc balance/approval side effects that cashbook_top_up/expense/approve
-    enforce, silently corrupting a book's running balance."""
+    enforce, silently corrupting a book's running balance.
+
+    mask_other=true (default) redacts entries credited from a masked Other
+    settlement the same way list_cashbook_entries does — otherwise this
+    export was a second, unmasked route to a figure the UI hides."""
     header_buf = io.StringIO()
     csv.writer(header_buf).writerow(CASHBOOK_ENTRY_FIELDS)
     yield header_buf.getvalue()
@@ -126,6 +130,8 @@ async def stream_cashbook_entries_csv(db, user: dict) -> AsyncGenerator[str, Non
     cursor = db.cashbook_entries.find(
         tenancy.scope({}, "cashbook_entries", user), {"_id": 0}).sort("created_at", -1).batch_size(500)
     async for doc in cursor:
+        if mask_other:
+            doc = mask_cashbook_entry(doc)
         buf = io.StringIO()
         csv.writer(buf).writerow([lc.csv_cell(doc.get(f)) for f in CASHBOOK_ENTRY_FIELDS])
         yield buf.getvalue()

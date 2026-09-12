@@ -90,6 +90,28 @@ def test_split_payment_credits_wallet_when_other_has_wallet_id():
     asyncio.run(run())
 
 
+def test_wallet_credit_from_other_settlement_is_masked_on_cashbook_screen():
+    """The wallet entry a masked Other settlement lands in must itself be
+    masked — otherwise /finance/payments hides the figure but the Cashbook
+    screen (same money, same user) shows it in plain text."""
+    async def run():
+        await _make_wallet()
+        payload = SplitPaymentCreate(
+            project_id="p1", payment_mode="OTHER", receipt_date="2026-01-01",
+            other_component=OtherComponent(other_amount=500, wallet_id="b1"),
+        )
+        await server.create_split_payment(payload, user=ADMIN)
+
+        masked = await server.list_cashbook_entries("b1", mask_other=True, user=ADMIN)
+        assert masked[0]["category"] == "Payment Collection"
+        assert masked[0]["amount"] is None
+        assert masked[0]["entry_person"] is None
+
+        unmasked = await server.list_cashbook_entries("b1", mask_other=False, user=ADMIN)
+        assert unmasked[0]["amount"] == 500
+    asyncio.run(run())
+
+
 def test_split_payment_without_wallet_id_does_not_touch_cashbook():
     async def run():
         await _make_wallet()

@@ -1661,6 +1661,24 @@ def mask_settlement(doc: dict) -> dict:
     return doc
 
 
+def mask_cashbook_entry(doc: dict) -> dict:
+    """Redact a wallet entry that was credited from a masked Other/Direct
+    Settlement collection (see the split-payment wallet credit in server.py,
+    which tags these `category="Payment Collection"`).
+
+    Without this, a masked settlement's real amount was still readable in
+    plain text on the project's Cashbook screen by anyone with cashbook
+    view access — the mask on /finance/payments and the P&L report didn't
+    apply to the wallet ledger the same money lands in.
+
+    Mutates and returns `doc`. Apply only to masked responses.
+    """
+    if doc.get("category") == "Payment Collection":
+        doc["amount"] = None
+        doc["entry_person"] = None
+    return doc
+
+
 class PrivacyPinSet(BaseModel):
     model_config = ConfigDict(extra="ignore")
     pin: str  # 4-digit PIN, hashed with the same bcrypt helper as login PINs
