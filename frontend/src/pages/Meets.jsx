@@ -3,6 +3,7 @@ import Topbar from "@/components/Topbar";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, MapPin, Users as UsersIcon, X, Trash2 } from "lucide-react";
+import { todayIST, isoDateIST } from "@/lib/format";
 
 const HOURS = Array.from({ length: 12 }, (_, i) => 8 + i); // 8..19
 
@@ -22,7 +23,7 @@ export default function Meets() {
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const empty = { title: "", date: new Date().toISOString().slice(0, 10), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Internal", ref_name: "", agenda: "", status: "Scheduled", attendees: [] };
+  const empty = { title: "", date: todayIST(), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Internal", ref_name: "", agenda: "", status: "Scheduled", attendees: [] };
   const [form, setForm] = useState(empty);
 
   const load = async () => { const { data } = await api.get("/meets"); setRows(data); };
@@ -61,7 +62,7 @@ export default function Meets() {
   const remove = async (id) => { if (!window.confirm("Delete meeting?")) return; await api.delete(`/meets/${id}`); load(); };
 
   const upcoming = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayIST();
     return rows.filter((m) => m.date >= today).sort((a, b) => (a.date + a.start_time).localeCompare(b.date + b.start_time)).slice(0, 20);
   }, [rows]);
 
@@ -73,7 +74,7 @@ export default function Meets() {
       <Topbar
         title="Meet Planner"
         subtitle={`${rows.length} meetings · ${upcoming.length} upcoming`}
-        onAdd={() => openNew(new Date().toISOString().slice(0, 10), 10)}
+        onAdd={() => openNew(todayIST(), 10)}
         addLabel="Schedule"
         actions={
           <div className="hidden md:flex items-center bg-[var(--surface-2)] border border-[var(--border)] rounded-lg p-0.5">
@@ -106,7 +107,7 @@ export default function Meets() {
                     <>
                       <div key={`h-${h}`} className="text-[10px] font-mono text-[var(--ink-3)] text-right pr-2 py-6 border-t border-[var(--border-light)]">{String(h).padStart(2, "0")}:00</div>
                       {days.map((d) => {
-                        const dateStr = d.toISOString().slice(0, 10);
+                        const dateStr = isoDateIST(d);
                         const meets = (byDay[dateStr] || []).filter((m) => {
                           const start = parseInt(m.start_time.split(":")[0], 10);
                           return start === h;

@@ -1947,9 +1947,22 @@ async def purchase_order_pdf(po_id: str, user: dict = Depends(get_current_user))
     )
 
 
+async def normalize_invoice(doc: dict, existing: dict | None, user: dict) -> None:
+    """subtotal/discount_total/cgst/sgst/igst/total are always recomputed from
+    line_items server-side — same precedent as po_totals()/PDF rendering for
+    purchase orders: an invoice is money handed to a customer, so its totals
+    can never be a client-supplied number."""
+    if "line_items" not in doc and existing is None:
+        return
+    lines = doc.get("line_items", existing.get("line_items") if existing else [])
+    is_igst = doc.get("is_igst", existing.get("is_igst") if existing else False)
+    doc.update(lc.invoice_totals(lines, bool(is_igst)))
+
+
 make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to",
           normalize=normalize_task, personal=True)
-make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user")
+make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user",
+          normalize=normalize_invoice)
 make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by",
           personal=True)
 

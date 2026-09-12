@@ -8,8 +8,13 @@ import { toast } from "sonner";
 import { Trash2, Edit2, Printer, X, Plus } from "lucide-react";
 
 const HSN_OPTIONS = ["9403", "3208", "4418", "9401", "6304", "9405"];
+// Furniture/interiors line items are priced per piece, per square foot
+// (laminate, glazing, false ceiling) or per running foot (beading,
+// edge-banding, skirting) — qty*rate math doesn't care which, this is
+// purely so the printed invoice line reads "20 sqft" instead of just "20".
+const UNIT_OPTIONS = ["pcs", "sqft", "rft"];
 
-const emptyItem = () => ({ sku: "", description: "", hsn: "9403", qty: 1, rate: 0, discount_pct: 0, tax_pct: GST_DEFAULT });
+const emptyItem = () => ({ sku: "", description: "", hsn: "9403", qty: 1, rate: 0, unit: "pcs", discount_pct: 0, tax_pct: GST_DEFAULT });
 
 export default function Invoices() {
   const [rows, setRows] = useState([]);
@@ -188,6 +193,7 @@ export default function Invoices() {
                       <th className="text-left px-2 py-2">Description</th>
                       <th className="text-left px-2 py-2 w-20">HSN</th>
                       <th className="text-right px-2 py-2 w-16">Qty</th>
+                      <th className="text-left px-2 py-2 w-16">Unit</th>
                       <th className="text-right px-2 py-2 w-24">Rate</th>
                       <th className="text-right px-2 py-2 w-16">Disc%</th>
                       <th className="text-right px-2 py-2 w-16">Tax%</th>
@@ -208,6 +214,13 @@ export default function Invoices() {
                             </select>
                           </td>
                           <td className="p-1"><input type="number" value={it.qty} onChange={(e) => setItem(i, "qty", parseFloat(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm text-right font-mono" data-testid={`inv-item-qty-${i}`} /></td>
+                          <td className="p-1">
+                            <select value={it.unit || "pcs"} onChange={(e) => setItem(i, "unit", e.target.value)}
+                              aria-label={`Unit for line ${i + 1}`}
+                              className="w-full px-1 py-1.5 rounded border border-[var(--border)] text-xs" data-testid={`inv-item-unit-${i}`}>
+                              {UNIT_OPTIONS.map((u) => <option key={u} value={u}>{u}</option>)}
+                            </select>
+                          </td>
                           <td className="p-1"><input type="number" value={it.rate} onChange={(e) => setItem(i, "rate", parseFloat(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm text-right font-mono" data-testid={`inv-item-rate-${i}`} /></td>
                           <td className="p-1"><input type="number" value={it.discount_pct} onChange={(e) => setItem(i, "discount_pct", parseFloat(e.target.value) || 0)} className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm text-right font-mono" /></td>
                           <td className="p-1">
@@ -345,7 +358,7 @@ function InvoicePrint({ invoice, office, onClose }) {
                     <td className="py-3">{i + 1}</td>
                     <td className="py-3">{it.description}</td>
                     <td className="py-3 font-mono">{it.hsn}</td>
-                    <td className="py-3 text-right font-mono">{it.qty}</td>
+                    <td className="py-3 text-right font-mono">{it.qty}{it.unit && it.unit !== "pcs" ? ` ${it.unit}` : ""}</td>
                     <td className="py-3 text-right font-mono">{inrFull(it.rate)}</td>
                     <td className="py-3 text-right font-mono">{it.tax_pct}%</td>
                     <td className="py-3 text-right font-mono font-semibold">{inrFull(amt)}</td>

@@ -1,3 +1,12 @@
+// This CRM's ops staff are India-based, so "today"/day-boundary math is
+// pinned to Asia/Kolkata via Intl rather than the browser's local timezone —
+// toISOString().slice(0,10) on a Date built from local calendar fields
+// silently rolls back a day for any UTC+ timezone (IST midnight = 18:30 UTC
+// the previous day), which is exactly the meeting-scheduler bug this fixes.
+const IST_DATE_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" });
+export const todayIST = () => IST_DATE_FMT.format(new Date());
+export const isoDateIST = (d) => IST_DATE_FMT.format(d);
+
 export const inr = (n) => {
   if (n === null || n === undefined || isNaN(n)) return "₹0";
   const v = Number(n);

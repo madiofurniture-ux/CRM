@@ -478,7 +478,7 @@ class Task(TaskBase):
     created_by_id: Optional[str] = ""  # stamped server-side; personal-visibility key
 
 
-# ------- Line item (shared by Quotes / Invoices) -------
+# ------- Line item (shared by Quotes / Invoices / POs) -------
 class LineItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
     sku: Optional[str] = ""
@@ -486,6 +486,12 @@ class LineItem(BaseModel):
     hsn: Optional[str] = ""
     qty: float = 1
     rate: float = 0
+    # Free-text unit of measure for furniture/interiors line items priced by
+    # area or length rather than piece count (e.g. laminate/glazing by sqft,
+    # beading/edge-banding by rft). Purely descriptive — qty*rate math is
+    # already unit-agnostic (a 20 sqft line is just qty=20), so this only
+    # needs to round-trip for display on the quote/invoice PDF.
+    unit: Optional[str] = ""
     discount_pct: Optional[float] = 0
     tax_pct: Optional[float] = GST_DOC_DEFAULT  # GST slab for this line (HSN/SAC dependent)
 

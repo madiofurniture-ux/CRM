@@ -492,6 +492,38 @@ def po_totals(lines: Iterable[dict]) -> dict:
     }
 
 
+# --------------------------------------------------------------- invoices
+# Same per-line, per-slab GST rollup as po_totals() (a furniture line at 18%
+# and a hardware line at 28% on one invoice must not be blended into a single
+# rate), but split into CGST/SGST (intrastate) or IGST (interstate) the way
+# an Indian tax invoice is legally required to show it. Computed server-side
+# and never trusted from the client, same precedent as po_totals().
+def invoice_totals(lines: Iterable[dict], is_igst: bool) -> dict:
+    subtotal = tax_total = discount_total = 0.0
+    by_slab: dict[float, float] = {}
+    for line in lines or []:
+        gross = money(line.get("qty")) * money(line.get("rate"))
+        amount = po_line_amount(line)  # net of line discount — unit-agnostic (sqft/rft is just qty)
+        discount_total += gross - amount
+        rate = money(line.get("tax_pct"))
+        tax = round(amount * rate / 100, 2)
+        subtotal += amount
+        tax_total += tax
+        by_slab[rate] = round(by_slab.get(rate, 0.0) + tax, 2)
+    subtotal = round(subtotal, 2)
+    tax_total = round(tax_total, 2)
+    igst = tax_total if is_igst else 0.0
+    cgst = 0.0 if is_igst else round(tax_total / 2, 2)
+    sgst = 0.0 if is_igst else round(tax_total - cgst, 2)
+    return {
+        "subtotal": subtotal,
+        "discount_total": round(discount_total, 2),
+        "cgst": cgst, "sgst": sgst, "igst": igst,
+        "total": round(subtotal + tax_total, 2),
+        "tax_breakup": [{"rate": r, "tax": t} for r, t in sorted(by_slab.items())],
+    }
+
+
 # ------------------------------------------------------------- D&W surveys
 def calc_opening(opening: dict) -> dict:
     """W and H are captured in INCHES in the field; area is square feet."""
