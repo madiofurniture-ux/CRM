@@ -3,6 +3,7 @@ import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import LogTimeline from "@/components/LogTimeline";
+import AttachmentPanel from "@/components/AttachmentPanel";
 import PettyCashBurnWidget from "@/components/PettyCashBurnWidget";
 import LinkedTasksPanel from "@/components/LinkedTasksPanel";
 import StageProgressBar from "@/components/StageProgressBar";
@@ -597,6 +598,7 @@ export default function Projects() {
                 }}
               />
               <LinkedTasksPanel refId={logProject.id} refType="project" entityName={logProject.customer} />
+              <AttachmentPanel entity="project" itemId={logProject.id} />
             </div>
           </div>
         </div>

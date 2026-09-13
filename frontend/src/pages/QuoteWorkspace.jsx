@@ -4,6 +4,7 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import StageProgressBar from "@/components/StageProgressBar";
 import LogTimeline from "@/components/LogTimeline";
+import AttachmentPanel from "@/components/AttachmentPanel";
 import api from "@/lib/api";
 import { inrFull } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
@@ -141,9 +142,9 @@ export default function QuoteWorkspace() {
         {q.approval === "approved" && <div className="text-xs text-[var(--moss)]">✓ Discount approved</div>}
 
         <div className="flex gap-1 border-b border-[var(--border)]">
-          {["lines", "versions", "followups"].map((t) => (
+          {["lines", "versions", "followups", "attachments"].map((t) => (
             <button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px ${tab === t ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-[var(--ink-3)]"}`}>
-              {t === "lines" ? "Line Items" : t === "versions" ? "Versions" : "Follow-ups"}
+              {t === "lines" ? "Line Items" : t === "versions" ? "Versions" : t === "followups" ? "Follow-ups" : "Attachments"}
             </button>
           ))}
         </div>
@@ -209,6 +210,8 @@ export default function QuoteWorkspace() {
             onAppended={(log, record) => setWs((p) => ({ ...p, quote: { ...p.quote, ...record, log } }))}
           />
         )}
+
+        {tab === "attachments" && <AttachmentPanel entity="quote" itemId={q.id} />}
       </div>
     </>
   );

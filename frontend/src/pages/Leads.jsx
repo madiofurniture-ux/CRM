@@ -4,6 +4,7 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import SearchSelect from "@/components/SearchSelect";
 import LogTimeline from "@/components/LogTimeline";
+import AttachmentPanel from "@/components/AttachmentPanel";
 import LinkedTasksPanel from "@/components/LinkedTasksPanel";
 import StageProgressBar from "@/components/StageProgressBar";
 import { leadLifecycleStages } from "@/lib/lifecycle";
@@ -493,6 +494,7 @@ export default function Leads() {
                 }}
               />
               <LinkedTasksPanel refId={logLead.id} refType="lead" entityName={logLead.name} />
+              <AttachmentPanel entity="lead" itemId={logLead.id} />
             </div>
           </div>
         </div>

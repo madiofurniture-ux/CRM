@@ -6,6 +6,7 @@ import { fmtDate } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { Phone, MapPin, Building, X, Pencil, Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
+import AttachmentPanel from "@/components/AttachmentPanel";
 
 const TYPES = ["Architect", "Designer", "Builder", "Vendor"];
 
@@ -229,6 +230,11 @@ export default function Architects() {
 
               <F l="Remarks" v={form.remarks} oc={(v) => setForm({ ...form, remarks: v })} cls="col-span-2" />
             </div>
+            {editing && (
+              <div className="px-5 pb-5">
+                <AttachmentPanel entity="architect" itemId={editing.id} />
+              </div>
+            )}
             <div className="px-5 py-4 border-t flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setShow(false)}>Cancel</button>
               <button className="btn-primary disabled:opacity-60" onClick={save} disabled={saving || !phoneCheck.valid || !altAllValid} data-testid="arch-save">
