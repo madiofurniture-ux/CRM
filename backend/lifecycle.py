@@ -346,6 +346,7 @@ def next_lead_id(leads):     return _next_dated_id(leads, "lead_id", "LD")
 def next_payment_id(pays):   return _next_dated_id(pays, "payment_id", "PY")
 def next_project_id(projs):  return _next_dated_id(projs, "id", "PM")
 def next_survey_id(surveys): return _next_dated_id(surveys, "survey_id", "DW")
+def next_manufacturer_order_no(orders): return _next_dated_id(orders, "order_code", "MO")
 
 
 # ------------------------------------------------------- quote status axis

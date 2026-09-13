@@ -553,6 +553,174 @@ class PurchaseOrder(PurchaseOrderBase):
     created_at: str
 
 
+# ------- Manufacturer Orders (job-work placed WITH a manufacturer) -------
+# Deliberately its own collection rather than more optional columns on
+# PurchaseOrderBase above. The two documents disagree on almost everything
+# that matters: a PO is a multi-line, per-HSN document with a procurement
+# status axis (Draft/Issued/Received/Cancelled) and no settlement split at
+# all, whereas this carries ONE agreed amount at one rate, a production
+# status axis, a reference photo, and a bank/Other split settlement with a
+# running balance. Bolting the second status enum onto PurchaseOrder would
+# also have silently changed PO_COMMITTED_STATUSES, which project P&L reads.
+#
+# What IS reused: the manufacturer is a `vendors` row (no parallel
+# Manufacturer entity — server.py's _can_see_vendor_names/redact_vendor
+# boundary then applies to manufacturers for free), lc.quote_total does the
+# tax, and lc.next_manufacturer_order_no is the same dated sequence as PO
+# numbering. An optional po_id links the job back to the internal PO raised
+# for the same work.
+MO_STATUSES = ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered"]
+# "Quoted" is this document's "Draft": an unaccepted quotation from a
+# manufacturer is not money the business owes anyone, so it does not reach
+# project P&L. Everything past it does. Same rule, same reasons, as
+# PO_COMMITTED_STATUSES above.
+MO_COMMITTED_STATUSES = {"Confirmed", "In Production", "Dispatched", "Delivered"}
+
+# The two settlement legs, named for this codebase's real terminology:
+# BANK_TRANSFER is the official/invoiceable leg, OTHER is the direct
+# settlement the privacy mask exists to redact. Never "cash" — see
+# normalize_settlement/OtherComponent above for the rename.
+MO_PAYMENT_MODES = ["BANK_TRANSFER", "OTHER"]
+
+
+class ManufacturerPayment(BaseModel):
+    """One disbursement against a manufacturer order.
+
+    Embedded on the order rather than given its own collection: a payment is
+    never read outside the context of its order, there are a handful per
+    order, and every write has to touch the order's due buckets in the same
+    breath anyway. A separate collection would buy a second tenancy scope
+    and a second CRUD surface for nothing.
+    """
+    model_config = ConfigDict(extra="ignore")
+    id: str = ""
+    date: str = ""
+    mode: Literal["BANK_TRANSFER", "OTHER"] = "BANK_TRANSFER"
+    amount: float = 0
+    reference_no: Optional[str] = ""     # UTR for a bank transfer, voucher no otherwise
+    wallet_id: Optional[str] = ""        # optional Cashbook wallet the money left
+    by_user: Optional[str] = ""
+    created_at: str = ""
+
+
+class ManufacturerOrderBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    order_code: Optional[str] = ""    # MO-YYMM-NNN, assigned server-side
+    date: str = ""
+    division: Optional[str] = ""      # Division.slug — "Furniture" / "MAP" / "D&W"
+    project_id: Optional[str] = ""    # when placed against a project — feeds project P&L
+    site_location: Optional[str] = ""
+    description: Optional[str] = ""
+    vendor_id: str = ""               # the manufacturer, a vendors row
+    vendor_name: Optional[str] = ""   # derived server-side, admin/accountant only on read
+    vendor_code: Optional[str] = ""   # derived server-side, visible to everyone
+    image_url: Optional[str] = ""     # shrunk JPEG data URL — this app has no blob store
+    quote_no: Optional[str] = ""      # the manufacturer's own quotation reference
+    po_id: Optional[str] = ""         # optional link to the internal PurchaseOrder
+    notes: Optional[str] = ""
+
+    # Money. Every figure below is recomputed server-side — see
+    # server.normalize_manufacturer_order and record_manufacturer_payment.
+    actual_amount: float = 0          # agreed manufacturing cost, pre-tax
+    tax_rate: float = GST_DOC_DEFAULT
+    tax_amount: float = 0
+    final_total: float = 0
+
+    # Split settlement: what is still owed on each leg, what has been paid.
+    bank_due: float = 0
+    other_due: float = 0
+    total_paid: float = 0
+    total_balance_due: float = 0
+    payments: List[ManufacturerPayment] = Field(default_factory=list)
+
+    status: str = "Quoted"
+    by_user: Optional[str] = ""
+
+    @field_validator("status")
+    @classmethod
+    def _valid_status(cls, v):
+        v = str(v or "Quoted")
+        if v not in MO_STATUSES:
+            raise ValueError(f"status must be one of {MO_STATUSES}")
+        return v
+
+
+class ManufacturerOrderCreate(ManufacturerOrderBase):
+    @field_validator("vendor_id")
+    @classmethod
+    def _manufacturer_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("A manufacturer is required on a manufacturer order")
+        return v
+
+
+class ManufacturerOrder(ManufacturerOrderBase):
+    id: str
+    created_at: str
+
+
+def manufacturer_order_totals(doc: dict) -> dict:
+    """actual_amount -> tax -> final_total, via the existing document tax
+    helper rather than a third parallel calculator.
+
+    lc.quote_total is the right one of the two: this order carries a single
+    agreed amount at a single rate, which is exactly its shape. po_totals /
+    invoice_totals both roll per-line HSN slabs up, and there are no lines
+    here to roll. The zero discount is passed explicitly — a manufacturer
+    order has no discount concept of its own.
+    """
+    t = lc.quote_total(lc.money(doc.get("actual_amount")), 0, lc.money(doc.get("tax_rate")))
+    return {"actual_amount": t["subtotal"], "tax_amount": t["tax_total"],
+            "final_total": t["grand_total"]}
+
+
+# The Other / Direct Settlement leg of a manufacturer order, and everything
+# that inverts to it. Same defect class mask_settlement and mask_pnl each had
+# to close, and the same rule decides the boundary: a figure that RECONCILES
+# is a figure that inverts.
+#
+# The whole settlement ledger goes, because it is an allocation of a total
+# that has to stay visible:
+#
+#     bank_due + other_due = final_total - total_paid
+#
+# `final_total` cannot be masked — it is the manufacturing cost that feeds
+# project P&L as material_cost, where it is deliberately NOT masked (it is
+# the official, invoiceable leg, exactly as mask_pnl reasons about PO spend),
+# and it is on the manufacturer's own tax document. Masking it here while
+# P&L publishes it would just move the leak one screen over.
+#
+# Given that, `bank_due` cannot stay either, however tempting the parallel
+# with mask_settlement's visible bank-transfer component. That one is an
+# independently recorded receipt with its own UTR. This one is one half of a
+# partition of a visible total, so publishing it IS publishing the other
+# half: final_total - bank_due - total_paid = other_due. Same shape as the
+# initial_balance/current_balance pair in mask_cashbook — both halves have
+# to go, or neither is hidden.
+#
+# `payments` is emptied rather than amount-masked, for the reason mask_pnl
+# drops recent_entries wholesale: an itemised list a viewer can merely COUNT
+# tells them whether anything has been paid at all, and knowing total_paid
+# is 0 collapses the equation above to a single subtraction. An empty list
+# leaves them unable to tell "nothing paid yet" from "partly paid".
+#
+# What stays: actual_amount, tax_rate, tax_amount, final_total — the cost of
+# the order, the same line mask_pnl draws when it keeps contract_value — plus
+# the production status and every non-monetary field, so the screen stays
+# usable under the mask instead of collapsing to blanks.
+#
+# Masked fields are None, not 0 — a zero renders as a real figure and reads
+# as "nothing outstanding", which is worse than an obvious redaction.
+MANUFACTURER_ORDER_MASKED_FIELDS = ("bank_due", "other_due", "total_paid", "total_balance_due")
+
+
+def mask_manufacturer_order(doc: dict) -> dict:
+    """Redact the direct-settlement leg of one order. Returns a new dict —
+    make_crud's list hands out shared references, so this must never mutate
+    in place."""
+    return {**doc, **{f: None for f in MANUFACTURER_ORDER_MASKED_FIELDS}, "payments": []}
+
+
 # ------- Invoice -------
 class InvoiceBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

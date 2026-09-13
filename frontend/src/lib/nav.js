@@ -6,7 +6,7 @@ import {
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, ClipboardList, Wand2, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
-  LayoutTemplate, Landmark, ShoppingCart,
+  LayoutTemplate, Landmark, ShoppingCart, Factory,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
@@ -35,6 +35,7 @@ export const NAV = [
   { app: "stock", id: "inventory", to: "/inventory", label: "Stock", icon: Package },
   { app: "stock", id: "stock-ledger", to: "/stock-ledger", label: "Stock Ledger", icon: Layers },
   { app: "stock", id: "purchase-orders", to: "/purchase-orders", label: "Purchase Orders", icon: ShoppingCart },
+  { app: "stock", id: "manufacturer-orders", to: "/manufacturer-orders", label: "Manufacturer Orders", icon: Factory },
   { app: "stock", id: "inv-analytics", to: "/inventory/analytics", label: "Inv. Analytics", icon: BarChart3 },
 
   // Money

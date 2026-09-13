@@ -22,7 +22,8 @@ from pydantic import ValidationError
 
 import lifecycle as lc
 import tenancy
-from models import LeadCreate, CustomerCreate, new_id, now_iso, PO_COMMITTED_STATUSES
+from models import (LeadCreate, CustomerCreate, new_id, now_iso,
+                    PO_COMMITTED_STATUSES, MO_COMMITTED_STATUSES)
 
 logger = logging.getLogger("madio")
 
@@ -206,6 +207,11 @@ async def compute_project_pnl(db, user: dict) -> dict:
     # yet money the business owes anyone.
     pos = await db.purchase_orders.find(
         tenancy.scope({"project_id": {"$ne": ""}}, "purchase_orders", user), {"_id": 0}).to_list(20000)
+    # Work placed with a manufacturer against a project is the same kind of
+    # committed cost as a PO, so it lands in the same material_cost line
+    # rather than a parallel one.
+    mos = await db.manufacturer_orders.find(
+        tenancy.scope({"project_id": {"$ne": ""}}, "manufacturer_orders", user), {"_id": 0}).to_list(20000)
 
     books_by_project: dict[str, list[dict]] = {}
     for b in books:
@@ -225,6 +231,19 @@ async def compute_project_pnl(db, user: dict) -> dict:
         pid = po.get("project_id") or ""
         material_by_project[pid] = round(
             material_by_project.get(pid, 0.0) + (po.get("grand_total") or 0), 2)
+    # Tax-INCLUSIVE (`final_total`, not `actual_amount`), deliberately, and
+    # for one reason: the PO line directly above already books grand_total,
+    # which is tax-inclusive. Two cost lines summed into one `material_cost`
+    # column have to mean the same thing, and a column that is net of GST for
+    # half its rows and gross for the other half is a wrong number, not a
+    # conservative one. (If input GST ever becomes separately creditable in
+    # this codebase, both lines move to net together — not just this one.)
+    for mo in mos:
+        if mo.get("status") not in MO_COMMITTED_STATUSES:
+            continue
+        pid = mo.get("project_id") or ""
+        material_by_project[pid] = round(
+            material_by_project.get(pid, 0.0) + (mo.get("final_total") or 0), 2)
 
     book_ids = [b["id"] for b in books if b.get("project_id")]
     entries = []
@@ -245,7 +264,13 @@ async def compute_project_pnl(db, user: dict) -> dict:
         pid = p["id"]
         pbooks = books_by_project.get(pid, [])
         pentries = [e for b in pbooks for e in entries_by_book.get(b["id"], [])]
-        pouts = [e for e in pentries if e.get("type") == "CASH_OUT"]
+        # A manufacturer disbursement paid out of a site wallet debits that
+        # wallet for real (the money left, so float_balance below must move),
+        # but it is NOT a second cost: the order it settles is already in
+        # material_cost. Counting the ledger line too would charge the same
+        # rupee to the project twice and understate margin by the amount paid.
+        pouts = [e for e in pentries
+                 if e.get("type") == "CASH_OUT" and not e.get("manufacturer_order_id")]
         approved = sum(e["amount"] for e in pouts if e.get("status") == "Approved")
         pending = sum(e["amount"] for e in pouts if e.get("status") == "Pending")
         float_balance = sum(b.get("current_balance", 0) for b in pbooks)

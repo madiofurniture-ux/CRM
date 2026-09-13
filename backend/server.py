@@ -46,6 +46,8 @@ from models import (
     TaskCreate, Task,
     InvoiceCreate, Invoice,
     PurchaseOrderCreate, PurchaseOrder, PO_COMMITTED_STATUSES,
+    ManufacturerOrderCreate, ManufacturerOrder, ManufacturerPayment,
+    manufacturer_order_totals, mask_manufacturer_order,
     MeetCreate, Meet,
     PettyCashCreate, PettyCash,
     CashbookCreate, Cashbook, CashbookEntryCreate, CashbookEntry,
@@ -605,7 +607,8 @@ def _merge_visibility(query: dict, fragment: dict) -> dict:
 
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
               after_write=None, module: str = None, owner_field: str = None, on_create=None,
-              normalize=None, redact=None, mask=None, personal: bool = False):
+              normalize=None, redact=None, mask=None, personal: bool = False,
+              list_filters: tuple = ()):
     """`after_write`, when given, runs after a successful create/update with the
     saved document and the acting user — for side effects that must stay in
     lockstep with this collection's own writes (e.g. leads syncing a
@@ -652,10 +655,24 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     `personal` — restrict this collection to records the caller created or is
     assigned (admins exempt), regardless of role_id. See
     PERSONAL_VISIBILITY_FIELDS above for why the role scope isn't enough.
+
+    `list_filters` — field names this collection's list route accepts as
+    exact-match query params (e.g. ("division", "status", "project_id")).
+    Opt-in and allow-listed, so a caller can never turn an arbitrary field —
+    or a Mongo operator document — into a query filter. Applied on top of
+    the tenant/FY/role scope above, never instead of it.
     """
     @router.get(f"/{base}")
-    async def _list(mask_other: bool = True, user: dict = Depends(get_current_user)):
+    async def _list(request: Request = None, mask_other: bool = True,
+                    user: dict = Depends(get_current_user)):
         q = await fy_query(collection, user=user)
+        # Optional so the closure stays directly callable with keyword args —
+        # a good many tests exercise these routes as plain functions, and
+        # FastAPI injects the real Request over the default in a live call.
+        for field in (list_filters if request is not None else ()):
+            value = request.query_params.get(field)
+            if value:
+                q[field] = value
         if module:
             roles = await _require_permission(module, "view", user)
             owners = await _scope_owners(user, roles, module)
@@ -775,7 +792,7 @@ ALL_MODULE_IDS = [
     "outstanding", "data-centre", "financial-year", "workflows", "business",
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
-    "finance-payments", "purchase-orders", "master-data",
+    "finance-payments", "purchase-orders", "master-data", "manufacturer-orders",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -1389,6 +1406,17 @@ def redact_vendor_field(item: dict, user: dict) -> dict:
     return item
 
 
+def redact_manufacturer_name(item: dict, user: dict) -> dict:
+    """Manufacturer order responses. A manufacturer IS a vendors row, so the
+    same admin/accountant boundary as redact_vendor/redact_vendor_field
+    applies to it — vendor_code always shown, the resolved name not."""
+    if _can_see_vendor_names(user):
+        return item
+    item = dict(item)
+    item.pop("vendor_name", None)
+    return item
+
+
 # ---------- Inventory: landing/cost price visible to admin/accountant only ----------
 # Same role pair as vendor names above, and for the same reason: both are
 # purchase-side commercial terms. Cost is the stronger boundary of the two —
@@ -1961,6 +1989,169 @@ async def purchase_order_pdf(po_id: str, user: dict = Depends(get_current_user))
         content=_render_po_pdf(po, tenant), media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{po.get("po_no", po_id)}.pdf"'},
     )
+
+
+# ---------- Manufacturer Orders ----------
+async def normalize_manufacturer_order(doc: dict, existing: dict | None, user: dict) -> None:
+    """Manufacturer identity, the order code, every tax figure and the whole
+    settlement ledger are derived or defended server-side.
+
+    A manufacturer order authorises payments out of the business, so the same
+    rule as normalize_purchase_order applies to the money: nothing the client
+    sends about totals or balances is believed. `payments`/`total_paid` are
+    stripped outright — they are only ever written by
+    record_manufacturer_payment, so accepting them on a PUT would let a
+    caller mark an order settled without a single rupee moving.
+    """
+    vid = doc.get("vendor_id", (existing or {}).get("vendor_id", ""))
+    if vid:
+        vendor = await db.vendors.find_one(tenancy.scope({"id": vid}, "vendors", user), {"_id": 0})
+        if not vendor:
+            raise HTTPException(status_code=400, detail="Selected manufacturer not found")
+        doc["vendor_name"] = vendor.get("name", "")
+        doc["vendor_code"] = vendor.get("code", "")
+
+    if doc.get("project_id"):
+        project = await db.projects.find_one(
+            tenancy.scope({"id": doc["project_id"]}, "projects", user), {"_id": 0, "id": 1})
+        if not project:
+            raise HTTPException(status_code=400, detail="Linked project not found")
+
+    if doc.get("po_id"):
+        po = await db.purchase_orders.find_one(
+            tenancy.scope({"id": doc["po_id"]}, "purchase_orders", user), {"_id": 0, "id": 1})
+        if not po:
+            raise HTTPException(status_code=400, detail="Linked purchase order not found")
+
+    if existing is None:
+        if not doc.get("date"):
+            doc["date"] = lc.today_iso()
+        if not doc.get("by_user"):
+            doc["by_user"] = user.get("name", "")
+        # Assigned here, not client-side: two people raising an order at once
+        # must never be handed the same code. Same reason as PO numbering.
+        current = await db.manufacturer_orders.find(
+            tenancy.scope({}, "manufacturer_orders", user), {"order_code": 1, "_id": 0}).to_list(5000)
+        doc["order_code"] = lc.next_manufacturer_order_no(current)
+    else:
+        doc.pop("order_code", None)  # immutable once raised
+
+    # The payment ledger is server-owned on every path through here: seeded
+    # empty on create, and left strictly alone on update so an edit can never
+    # rewrite (or invent) a settlement history.
+    doc.pop("total_paid", None)
+    if existing is None:
+        doc["payments"] = []
+    else:
+        doc.pop("payments", None)
+
+    merged = {**(existing or {}), **doc}
+    doc.update(manufacturer_order_totals(merged))
+
+    # The split is the caller's call (how much of this order is settled by
+    # bank transfer vs directly), but the arithmetic over it is not. An
+    # order with no split stated at all defaults to fully bank-settled —
+    # the official leg — rather than silently landing in the Other bucket.
+    paid = lc.money(merged.get("total_paid"))
+    bank_due = max(0.0, round(lc.money(merged.get("bank_due")), 2))
+    other_due = max(0.0, round(lc.money(merged.get("other_due")), 2))
+    if bank_due == 0 and other_due == 0 and paid == 0:
+        bank_due = doc["final_total"]
+    doc["bank_due"] = bank_due
+    doc["other_due"] = other_due
+    doc["total_paid"] = round(paid, 2)
+    doc["total_balance_due"] = round(bank_due + other_due, 2)
+
+
+# Gated on the existing "inventory" role module rather than a new one, for
+# exactly the reason the PO engine above is: role permissions are opt-in, so
+# a brand-new module id would 403 every role-governed account until an admin
+# edited every role. Placing work with a manufacturer is the buy side of
+# stock, same as procurement.
+make_crud(api, "manufacturer-orders", "manufacturer_orders",
+          ManufacturerOrderCreate, ManufacturerOrder,
+          module="inventory", owner_field="by_user",
+          normalize=normalize_manufacturer_order,
+          redact=redact_manufacturer_name,
+          mask=mask_manufacturer_order,
+          list_filters=("division", "status", "project_id"))
+
+
+@api.post("/manufacturer-orders/{order_id}/payments")
+async def record_manufacturer_payment(order_id: str, payload: ManufacturerPayment,
+                                      mask_other: bool = True,
+                                      user: dict = Depends(get_current_user)):
+    """Log one disbursement against an order and re-derive its balances.
+
+    The client sends only what it knows first-hand — which leg, how much,
+    the reference, optionally which wallet the money left. Every resulting
+    balance is recomputed here from the stored order: a client-sent
+    `total_balance_due` is exactly the number an attacker would want to
+    choose, and the same "never trust a posted total" rule that governs
+    po_totals and invoice_totals governs it.
+    """
+    await _require_permission("inventory", "edit", user)
+    owned = tenancy.scope({"id": order_id}, "manufacturer_orders", user)
+    order = await db.manufacturer_orders.find_one(owned, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Manufacturer order not found")
+
+    amount = round(lc.money(payload.amount), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+
+    bucket = "bank_due" if payload.mode == "BANK_TRANSFER" else "other_due"
+    due = round(lc.money(order.get(bucket)), 2)
+    if amount > due:
+        # Refused rather than clamped: silently absorbing the excess would
+        # leave the order's books disagreeing with the money that moved.
+        leg = "bank transfer" if bucket == "bank_due" else "direct settlement"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Payment exceeds the outstanding {leg} due on this order")
+
+    entry = payload.model_dump()
+    entry.update(id=new_id(), amount=amount, created_at=now_iso(),
+                 date=entry.get("date") or lc.today_iso(),
+                 by_user=entry.get("by_user") or user.get("name", ""))
+
+    remaining = round(due - amount, 2)
+    other_bucket = "other_due" if bucket == "bank_due" else "bank_due"
+    updates = {
+        bucket: remaining,
+        "total_paid": round(lc.money(order.get("total_paid")) + amount, 2),
+        "total_balance_due": round(remaining + lc.money(order.get(other_bucket)), 2),
+    }
+    await db.manufacturer_orders.update_one(
+        owned, {"$set": updates, "$push": {"payments": entry}})
+
+    # Paying a manufacturer out of a site wallet really does take the money
+    # out of that wallet, so the ledger has to move with it. Mirrors the
+    # CASH_IN credit create_split_payment writes, in the other direction,
+    # and reuses cashbook_entry_approve's already-approved shape because the
+    # disbursement has already happened by the time it is being recorded.
+    if payload.wallet_id:
+        book_owned = tenancy.scope({"id": payload.wallet_id}, "cashbooks", user)
+        book = await db.cashbooks.find_one(book_owned, {"_id": 0})
+        if book and book.get("status") == "ACTIVE":
+            ledger = {
+                "id": new_id(), "cashbook_id": payload.wallet_id, "type": "CASH_OUT",
+                "status": "Approved", "amount": amount, "category": "Manufacturing",
+                "created_at": now_iso(), "entry_person": user.get("name", ""),
+                "remark": f"Manufacturer order {order.get('order_code', '')}",
+                # Tags this debit as already counted as manufacturing cost, so
+                # project P&L does not charge the same rupee twice — see
+                # compute_project_pnl.
+                "manufacturer_order_id": order_id,
+            }
+            tenancy.stamp(ledger, "cashbook_entries", user)
+            await db.cashbook_entries.insert_one(dict(ledger))
+            await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": -amount}})
+
+    out = await db.manufacturer_orders.find_one(owned, {"_id": 0})
+    if mask_other:
+        out = mask_manufacturer_order(out)
+    return redact_manufacturer_name(out, user)
 
 
 async def normalize_invoice(doc: dict, existing: dict | None, user: dict) -> None:
