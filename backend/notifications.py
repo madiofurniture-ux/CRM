@@ -13,6 +13,10 @@ notification SENDER.
 """
 from __future__ import annotations
 
+import os
+
+import requests
+
 import models as m
 import tenancy
 
@@ -51,7 +55,22 @@ def _render(event: str, **fmt) -> str:
 
 
 def _send_whatsapp(to: str, message: str) -> tuple[str, str]:
-    return ("Sent", "")
+    token = os.environ.get("WHATSAPP_TOKEN")
+    phone_id = os.environ.get("WHATSAPP_PHONE_ID")
+    if not token or not phone_id:
+        return ("Sent", "")  # unconfigured tenant: identical stub behavior
+    try:
+        resp = requests.post(
+            f"https://graph.facebook.com/v20.0/{phone_id}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": message}},
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            return ("Failed", resp.text[:300])
+        return ("Sent", "")
+    except Exception as e:
+        return ("Failed", str(e))
 
 
 def _send_sms(to: str, message: str) -> tuple[str, str]:

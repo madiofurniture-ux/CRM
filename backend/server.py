@@ -5202,6 +5202,9 @@ async def journey(phone: str, user: dict = Depends(get_current_user)):
         projects=await db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000),
         customers=await db.customers.find(tenancy.scope({}, "customers", user), {"_id": 0}).to_list(5000),
     )
+    out["whatsapp_messages"] = await db.whatsapp_messages.find(
+        tenancy.scope({"phone": phone}, "whatsapp_messages", user), {"_id": 0}
+    ).sort("created_at", 1).to_list(500)
     return out
 
 
@@ -5476,6 +5479,41 @@ async def reply_to_discussion(post_id: str, data: DiscussionCreate, user: dict =
     await db.discussions.insert_one(dict(doc))
     doc.pop("_id", None)
     return doc
+
+
+# ------- WhatsApp Cloud API webhook (Phase 4, credential-gated) -------
+# ponytail: single-tenant only — a phone_number_id -> tenant_id lookup table
+# is the upgrade path once more than one tenant's WhatsApp number is live.
+# Meta calls this unauthenticated, so there's no `user` to tenancy.stamp()
+# through; WHATSAPP_TENANT_ID names the one tenant this deployment serves.
+WHATSAPP_VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+WHATSAPP_WEBHOOK_TENANT_ID = os.environ.get("WHATSAPP_TENANT_ID", "")
+
+
+@api.get("/webhooks/whatsapp")
+async def whatsapp_webhook_verify(request: Request):
+    """Meta's one-time webhook verification handshake."""
+    params = request.query_params
+    if WHATSAPP_VERIFY_TOKEN and params.get("hub.verify_token") == WHATSAPP_VERIFY_TOKEN:
+        return Response(content=params.get("hub.challenge", ""), media_type="text/plain")
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@api.post("/webhooks/whatsapp")
+async def whatsapp_webhook_receive(request: Request):
+    """Stores inbound WhatsApp messages, surfaced in GET /api/journey/{phone}."""
+    body = await request.json()
+    for entry in body.get("entry", []):
+        for change in entry.get("changes", []):
+            for msg in change.get("value", {}).get("messages", []):
+                doc = {
+                    "id": new_id(), "tenant_id": WHATSAPP_WEBHOOK_TENANT_ID,
+                    "phone": msg.get("from", ""), "direction": "inbound",
+                    "text": msg.get("text", {}).get("body", ""),
+                    "wa_message_id": msg.get("id", ""), "created_at": now_iso(),
+                }
+                await db.whatsapp_messages.insert_one(dict(doc))
+    return {"ok": True}
 
 
 app.include_router(api)
