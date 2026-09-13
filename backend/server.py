@@ -65,7 +65,7 @@ from models import (
     normalize_remarks_history,
     ProjectDailyLogCreate,
     TenantBusinessProfile, TenantBusinessProfileUpdate,
-    Document,
+    Document, DiscussionCreate, Discussion,
 )
 from seed import seed_all
 
@@ -5427,6 +5427,55 @@ async def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
     await db.documents.delete_one(owned)
     storage.delete(existing["file_url"])
     return {"ok": True}
+
+
+# ------- Discussion forum (Team Board) -------
+DEFAULT_DISCUSSION_CHANNEL = "General"
+
+
+@api.get("/discussions/channels")
+async def list_discussion_channels(user: dict = Depends(get_current_user)):
+    await _require_permission("discussions", "view", user)
+    q = tenancy.scope({}, "discussions", user)
+    channels = await db.discussions.distinct("channel", q)
+    if not channels:
+        channels = [DEFAULT_DISCUSSION_CHANNEL]
+    return sorted(channels)
+
+
+@api.get("/discussions")
+async def list_discussions(channel: str = DEFAULT_DISCUSSION_CHANNEL, user: dict = Depends(get_current_user)):
+    await _require_permission("discussions", "view", user)
+    q = tenancy.scope({"channel": channel}, "discussions", user)
+    return await db.discussions.find(q, {"_id": 0}).sort("created_at", 1).to_list(1000)
+
+
+@api.post("/discussions")
+async def create_discussion(data: DiscussionCreate, user: dict = Depends(get_current_user)):
+    await _require_permission("discussions", "create", user)
+    doc = data.dict()
+    doc.update(id=new_id(), author_id=user.get("id", ""), author_name=user.get("name", ""),
+                parent_id="", created_at=now_iso())
+    tenancy.stamp(doc, "discussions", user)
+    await db.discussions.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.post("/discussions/{post_id}/reply")
+async def reply_to_discussion(post_id: str, data: DiscussionCreate, user: dict = Depends(get_current_user)):
+    await _require_permission("discussions", "create", user)
+    owned = tenancy.scope({"id": post_id}, "discussions", user)
+    parent = await db.discussions.find_one(owned)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Not found")
+    doc = data.dict()
+    doc.update(id=new_id(), channel=parent["channel"], author_id=user.get("id", ""),
+                author_name=user.get("name", ""), parent_id=post_id, created_at=now_iso())
+    tenancy.stamp(doc, "discussions", user)
+    await db.discussions.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
 
 
 app.include_router(api)

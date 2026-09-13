@@ -990,6 +990,25 @@ class Document(BaseModel):
     caption: Optional[str] = ""
 
 
+# General Team Board — not tied to one record, unlike the per-record `log`
+# arrays on Lead/Quote/Project. `parent_id` makes a post a reply in a thread;
+# top-level posts have parent_id == "".
+class DiscussionCreate(BaseModel):
+    channel: str
+    text: str
+    mentions: Optional[List[str]] = []
+    attachments: Optional[List[str]] = []  # Document ids
+
+
+class Discussion(DiscussionCreate):
+    id: str
+    tenant_id: str = ""
+    author_id: str
+    author_name: str
+    parent_id: str = ""
+    created_at: str
+
+
 # ------- Agent tasks (a generic, durable background-job queue — "agent"
 # names the shape borrowed from a reference CRM's task worker, not an AI
 # capability; no LLM is involved anywhere here) -------
