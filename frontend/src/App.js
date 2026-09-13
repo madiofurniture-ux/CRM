@@ -44,6 +44,7 @@ const Meets = lazy(() => import("@/pages/Meets"));
 const Reports = lazy(() => import("@/pages/Reports"));
 const ExecutiveDashboard = lazy(() => import("@/pages/ExecutiveDashboard"));
 const Alerts = lazy(() => import("@/pages/Alerts"));
+const Discussions = lazy(() => import("@/pages/Discussions"));
 const DWSurvey = lazy(() => import("@/pages/DWSurvey"));
 const QuoteWorkspace = lazy(() => import("@/pages/QuoteWorkspace"));
 const QuoteBuilder = lazy(() => import("@/pages/QuoteBuilder"));
@@ -128,6 +129,7 @@ function App() {
           <Route path="/reports" element={<ProtectedRoute page="reports"><Layout><Reports /></Layout></ProtectedRoute>} />
           <Route path="/executive" element={<ProtectedRoute page="executive"><Layout><ExecutiveDashboard /></Layout></ProtectedRoute>} />
           <Route path="/alerts" element={<ProtectedRoute page="alerts"><Layout><Alerts /></Layout></ProtectedRoute>} />
+          <Route path="/discussions" element={<ProtectedRoute page="discussions"><Layout><Discussions /></Layout></ProtectedRoute>} />
           <Route path="/dw-survey" element={<ProtectedRoute page="dwsurvey"><Layout><DWSurvey /></Layout></ProtectedRoute>} />
           <Route path="/quotes/ws/:id" element={<ProtectedRoute page="quotes"><Layout><QuoteWorkspace /></Layout></ProtectedRoute>} />
           <Route path="/quotes/builder" element={<ProtectedRoute page="quote-builder"><Layout><QuoteBuilder /></Layout></ProtectedRoute>} />

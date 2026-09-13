@@ -6,7 +6,7 @@ import {
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, ClipboardList, Wand2, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
-  LayoutTemplate, Landmark, ShoppingCart, Factory,
+  LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
@@ -58,6 +58,7 @@ export const NAV = [
   { app: "command", id: "daily-planner", to: "/daily-planner", label: "Daily Planner", icon: CalendarCheck2 },
   { app: "command", id: "attendance", to: "/attendance", label: "Attendance", icon: Fingerprint },
   { app: "command", id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database },
+  { app: "command", id: "discussions", to: "/discussions", label: "Team Board", icon: MessageSquare },
   { app: "command", id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
 ];
 
