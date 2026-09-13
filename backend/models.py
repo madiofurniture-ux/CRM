@@ -971,12 +971,23 @@ class CashbookExpense(BaseModel):
     entry_person: Optional[str] = ""
     custodian_upi_id: Optional[str] = ""  # payee VPA, captured at expense-logging time if known
 
-    @field_validator("amount")
-    @classmethod
-    def _positive_amount(cls, v):
-        if v <= 0:
-            raise ValueError("amount must be greater than zero")
-        return v
+
+# Attachments/photos on a lead/quote/project/architect/sale. Created via a
+# multipart upload route (not a plain create_model like other collections),
+# so there's no *Create variant here — server.py builds the doc dict itself
+# from the parsed UploadFile.
+class Document(BaseModel):
+    id: str
+    tenant_id: str = ""
+    entity_type: str
+    entity_id: str
+    file_name: str
+    file_url: str
+    content_type: str
+    size_bytes: int
+    uploaded_by: str
+    uploaded_at: str
+    caption: Optional[str] = ""
 
 
 # ------- Agent tasks (a generic, durable background-job queue — "agent"

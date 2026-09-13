@@ -16,6 +16,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError as PydanticValidationError
 from pymongo.errors import DuplicateKeyError
 from starlette.middleware.cors import CORSMiddleware
@@ -30,6 +31,7 @@ import notifications as notif
 import agent_tasks
 import csv_engine
 import quotation_templates
+import storage
 import tally
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
@@ -63,6 +65,7 @@ from models import (
     normalize_remarks_history,
     ProjectDailyLogCreate,
     TenantBusinessProfile, TenantBusinessProfileUpdate,
+    Document,
 )
 from seed import seed_all
 
@@ -5107,11 +5110,12 @@ def _csv_entity(entity: str) -> str:
     return entity
 
 
-async def _read_capped(file: UploadFile) -> bytes:
-    """Reads at most MAX_IMPORT_BYTES+1 — enforces the cap during the read
-    itself rather than buffering an unbounded upload before checking it."""
-    raw = await file.read(csv_engine.MAX_IMPORT_BYTES + 1)
-    if len(raw) > csv_engine.MAX_IMPORT_BYTES:
+async def _read_capped(file: UploadFile, max_bytes: int = None) -> bytes:
+    """Reads at most max_bytes+1 — enforces the cap during the read itself
+    rather than buffering an unbounded upload before checking it."""
+    cap = max_bytes if max_bytes is not None else csv_engine.MAX_IMPORT_BYTES
+    raw = await file.read(cap + 1)
+    if len(raw) > cap:
         raise HTTPException(status_code=400, detail="File too large")
     return raw
 
@@ -5344,7 +5348,72 @@ async def survey_to_quote(survey_id: str, user: dict = Depends(get_current_user)
         tenancy.scope({"id": survey_id}, "dw_surveys", user), {"$set": {"status": "Quoted"}})
     return quote
 
+
+# ------- Attachments & photos (Documents) -------
+MAX_DOCUMENT_BYTES = 20 * 1024 * 1024  # 20MB
+
+# Which collection a document's entity_id must actually exist in, so an
+# attachment can never be pinned to another tenant's record or one that
+# doesn't exist.
+DOCUMENT_ENTITY_COLLECTION = {
+    "lead": "leads", "quote": "quotes", "project": "projects",
+    "architect": "architects", "sale": "sales",
+}
+
+
+@api.post("/documents")
+async def upload_document(entity_type: str = Form(...), entity_id: str = Form(...),
+                           caption: str = Form(""), file: UploadFile = File(...),
+                           user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "create", user)
+    collection = DOCUMENT_ENTITY_COLLECTION.get(entity_type)
+    if not collection:
+        raise HTTPException(status_code=400, detail="Unknown entity_type")
+    owned = tenancy.scope({"id": entity_id}, collection, user)
+    if not await db[collection].find_one(owned, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="Not found")
+    raw = await _read_capped(file, MAX_DOCUMENT_BYTES)
+    tenant_id = tenancy.tenant_of(user) or "__no_tenant__"
+    filename = storage.safe_filename(file.filename or "file", new_id())
+    file_url = storage.save(tenant_id, entity_type, filename, raw)
+    doc = {
+        "id": new_id(), "entity_type": entity_type, "entity_id": entity_id,
+        "file_name": file.filename or filename, "file_url": file_url,
+        "content_type": file.content_type or "application/octet-stream",
+        "size_bytes": len(raw), "uploaded_by": user.get("name", ""),
+        "uploaded_at": now_iso(), "caption": caption,
+    }
+    tenancy.stamp(doc, "documents", user)
+    await db.documents.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/documents")
+async def list_documents(entity_type: str, entity_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "view", user)
+    q = tenancy.scope({"entity_type": entity_type, "entity_id": entity_id}, "documents", user)
+    return await db.documents.find(q, {"_id": 0}).sort("uploaded_at", -1).to_list(500)
+
+
+@api.delete("/documents/{doc_id}")
+async def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "delete", user)
+    owned = tenancy.scope({"id": doc_id}, "documents", user)
+    existing = await db.documents.find_one(owned)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.documents.delete_one(owned)
+    storage.delete(existing["file_url"])
+    return {"ok": True}
+
+
 app.include_router(api)
+
+# Local-disk uploads served back out at the same /uploads/... path storage.py
+# returns as file_url. check_dir=False: the directory may not exist yet on a
+# fresh checkout (nothing has been uploaded), which must not crash startup.
+app.mount("/uploads", StaticFiles(directory=str(storage.UPLOAD_ROOT), check_dir=False), name="uploads")
 
 # CORS
 # Auth here is a Bearer token in the Authorization header, NOT a cookie, so we do
