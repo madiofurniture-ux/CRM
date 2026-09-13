@@ -7,6 +7,7 @@ import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers } from "lucide-react";
 import { useTenantConfig } from "@/context/TenantConfigContext";
+import WhatsAppButton from "@/components/WhatsAppButton";
 
 const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 
@@ -223,6 +224,9 @@ export default function Quotes() {
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-bold text-[var(--ink)]">{inrFull(r.value)}</td>
                     <td className="px-4 py-3 text-right space-x-1">
+                      <WhatsAppButton phone={r.phone} context="quote-shared" customerName={r.customer}
+                                      ref={r.quote_no} refType="quote" refId={r.id}
+                                      className="p-1.5 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)] inline-block" />
                       <button onClick={() => openEdit(r)} className="p-1.5 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Edit">
                         <Edit2 size={15} />
                       </button>

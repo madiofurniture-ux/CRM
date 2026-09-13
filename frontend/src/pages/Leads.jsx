@@ -22,12 +22,8 @@ import api, { formatApiError } from "@/lib/api";
 import { fmtDate, inrFull } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
-import { Phone, Calendar, X, Trash2, Pencil, MessageSquare, MessageCircle, Sparkles, Download, Upload } from "lucide-react";
-
-const waLink = (phone, text = "") => {
-  const ph = String(phone || "").replace(/\D/g, "").slice(-10);
-  return ph ? `https://wa.me/91${ph}?text=${encodeURIComponent(text)}` : null;
-};
+import { Phone, Calendar, X, Trash2, Pencil, MessageSquare, Sparkles, Download, Upload } from "lucide-react";
+import WhatsAppButton from "@/components/WhatsAppButton";
 
 const STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
@@ -312,9 +308,8 @@ export default function Leads() {
                         {l.phone && (
                           <a href={`tel:${l.phone}`} title="Call" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-call-${l.id}`}><Phone size={13} /></a>
                         )}
-                        {waLink(l.phone) && (
-                          <a href={waLink(l.phone)} target="_blank" rel="noreferrer" title="WhatsApp" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-wa-${l.id}`}><MessageCircle size={13} /></a>
-                        )}
+                        <WhatsAppButton phone={l.phone} context="follow-up" customerName={l.name}
+                                        refType="lead" refId={l.id} testId={`lead-wa-${l.id}`} />
                         <button onClick={() => openEdit(l)} className="p-1.5 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Edit lead" data-testid={`lead-edit-${l.id}`}><Pencil size={13} /></button>
                         <button onClick={() => setLogLead(l)} title="Follow-up timeline" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-log-${l.id}`}><MessageSquare size={13} /></button>
                         <button onClick={() => remove(l.id)} title="Delete" className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>

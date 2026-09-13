@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
-import { X, MessageCircle, Phone, Trash2, UserPlus } from "lucide-react";
+import { X, Phone, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import StageProgressBar from "@/components/StageProgressBar";
-import { useAuth } from "@/context/AuthContext";
+import WhatsAppButton from "@/components/WhatsAppButton";
 
 /**
  * Customer-360 slide-over. Give it a phone number and it pulls the whole journey
@@ -65,13 +65,10 @@ export default function JourneyDrawer({ phone, name, onClose }) {
     catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
 
-  const { tenant } = useAuth();
   if (!phone) return null;
 
   const t = data?.totals || {};
-  const first = String(name || data?.name || "").split(" ")[0];
-  const brand = tenant?.short_name || "CRM";
-  const waHref = `https://wa.me/91${String(phone).replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(`Hi ${first}, this is ${brand}. `)}`;
+  const displayName = name || data?.name || "";
 
   return (
     <div className="fixed inset-0 z-[60] flex justify-end" data-testid="journey-drawer">
@@ -102,7 +99,8 @@ export default function JourneyDrawer({ phone, name, onClose }) {
           )}
 
           <div className="flex gap-2">
-            <a href={waHref} target="_blank" rel="noreferrer" className="btn-ghost flex-1 justify-center"><MessageCircle size={14} /> WhatsApp</a>
+            <WhatsAppButton phone={phone} context="follow-up" customerName={displayName} label="WhatsApp"
+                            className="btn-ghost flex-1 justify-center flex items-center gap-1.5" />
             <a href={`tel:${phone}`} className="btn-ghost flex-1 justify-center"><Phone size={14} /> Call</a>
           </div>
 
