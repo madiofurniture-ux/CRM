@@ -154,3 +154,37 @@ SSL is issued automatically once DNS propagates.
 
 - **Backend change:** `git push` → Render rebuilds automatically.
 - **Frontend change:** re-run the Step 3 script, drag `build` to Netlify again.
+
+---
+
+## Addendum — overnight build 2026-09-13/14 (branch `overnight/gap-fill-20260913`)
+
+Attachments, WhatsApp click-to-chat, and the Team Board (Phases 1-3) need
+**no new env vars** — they work today with the defaults below. Phase 4 (real
+WhatsApp sends) is fully coded and tested against a mocked token, but stays
+off until a human sets these:
+
+| Variable | Required for | Notes |
+|---|---|---|
+| `STORAGE_BACKEND` | Attachments | Optional. `local` (default, works today) or `s3`. Leave unset. |
+| `AWS_S3_BUCKET` / other `AWS_*` | Attachments, only if `STORAGE_BACKEND=s3` | Not needed tonight — local disk under `backend/uploads/` works out of the box. |
+| `WHATSAPP_TOKEN` | Phase 4 real send | Meta Cloud API permanent/system-user token. Without it, `_send_whatsapp` keeps today's log-only stub — nothing breaks if this stays unset. |
+| `WHATSAPP_PHONE_ID` | Phase 4 real send | The Meta phone_number_id tied to the token above. Both this and `WHATSAPP_TOKEN` must be set together — one without the other still uses the stub. |
+| `WHATSAPP_VERIFY_TOKEN` | Phase 4 inbound webhook | Any string you choose; enter the same value in Meta's App Dashboard webhook setup so `GET /api/webhooks/whatsapp` can complete the verification handshake. |
+| `WHATSAPP_TENANT_ID` | Phase 4 inbound webhook | The `tenant_id` inbound messages get stamped with. **Single-tenant only** — there is no phone_number_id-to-tenant mapping table yet; that is the upgrade path once more than one tenant goes live on WhatsApp. |
+
+To light up Phase 4 once the WhatsApp Business account exists: set all four
+`WHATSAPP_*` vars in Render's environment, then in Meta's App Dashboard point
+the webhook at `<your-render-url>/api/webhooks/whatsapp` using the same
+`WHATSAPP_VERIFY_TOKEN`.
+
+**Not attempted tonight** (see `overnight-prompt.md` for the full brief):
+general-ledger/chart-of-accounts rebuild, reorder-point automated purchasing,
+Gantt/timeline views, e-signature, SSO/2FA. WhatsApp click-to-chat was not
+added to Sales.jsx — the `Sale` model has no `phone` field; adding one is a
+small, separate follow-up rather than something to force in under time
+pressure.
+
+Full pytest run: **543 passed**, 0 failed (`cd backend && python -m pytest -q`).
+Frontend build verified clean (`cd frontend && npm run build`) after each
+phase's page-wiring commit.

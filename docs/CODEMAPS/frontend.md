@@ -39,6 +39,7 @@ wrapped in `<ProtectedRoute page="..."><Layout>...</Layout></ProtectedRoute>`.
 /data-centre         data-centre    DataCentre.jsx
 /admin/financial-year financial-year FinancialYear.jsx
 /admin/workflows     workflows      Workflows.jsx
+/discussions         discussions    Discussions.jsx  (Team Board, polls every 15s)
 ```
 `ProtectedRoute`'s `page` prop is checked against the signed-in user's role
 permissions (fetched via `/api/auth/roles` / `/api/auth/me`) before rendering.
@@ -49,6 +50,10 @@ permissions (fetched via `/api/auth/roles` / `/api/auth/me`) before rendering.
 - `ProtectedRoute.jsx` — auth + role gate.
 - `KpiCard.jsx`, `StageBadge.jsx`, `FilterChips.jsx`, `JourneyDrawer.jsx` —
   reused across Dashboard/Pipeline/Leads-style list pages.
+- `AttachmentPanel.jsx` — drag-drop attachments/photos, mounted on
+  Leads/QuoteWorkspace/Projects/Architects detail views (`/api/documents`).
+- `WhatsAppButton.jsx` — click-to-chat button (`lib/whatsapp.js`), template
+  copy fetched from the backend so it never drifts from an automated send.
 - `components/ui/` — shadcn primitives (button, dialog, table, etc.).
 
 ## State & data access

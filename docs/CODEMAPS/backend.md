@@ -13,6 +13,13 @@ layering — routes call `db[collection]` directly, scoped through `tenancy.py`.
   configurable workflow stages.
 - `backend/lifecycle.py` (715 lines) — cross-entity stage transitions / rollups.
 - `backend/seed.py` — `seed_all()` demo data.
+- `backend/storage.py` — local/S3 file storage for the `documents` collection
+  (attachments/photos), `STORAGE_BACKEND=local|s3` env switch.
+- `backend/notifications.py` — customer notification dispatcher: `EVENTS`
+  template dict is the single source of copy for both automated `notify()`
+  sends and the manual WhatsApp click-to-chat button; `_send_whatsapp` calls
+  Meta's Cloud API when `WHATSAPP_TOKEN`/`WHATSAPP_PHONE_ID` are set, else
+  stays a log-only stub.
 
 ## Generic CRUD (make_crud, server.py:368)
 One factory registers GET (list) / POST (create) / PUT (update) / DELETE per
@@ -63,10 +70,20 @@ GET/POST/DELETE /api/payments                create_payment: writes payment +
 GET/POST/DELETE /api/stock-movements  GET /stock-movements/summary
 GET  /api/data-centre/collections  GET .../export/{name}  POST .../import/{name}
 GET  /api/reports    GET /api/alerts
-GET  /api/journey/{phone}                    cross-entity timeline by phone
+GET  /api/journey/{phone}                    cross-entity timeline by phone,
+                                              now includes whatsapp_messages
 POST /api/convert/lead-to-quote/{lead_id}
 POST /api/convert/quote-to-sale/{quote_id}
 POST /api/convert/survey-to-quote/{survey_id}
+POST/GET/DELETE /api/documents               attachments/photos, backend/storage.py
+GET  /api/notifications/templates            click-to-chat template copy (single
+                                              source of truth, backend/notifications.py
+                                              EVENTS + CLICK_TO_CHAT_EVENTS)
+POST /api/notifications/whatsapp-click       logs a manual click-to-chat send
+GET/POST /api/discussions   GET /discussions/channels   POST /discussions/{id}/reply
+                                              Team Board (general, not per-record)
+GET/POST /api/webhooks/whatsapp              Meta Cloud API verify + inbound receive,
+                                              credential-gated (see DEPLOY_NOW.md)
 ```
 
 ## Auth chain

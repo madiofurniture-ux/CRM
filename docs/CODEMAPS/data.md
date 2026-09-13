@@ -28,6 +28,10 @@ payments         PaymentBase / PaymentCreate / Payment
 stock_movements  StockMovementBase / StockMovementCreate / StockMovement
 attendance       AttendanceCheckIn / AttendanceRecord
 office_settings  OfficeSettings
+documents        Document                          (attachments/photos, backend/storage.py)
+discussions      Discussion / DiscussionCreate      (Team Board, general — not per-record)
+whatsapp_messages (no model; server.py builds the doc directly from Meta's
+                  webhook payload) — inbound-only, surfaced in GET /journey/{phone}
 ```
 `tenancy.ENTITY_COLLECTION` (backend/tenancy.py) maps the subset of these that
 carry configurable pipeline stages: `lead -> leads, customer -> customers,
