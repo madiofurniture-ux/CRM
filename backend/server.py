@@ -4908,6 +4908,27 @@ async def alerts(user: dict = Depends(get_current_user)):
 
 
 # ---------- Customer journey (one timeline by phone) ----------
+@api.get("/notifications/templates")
+async def whatsapp_templates(user: dict = Depends(get_current_user)):
+    """The click-to-chat contexts and their rendered message templates, so
+    the frontend never hardcodes copy that could drift from an automated
+    notify() send using the same EVENTS entry."""
+    return {ctx: notif.EVENTS.get(event, "") for ctx, event in notif.CLICK_TO_CHAT_EVENTS.items()}
+
+
+@api.post("/notifications/whatsapp-click")
+async def log_whatsapp_click(payload: dict, user: dict = Depends(get_current_user)):
+    """Fired by the frontend after opening a wa.me link — records the click
+    into notification_logs (status "Sent (manual)") so it appears in the
+    same audit trail as an automated send."""
+    await notif.log_manual_click(
+        db, user, payload.get("context", ""), to=payload.get("to", ""),
+        customer_name=payload.get("customer_name", ""),
+        ref_type=payload.get("ref_type", ""), ref_id=payload.get("ref_id", ""),
+    )
+    return {"ok": True}
+
+
 @api.get("/notifications")
 async def list_notifications(phone: str = "", user: dict = Depends(get_current_user)):
     """The Notification Log tab on the Customer 360 drawer — every WhatsApp/

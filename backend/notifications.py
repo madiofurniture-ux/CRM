@@ -25,6 +25,18 @@ EVENTS = {
     "order_confirmed": "Hi {customer_name}, your order {ref} is confirmed. Thank you!",
     "installation_scheduled": "Hi {customer_name}, installation for {ref} is scheduled around {date}.",
     "payment_cleared": "Hi {customer_name}, payment for {ref} is fully received. Balance is now zero.",
+    "payment_reminder": "Hi {customer_name}, a friendly reminder that payment for {ref} is pending. Let us know if you have any questions.",
+    "follow_up": "Hi {customer_name}, just following up on {ref}. Let us know how we can help.",
+}
+
+# Click-to-chat contexts (manual WhatsApp button on Leads/Quotes/JourneyDrawer)
+# map to the same EVENTS templates an automated notify() would use, so the
+# copy a customer sees never drifts between the two channels.
+CLICK_TO_CHAT_EVENTS = {
+    "quote-shared": "quote_created",
+    "payment-reminder": "payment_reminder",
+    "installation-scheduled": "installation_scheduled",
+    "follow-up": "follow_up",
 }
 
 
@@ -70,6 +82,27 @@ async def notify(db, user: dict, event: str, *, to: str, customer_name: str = ""
         "id": m.new_id(), "created_at": m.now_iso(), "event": event, "channel": channel,
         "to": to, "customer_name": customer_name, "ref_type": ref_type, "ref_id": ref_id,
         "message": message, "status": status, "error": error,
+    }
+    tenancy.stamp(doc, "notification_logs", user)
+    try:
+        await db.notification_logs.insert_one(doc)
+    except Exception:
+        pass
+
+
+async def log_manual_click(db, user: dict, context: str, *, to: str, customer_name: str = "",
+                            ref_type: str = "", ref_id: str = "") -> None:
+    """Logs a click-to-chat WhatsApp button press — no transport call (the
+    browser already opened wa.me directly), status "Sent (manual)" so this
+    is distinguishable from an automated notify() send in the audit trail."""
+    if not to:
+        return
+    event = CLICK_TO_CHAT_EVENTS.get(context, context)
+    message = _render(event, customer_name=customer_name, ref=ref_id)
+    doc = {
+        "id": m.new_id(), "created_at": m.now_iso(), "event": event, "channel": "whatsapp",
+        "to": to, "customer_name": customer_name, "ref_type": ref_type, "ref_id": ref_id,
+        "message": message, "status": "Sent (manual)", "error": "",
     }
     tenancy.stamp(doc, "notification_logs", user)
     try:
