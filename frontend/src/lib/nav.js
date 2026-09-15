@@ -59,6 +59,8 @@ export const NAV = [
   { app: "command", id: "attendance", to: "/attendance", label: "Attendance", icon: Fingerprint },
   { app: "command", id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database },
   { app: "command", id: "discussions", to: "/discussions", label: "Team Board", icon: MessageSquare },
+  { app: "command", id: "record-chain", to: "/record-chain", label: "Record Chain", icon: TrendingUp },
+  { app: "command", id: "audit-trail", to: "/audit", label: "Audit Trail", icon: AlertTriangle, adminOnly: true },
   { app: "command", id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
 ];
 

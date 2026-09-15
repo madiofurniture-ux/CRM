@@ -67,6 +67,8 @@ const QuoteFollowups = lazy(() => import("@/pages/QuoteFollowups"));
 const ProjectPnL = lazy(() => import("@/pages/ProjectPnL"));
 const Incentives = lazy(() => import("@/pages/Incentives"));
 const Payments = lazy(() => import("@/pages/Payments"));
+const AuditTrail = lazy(() => import("@/pages/AuditTrail"));
+const RecordChain = lazy(() => import("@/pages/RecordChain"));
 
 function PageLoader() {
   return (
@@ -151,6 +153,8 @@ function App() {
           <Route path="/reports/project-pnl" element={<ProtectedRoute page="project-pnl"><Layout><ProjectPnL /></Layout></ProtectedRoute>} />
           <Route path="/incentives" element={<ProtectedRoute page="incentives"><Layout><Incentives /></Layout></ProtectedRoute>} />
           <Route path="/payments" element={<ProtectedRoute page="finance-payments"><Layout><Payments /></Layout></ProtectedRoute>} />
+          <Route path="/audit" element={<ProtectedRoute page="audit-trail"><Layout><AuditTrail /></Layout></ProtectedRoute>} />
+          <Route path="/record-chain" element={<ProtectedRoute page="record-chain"><Layout><RecordChain /></Layout></ProtectedRoute>} />
         </Routes>
         </Suspense>
       </BrowserRouter>

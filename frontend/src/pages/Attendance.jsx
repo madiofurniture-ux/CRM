@@ -4,6 +4,17 @@ import api from "@/lib/api";
 import { fmtDate } from "@/lib/format";
 import { MapPin, Navigation, Camera, CheckCircle2, AlertCircle, Clock, ShieldCheck, UserCheck, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import AttendanceExceptionDrawer from "@/components/AttendanceExceptionDrawer";
+
+// A row is an "exception" if the punch itself flagged it (outside geofence)
+// or it's a PAST day still missing a check-out (today's in-progress shift is
+// not an exception — mirrors the only two failure states check-in/check-out
+// actually record; see server.py's check_in/check_out).
+const isException = (r) => {
+  if (r.status === "flagged_out_of_bounds") return true;
+  const today = new Date().toISOString().slice(0, 10);
+  return !!(r.check_in_at && !r.check_out_at && r.date !== today);
+};
 
 // Placeholder only — overwritten from GET /attendance/geofence as soon as GPS
 // lands. That endpoint runs the server's own _resolve_geofence, which is what
@@ -49,6 +60,7 @@ export default function Attendance() {
   const [note, setNote] = useState("");
   const [gpsStatus, setGpsStatus] = useState("Fetching GPS...");
   const [punching, setPunching] = useState(false);
+  const [selectedRow, setSelectedRow] = useState(null);
 
   // Ask the server which fence this punch would be judged against, then
   // measure to that. The resolution rules (nearest assigned site, skip
@@ -354,7 +366,10 @@ export default function Attendance() {
               </thead>
               <tbody className="divide-y divide-[var(--border-light)]">
                 {logs.map((r) => (
-                  <tr key={r.id} className="hover:bg-[var(--surface-2)]/50 transition">
+                  <tr key={r.id}
+                    onClick={() => isException(r) && setSelectedRow(r)}
+                    className={`hover:bg-[var(--surface-2)]/50 transition ${isException(r) ? "cursor-pointer" : ""}`}
+                    data-testid={`attendance-row-${r.id}`}>
                     <td className="px-4 py-3 font-semibold text-[var(--ink)]">{r.name}</td>
                     <td className="px-4 py-3 font-mono text-xs text-[var(--ink-2)]">{r.date}</td>
                     <td className="px-4 py-3 font-mono text-xs">
@@ -407,6 +422,7 @@ export default function Attendance() {
           </div>
         </div>
       </div>
+      <AttendanceExceptionDrawer record={selectedRow} onClose={() => setSelectedRow(null)} onChanged={loadLogs} />
     </>
   );
 }

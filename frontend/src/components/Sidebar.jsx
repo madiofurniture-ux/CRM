@@ -5,7 +5,7 @@ import {
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
   CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
   SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2, HandCoins, LayoutTemplate,
-  Landmark, ShieldCheck, ArrowLeftRight,
+  Landmark, ShieldCheck, ArrowLeftRight, History, GitBranch,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -68,6 +68,8 @@ const SECTIONS = [
     items: [
       { id: "alerts", to: "/alerts", label: "Follow-Up Alerts", icon: Bell },
       { id: "reports", to: "/reports", label: "Reports & Analytics", icon: PieChart },
+      { id: "record-chain", to: "/record-chain", label: "Record Chain", icon: GitBranch },
+      { id: "audit-trail", to: "/audit", label: "Audit Trail", icon: History, adminOnly: true },
       { id: "teams", to: "/admin/teams", label: "Team & Access", icon: UsersRound, adminOnly: true },
       { id: "roles-permissions", to: "/admin/roles-permissions", label: "Roles & Permissions", icon: Lock, adminOnly: true },
       { id: "roles", to: "/admin/roles", label: "Users", icon: Users, adminOnly: true },
