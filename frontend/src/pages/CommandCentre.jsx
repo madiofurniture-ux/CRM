@@ -1,25 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search, Download, Bell } from "lucide-react";
 import Header from "@/components/Header";
+import api from "@/lib/api";
+import { inr } from "@/lib/format";
 
-const KPIS = [
-  { label: "Open pipeline", value: "₹1.42 Cr", sub: "+8.4% vs last month" },
-  { label: "Won this month", value: "₹38.6 L", sub: "+12% · 6 orders" },
-  { label: "Receivables", value: "₹31.5 L", sub: "₹19.4 L over 60 days" },
-  { label: "Projects live", value: "14", sub: "3 at risk" },
-  { label: "SLA breaches", value: "5", sub: "Today needs action" },
-];
-
-const PIPELINE_BARS = [
-  { label: "Design studio", value: 142, tone: "primary" },
-  { label: "Factory", value: 96, tone: "primary" },
-  { label: "Site teams", value: 44, tone: "primary" },
-  { label: "Won FY", value: 118, tone: "muted" },
-  { label: "Lost FY", value: 62, tone: "muted" },
-  { label: "Stalled", value: 31, tone: "muted" },
-];
-const PIPELINE_MAX = Math.max(...PIPELINE_BARS.map((b) => b.value));
-
+// Static — this checklist isn't backed by any collection, unlike the KPI
+// cards and pipeline chart below, which are all live from
+// GET /overview/command-centre.
 const READINESS = [
   { label: "Query isolation", pct: 92 },
   { label: "Audit trail instrumented", pct: 78 },
@@ -38,6 +25,31 @@ export default function CommandCentre() {
   const [navTab, setNavTab] = useState("overview");
   const [uiState, setUiState] = useState("List");
   const [search, setSearch] = useState("");
+  const [overview, setOverview] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get("/overview/command-centre")
+      .then((r) => setOverview(r.data))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const kpis = overview
+    ? [
+        { label: "Open pipeline", value: inr(overview.kpis.open_pipeline), sub: "Live open-stage quotes" },
+        { label: "Won this month", value: inr(overview.kpis.won_this_month.value),
+          sub: `${overview.kpis.won_this_month.orders} order${overview.kpis.won_this_month.orders === 1 ? "" : "s"} this month` },
+        { label: "Receivables", value: inr(overview.kpis.receivables), sub: "Outstanding across all sales" },
+        { label: "Projects live", value: String(overview.kpis.projects_live.count),
+          sub: `${overview.kpis.projects_live.at_risk} at risk` },
+        { label: "SLA breaches", value: String(overview.kpis.sla_breaches),
+          sub: overview.kpis.sla_breaches > 0 ? "Today needs action" : "All clear" },
+      ]
+    : [];
+
+  const pipelineBars = overview?.pipeline_by_unit || [];
+  const pipelineMax = Math.max(...pipelineBars.map((b) => b.value), 1);
+  const pendingApprovals = overview?.pending_approvals || [];
 
   return (
     <div className="min-h-screen bg-[#F7F5F3]" data-testid="command-centre-page">
@@ -104,13 +116,23 @@ export default function CommandCentre() {
 
         {/* KPI cards */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          {KPIS.map((k) => (
-            <div key={k.label} className="bg-white border border-[#E2E8F0] rounded-2xl p-4">
-              <div className="text-[10px] font-mono uppercase tracking-widest text-[#94A3B8] mb-2">{k.label}</div>
-              <div className="text-xl font-bold text-[#14161C]">{k.value}</div>
-              <div className="text-xs text-[#64748B] mt-1">{k.sub}</div>
-            </div>
-          ))}
+          {loading ? (
+            Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="bg-white border border-[#E2E8F0] rounded-2xl p-4 animate-pulse">
+                <div className="h-2.5 w-20 bg-[#F1F5F9] rounded mb-3" />
+                <div className="h-6 w-16 bg-[#F1F5F9] rounded mb-2" />
+                <div className="h-2.5 w-24 bg-[#F1F5F9] rounded" />
+              </div>
+            ))
+          ) : (
+            kpis.map((k) => (
+              <div key={k.label} className="bg-white border border-[#E2E8F0] rounded-2xl p-4" data-testid={`kpi-${k.label}`}>
+                <div className="text-[10px] font-mono uppercase tracking-widest text-[#94A3B8] mb-2">{k.label}</div>
+                <div className="text-xl font-bold text-[#14161C] font-mono tabular-nums">{k.value}</div>
+                <div className="text-xs text-[#64748B] mt-1">{k.sub}</div>
+              </div>
+            ))
+          )}
         </div>
 
         {/* Split view */}
@@ -119,25 +141,28 @@ export default function CommandCentre() {
           <div className="lg:col-span-8 bg-white border border-[#E2E8F0] rounded-2xl p-6">
             <div className="mb-6">
               <div className="font-semibold text-[#14161C]">Pipeline by unit</div>
-              <div className="text-xs text-[#94A3B8]">value in ₹ lakh · current FY</div>
+              <div className="text-xs text-[#94A3B8]">open quote value by division · current FY</div>
             </div>
-            <div className="flex items-end gap-6 h-48" role="img" aria-label="Pipeline by unit bar chart">
-              {PIPELINE_BARS.map((b) => (
-                <div key={b.label} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
-                  <div className="text-xs font-mono font-semibold text-[#14161C]">{b.value}</div>
-                  <div
-                    className="w-full rounded-t-md"
-                    style={{
-                      height: `${(b.value / PIPELINE_MAX) * 100}%`,
-                      background: b.tone === "primary" ? "#EC3013" : "#FCA5A5",
-                    }}
-                  />
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-[#64748B] text-center">
-                    {b.label}
+            {!loading && pipelineBars.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-sm text-[#94A3B8]">
+                No open pipeline right now.
+              </div>
+            ) : (
+              <div className="flex items-end gap-6 h-48" role="img" aria-label="Pipeline by unit bar chart">
+                {(loading ? Array.from({ length: 3 }) : pipelineBars).map((b, i) => (
+                  <div key={b?.division || i} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
+                    {!loading && <div className="text-xs font-mono font-semibold text-[#14161C]">{b.value}</div>}
+                    <div
+                      className={`w-full rounded-t-md ${loading ? "bg-[#F1F5F9] animate-pulse" : ""}`}
+                      style={loading ? { height: "30%" } : { height: `${(b.value / pipelineMax) * 100}%`, background: "#EC3013" }}
+                    />
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-[#64748B] text-center">
+                      {loading ? "" : b.division}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Readiness + action feed */}
@@ -161,11 +186,21 @@ export default function CommandCentre() {
 
             <div className="bg-white border border-[#E2E8F0] rounded-2xl p-6">
               <div className="font-semibold text-[#14161C] mb-4">Today — Division Head · Unit scope</div>
-              <div className="flex items-start justify-between gap-3 p-3 rounded-lg bg-[#FEF2F2] border border-[#FCA5A5]/40">
-                <div className="text-xs text-[#14161C]">
-                  <span className="font-mono font-semibold">09:30</span> Approve QT-DW-0388 — 14% discount above your limit
-                </div>
-                <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#EC3013] text-white">GATE</span>
+              <div className="space-y-2">
+                {loading ? (
+                  <div className="h-14 rounded-lg bg-[#F1F5F9] animate-pulse" />
+                ) : pendingApprovals.length === 0 ? (
+                  <div className="text-sm text-[#94A3B8] py-2">No approvals pending.</div>
+                ) : (
+                  pendingApprovals.map((p) => (
+                    <div key={p.quote_no} className="flex items-start justify-between gap-3 p-3 rounded-lg bg-[#FEF2F2] border border-[#FCA5A5]/40">
+                      <div className="text-xs text-[#14161C]">
+                        Approve <span className="font-mono font-semibold">{p.quote_no}</span> ({p.customer}) — {p.discount_pct}% discount above your limit
+                      </div>
+                      <span className="shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded bg-[#EC3013] text-white">GATE</span>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>

@@ -1103,3 +1103,81 @@ def data_health_checks(*, inventory: Iterable[dict], invoices: Iterable[dict],
         _health_check("Leads", "Stage is a known funnel value",
                       [l.get("name") for l in leads if l.get("stage") not in KNOWN_LEAD_STAGES]),
     ]
+
+
+# --------------------------------------------------------- command centre
+# Real field names only — the mock had invented ones (estimated_value,
+# total_amount, balance_due) that don't exist on Quote/Sale/Project/Task.
+OPEN_QUOTE_STAGES = {"New", "Qualified", "Quoted", "Negotiation"}
+TERMINAL_PROJECT_STAGES = {"Closure"}
+
+
+def _quote_discount_pct(q: dict) -> float:
+    subtotal = q.get("subtotal") or 0
+    discount = q.get("discount") or 0
+    return round((discount / subtotal) * 100, 1) if subtotal else 0.0
+
+
+def command_centre_overview(*, quotes: Iterable[dict], sales: Iterable[dict],
+                             projects: Iterable[dict], tasks: Iterable[dict], today: str) -> dict:
+    """Live aggregation behind the Command Centre KPI cards, pipeline-by-unit
+    chart, and pending-approval feed. `today` is injected (not date.today())
+    so this stays pure and testable without freezing the clock.
+
+    "At risk" isn't a field anywhere in the schema, so a project counts as at
+    risk when its own target_date has passed, or when an open task linked to
+    it (Task.ref/ref_type) is overdue — both derived from real fields, not
+    invented ones.
+    """
+    quotes, sales, projects, tasks = list(quotes), list(sales), list(projects), list(tasks)
+    month_prefix = today[:7]
+
+    open_quotes = [q for q in quotes if q.get("stage") in OPEN_QUOTE_STAGES]
+    open_pipeline = sum(q.get("value") or 0 for q in open_quotes)
+
+    month_sales = [s for s in sales if (s.get("date") or "")[:7] == month_prefix]
+    won_this_month = sum(s.get("value") or 0 for s in month_sales)
+
+    receivables = sum(s.get("balance") or 0 for s in sales)
+
+    live_projects = [p for p in projects if p.get("stage") not in TERMINAL_PROJECT_STAGES]
+    overdue_task_project_ids = {
+        t.get("ref") for t in tasks
+        if t.get("ref_type") == "project" and not t.get("done")
+        and t.get("due_date") and t["due_date"] < today
+    }
+    at_risk_projects = [
+        p for p in live_projects
+        if (p.get("target_date") and p["target_date"] < today) or p.get("id") in overdue_task_project_ids
+    ]
+
+    sla_breaches = [t for t in tasks if not t.get("done") and t.get("due_date") and t["due_date"] < today]
+
+    division_split: dict = {}
+    for q in open_quotes:
+        div = q.get("division") or "Other"
+        division_split[div] = division_split.get(div, 0) + (q.get("value") or 0)
+
+    pending = sorted(
+        (q for q in quotes if q.get("approval") == "pending"),
+        key=lambda q: q.get("date") or "", reverse=True,
+    )
+
+    return {
+        "kpis": {
+            "open_pipeline": open_pipeline,
+            "won_this_month": {"value": won_this_month, "orders": len(month_sales)},
+            "receivables": receivables,
+            "projects_live": {"count": len(live_projects), "at_risk": len(at_risk_projects)},
+            "sla_breaches": len(sla_breaches),
+        },
+        "pipeline_by_unit": [
+            {"division": k, "value": v}
+            for k, v in sorted(division_split.items(), key=lambda kv: -kv[1])
+        ],
+        "pending_approvals": [
+            {"quote_no": q.get("quote_no", ""), "customer": q.get("customer", ""),
+             "discount_pct": _quote_discount_pct(q)}
+            for q in pending[:5]
+        ],
+    }

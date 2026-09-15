@@ -3425,6 +3425,23 @@ async def data_health_report(user: dict = Depends(get_current_user)):
     }
 
 
+@api.get("/overview/command-centre")
+async def command_centre_overview_route(user: dict = Depends(get_current_user)):
+    quotes, sales, projects, tasks = await asyncio.gather(
+        db.quotes.find(tenancy.scope({}, "quotes", user),
+                       {"_id": 0, "quote_no": 1, "customer": 1, "value": 1, "stage": 1,
+                        "division": 1, "subtotal": 1, "discount": 1, "approval": 1, "date": 1}
+                       ).to_list(5000),
+        db.sales.find(tenancy.scope({}, "sales", user),
+                      {"_id": 0, "value": 1, "balance": 1, "date": 1}).to_list(5000),
+        db.projects.find(tenancy.scope({}, "projects", user),
+                         {"_id": 0, "id": 1, "stage": 1, "target_date": 1}).to_list(5000),
+        db.tasks.find(tenancy.scope({}, "tasks", user),
+                      {"_id": 0, "ref": 1, "ref_type": 1, "due_date": 1, "done": 1}).to_list(5000),
+    )
+    return lc.command_centre_overview(quotes=quotes, sales=sales, projects=projects, tasks=tasks, today=_today())
+
+
 @api.get("/analytics/inventory")
 async def inventory_analytics(user: dict = Depends(get_current_user)):
     items = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(5000)
