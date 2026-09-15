@@ -76,3 +76,14 @@ export const APPS = [
 // Flat list for the Role Manager permission grid.
 export const ALL_PAGES = NAV.filter((n) => !n.adminOnly || n.id === "roles")
   .map((n) => ({ id: n.id, label: n.label }));
+
+// Command Centre's "Sales" sub-nav strip — short codes over the real Sell
+// routes above, so the pill labels can't drift from where they actually go.
+const _navTo = (id) => NAV.find((n) => n.id === id)?.to || "/";
+export const COMMAND_CENTRE_SALES_SUBNAV = [
+  { code: "PI", label: "Pipeline", to: _navTo("pipeline") },
+  { code: "LD", label: "Leads", to: _navTo("leads") },
+  { code: "QT", label: "Quotations", to: _navTo("quotes"), isNew: true },
+  { code: "SR", label: "Sales register", to: _navTo("sales") },
+  { code: "VI", label: "Visitors", to: _navTo("visitors") },
+];
