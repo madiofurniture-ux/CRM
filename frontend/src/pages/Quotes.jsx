@@ -57,6 +57,13 @@ export default function Quotes() {
     loadData();
   }, []);
 
+  useEffect(() => {
+    if (!showForm) return;
+    const onKeyDown = (e) => e.key === "Escape" && setShowForm(false);
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [showForm]);
+
   const filteredInventory = useMemo(() => {
     if (!form.division) return inventory;
     return inventory.filter(
