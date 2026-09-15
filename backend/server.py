@@ -55,7 +55,7 @@ from models import (
     CashbookCreate, Cashbook, CashbookEntryCreate, CashbookEntry,
     CashbookEntryApproval, CashbookTopUp, CashbookExpense,
     RecordContactCreate, RecordContact,
-    AttendanceCheckIn, OfficeSettings,
+    AttendanceCheckIn, AttendanceRegularize, OfficeSettings,
     SiteCreate, Site, PayrollRequest,
     CashbookTxnCreate, CashbookTxn,
     ProjectCreate, ProjectUpdate, ProjectStageUpdate, Project,
@@ -611,7 +611,7 @@ def _merge_visibility(query: dict, fragment: dict) -> dict:
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
               after_write=None, module: str = None, owner_field: str = None, on_create=None,
               normalize=None, redact=None, mask=None, personal: bool = False,
-              list_filters: tuple = ()):
+              list_filters: tuple = (), entity: str = None):
     """`after_write`, when given, runs after a successful create/update with the
     saved document and the acting user — for side effects that must stay in
     lockstep with this collection's own writes (e.g. leads syncing a
@@ -664,6 +664,9 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     Opt-in and allow-listed, so a caller can never turn an arbitrary field —
     or a Mongo operator document — into a query filter. Applied on top of
     the tenant/FY/role scope above, never instead of it.
+
+    `entity` — when given, logs a create/update/delete row to record_activity()
+    under this entity name, for the Audit Trail screen. Opt-in per collection.
     """
     @router.get(f"/{base}")
     async def _list(request: Request = None, mask_other: bool = True,
@@ -717,6 +720,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
             await after_write(doc, user)
         if on_create:
             await on_create(doc, user)
+        if entity:
+            await record_activity(entity, doc["id"], "create", user, after=doc)
         return redact(doc, user) if redact else doc
 
     @router.put(f"/{base}/{{item_id}}")
@@ -756,6 +761,10 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         out = await db[collection].find_one(owned, {"_id": 0})
         if after_write:
             await after_write(out, user)
+        if entity:
+            changed = {k: existing.get(k) for k in payload}
+            await record_activity(entity, item_id, "update", user, before=changed,
+                                   after={k: out.get(k) for k in payload})
         if mask and mask_other:
             out = mask(out)
         return redact(out, user) if redact else out
@@ -764,8 +773,9 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
     async def _delete(item_id: str, user: dict = Depends(get_current_user)):
         # Scoped so one tenant can never delete another's record by id.
         owned = tenancy.scope({"id": item_id}, collection, user)
-        if module or personal:
-            existing = await db[collection].find_one(owned)
+        existing = None
+        if module or personal or entity:
+            existing = await db[collection].find_one(owned, {"_id": 0})
             if not existing:
                 raise HTTPException(status_code=404, detail="Not found")
             if personal and not can_see_personal(existing, user, collection):
@@ -778,6 +788,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         res = await db[collection].delete_one(owned)
         if res.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Not found")
+        if entity:
+            await record_activity(entity, item_id, "delete", user, before=existing)
         return {"ok": True}
 
 
@@ -1602,10 +1614,11 @@ async def _handle_lead_followup_reminder(db, task: dict) -> str:
 _TASK_HANDLERS["lead_followup_reminder"] = _handle_lead_followup_reminder
 
 
-make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, module="visitors", normalize=normalize_visitor)
+make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, module="visitors", normalize=normalize_visitor,
+          entity="visitor")
 make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task,
           module="leads", owner_field="assigned_to", on_create=_schedule_lead_followup_reminder,
-          normalize=normalize_lead, redact=_lead_out)
+          normalize=normalize_lead, redact=_lead_out, entity="lead")
 make_crud(api, "architects", "architects", ArchitectCreate, Architect, module="architects", normalize=normalize_architect)
 
 
@@ -1788,9 +1801,9 @@ async def quote_pdf(quote_id: str, user: dict = Depends(get_current_user)):
 
 
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user",
-          on_create=_notify_quote_created, normalize=normalize_quote_template)
+          on_create=_notify_quote_created, normalize=normalize_quote_template, entity="quote")
 make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user",
-          on_create=_notify_order_confirmed)
+          on_create=_notify_order_confirmed, entity="sale")
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory",
           normalize=normalize_inventory, redact=redact_inventory)
 
@@ -2861,7 +2874,7 @@ async def _resolve_geofence(user: dict, lat: float, lng: float) -> dict:
 # what an actual attendance dispute gets settled with.
 ATTENDANCE_RAW_FIELDS = (
     "check_in_lat", "check_in_lng", "check_in_photo",
-    "check_out_lat", "check_out_lng", "check_out_photo",
+    "check_out_lat", "check_out_lng", "check_out_photo", "regularize_photo",
 )
 
 
@@ -2875,6 +2888,7 @@ def redact_attendance(rec: dict) -> dict:
     out["verified"] = rec.get("check_in_within")
     out["selfie_verified"] = bool(rec.get("check_in_photo"))
     out["device_id"] = rec.get("device_id", "")
+    out["regularize_photo_attached"] = bool(rec.get("regularize_photo"))
     return out
 
 
@@ -3251,6 +3265,49 @@ async def check_out(payload: AttendanceCheckIn, user: dict = Depends(get_current
     return redact_attendance(await db.attendance.find_one({"_id": rec["_id"]}, {"_id": 0}))
 
 
+@api.post("/attendance/{record_id}/regularize")
+async def regularize_attendance(record_id: str, payload: AttendanceRegularize,
+                                user: dict = Depends(require_admin)):
+    """Admin sign-off on an exception punch (out-of-geofence / missing punch) —
+    net-new endpoint, no equivalent existed before this pass. Never overwrites
+    the original GPS/selfie evidence, only appends the approval decision."""
+    owned = tenancy.scope({"id": record_id}, "attendance", user)
+    rec = await db.attendance.find_one(owned)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    before = {"status": rec.get("status")}
+    update = {
+        "status": "regularized",
+        "regularize_reason": payload.reason,
+        "regularize_note": payload.note or "",
+        "regularize_photo": payload.photo_url or "",
+        "regularized_by": user.get("name", ""),
+        "regularized_by_id": user.get("id", ""),
+        "regularized_at": now_iso(),
+    }
+    await db.attendance.update_one({"_id": rec["_id"]}, {"$set": update})
+    await record_activity("attendance", record_id, "regularize", user, before=before,
+                          after={"status": "regularized"}, note=payload.reason)
+    return redact_attendance(await db.attendance.find_one({"_id": rec["_id"]}, {"_id": 0}))
+
+
+@api.post("/attendance/{record_id}/mark-absent")
+async def mark_attendance_absent(record_id: str, user: dict = Depends(require_admin)):
+    """Admin overrides an exception punch as an absence — net-new endpoint,
+    same as regularize above."""
+    owned = tenancy.scope({"id": record_id}, "attendance", user)
+    rec = await db.attendance.find_one(owned)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    before = {"status": rec.get("status")}
+    await db.attendance.update_one({"_id": rec["_id"]}, {"$set": {
+        "status": "absent", "marked_absent_by": user.get("name", ""), "marked_absent_at": now_iso(),
+    }})
+    await record_activity("attendance", record_id, "mark_absent", user,
+                          before=before, after={"status": "absent"})
+    return redact_attendance(await db.attendance.find_one({"_id": rec["_id"]}, {"_id": 0}))
+
+
 # ---------- Helper Calculators ----------
 def _calc_stage_split(quotes: List[dict]) -> List[dict]:
     stages = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"]
@@ -3567,6 +3624,7 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
     tenancy.stamp(doc, "projects", user)
     await db.projects.insert_one(doc)
     doc.pop("_id", None)
+    await record_activity("project", doc["id"], "create", user, after=doc)
     return doc
 
 
@@ -3599,6 +3657,8 @@ async def update_project_stage(project_id: str, data: ProjectStageUpdate, user=D
         raise HTTPException(404, "Project not found")
     item = await db.projects.find_one(owned)
     item.pop("_id", None)
+    await record_activity("project", project_id, "stage_change", user,
+                          before={"stage": before.get("stage")}, after={"stage": data.stage})
     # "Execution" is this project model's installation/fulfillment phase —
     # there's no separate "Installation Scheduling" stage, so entering
     # Execution is the trigger. Only on the transition INTO it, not every
@@ -3615,6 +3675,7 @@ async def delete_project(project_id: str, user=Depends(get_current_user)):
     res = await db.projects.delete_one(tenancy.scope({"id": project_id}, "projects", user))
     if res.deleted_count == 0:
         raise HTTPException(404, "Project not found")
+    await record_activity("project", project_id, "delete", user)
     return {"status": "deleted"}
 
 
@@ -3788,6 +3849,42 @@ async def _audit(action: str, user: dict, detail: str = ""):
         await db.audit_log.insert_one(doc)
     except Exception as e:
         logger.warning(f"Audit log write failed ({action}): {e}")
+
+
+async def record_activity(entity: str, entity_id: str, action: str, user: dict,
+                          before: dict = None, after: dict = None, note: str = ""):
+    """Insert-only trail — business-record create/update/delete/approve/convert
+    events, keyed by entity/entity_id (unlike _audit's permission/role/login
+    events above, which have no single record to key against). Never raises:
+    a logging failure must not block the action it's logging."""
+    try:
+        doc = {"id": new_id(), "entity": entity, "entity_id": entity_id, "action": action,
+               "before": before or {}, "after": after or {}, "note": note,
+               "by_user": user.get("name", ""), "by_id": user.get("id", ""), "at": now_iso()}
+        tenancy.stamp(doc, "activities", user)
+        await db.activities.insert_one(doc)
+    except Exception as e:
+        logger.warning(f"Activity log write failed ({entity}/{action}): {e}")
+
+
+@api.get("/activities")
+async def list_activities(entity: str = None, entity_id: str = None, user: dict = Depends(require_admin)):
+    q: dict = {}
+    if entity:
+        q["entity"] = entity
+    if entity_id:
+        q["entity_id"] = entity_id
+    return await db.activities.find(tenancy.scope(q, "activities", user), {"_id": 0}) \
+        .sort("at", -1).to_list(2000)
+
+
+@api.get("/audit-log")
+async def list_audit_log(user: dict = Depends(require_admin)):
+    """Public list route for the permission/role/team/login/export trail
+    `_audit()` already writes — previously write-only, read only by nothing.
+    Admin-only, same as the rest of this trail's access."""
+    return await db.audit_log.find(tenancy.scope({}, "audit_log", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(2000)
 
 
 # One entry per module named in the P2 spec's example matrix/role list, plus
@@ -4305,6 +4402,8 @@ async def quote_approve(quote_id: str, payload: dict,
     await db.quotes.update_one(owned, {"$set": upd})
     out = await db.quotes.find_one(owned, {"_id": 0})
     out["derived_status"] = lc.quote_status(out)
+    await record_activity("quote", quote_id, "approve" if ok else "reject", user,
+                          before={"approval": quote.get("approval", "")}, after={"approval": upd["approval"]})
     result = {"quote": out}
     if ok:
         sale, project = await _generate_sales_order_and_project(out, user)
@@ -4352,6 +4451,8 @@ async def quote_revise(quote_id: str, user: dict = Depends(get_current_user)):
     }})
     out = await db.quotes.find_one(owned, {"_id": 0})
     out["derived_status"] = lc.quote_status(out)
+    await record_activity("quote", quote_id, "revise", user,
+                          before={"version": cur}, after={"version": new_version})
     return out
 
 
@@ -4433,6 +4534,8 @@ async def _settle_sale_balance(sale: dict, user: dict) -> dict:
     owned = tenancy.scope({"id": sale["id"]}, "sales", user)
     await db.sales.update_one(owned, {"$set": update})
     out = await db.sales.find_one(owned, {"_id": 0})
+    await record_activity("sale", sale["id"], "payment", user,
+                          after={"paid": paid, "balance": balance, "status": status})
 
     phone = (out or sale).get("phone")
     if balance == 0 and phone:
@@ -4712,6 +4815,7 @@ async def create_stock_movement(payload: StockMovementCreate, user: dict = Depen
                   "movement_no": lc.next_movement_id(existing + [doc]),
                   "reason": f"Transfer from {doc.get('warehouse')}", "created_at": now_iso()}
         await db.stock_movements.insert_one(dict(mirror))
+    await record_activity("stock_movement", doc["id"], "create", user, after=doc)
     return doc
 
 
@@ -5184,14 +5288,16 @@ async def csv_import_commit(entity: str, file: UploadFile = File(...), mapping: 
 
 @api.get("/journey/{phone}")
 async def journey(phone: str, user: dict = Depends(get_current_user)):
+    visitors = await db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0}).to_list(5000)
     leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
     quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
     sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
     payments = await db.payments.find(tenancy.scope({}, "payments", user), {"_id": 0}).to_list(5000)
+    projects = await db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000)
+    customers = await db.customers.find(tenancy.scope({}, "customers", user), {"_id": 0}).to_list(5000)
+    dw_surveys = await db.dw_surveys.find(tenancy.scope({}, "dw_surveys", user), {"_id": 0}).to_list(5000)
     out = lc.build_journey(
-        phone,
-        visitors=await db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0}).to_list(5000),
-        leads=leads, quotes=quotes, sales=sales, payments=payments,
+        phone, visitors=visitors, leads=leads, quotes=quotes, sales=sales, payments=payments,
         activities=await db.activities.find(tenancy.scope({}, "activities", user), {"_id": 0}).to_list(5000),
     )
     out["pipeline"] = lc.build_pipeline(
@@ -5199,12 +5305,33 @@ async def journey(phone: str, user: dict = Depends(get_current_user)):
         requirements=await db.requirements.find(tenancy.scope({}, "requirements", user), {"_id": 0}).to_list(5000),
         product_configs=await db.product_configs.find(tenancy.scope({}, "product_configs", user), {"_id": 0}).to_list(5000),
         tasks=await db.tasks.find(tenancy.scope({}, "tasks", user), {"_id": 0}).to_list(5000),
-        projects=await db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000),
-        customers=await db.customers.find(tenancy.scope({}, "customers", user), {"_id": 0}).to_list(5000),
+        projects=projects, customers=customers,
     )
     out["whatsapp_messages"] = await db.whatsapp_messages.find(
         tenancy.scope({"phone": phone}, "whatsapp_messages", user), {"_id": 0}
     ).sort("created_at", 1).to_list(500)
+    # Record Chain screen needs the raw linked records, not just journey's
+    # flattened timeline strings — one of each, phone-matched (a customer
+    # only ever has one visitor/project/survey record in this data model).
+    key = lc.phone_key(phone)
+    out["visitor"] = next((v for v in visitors if lc.phone_key(v.get("phone")) == key), None)
+    project = next((p for p in projects if lc.phone_key(p.get("phone")) == key), None)
+    out["project"] = project
+    out["dw_survey"] = next((s for s in dw_surveys if lc.phone_key(s.get("phone")) == key), None)
+    out["customer"] = next((c for c in customers if lc.phone_key(c.get("phone")) == key), None)
+    # Incentives are the one downstream record with a real project_id/quote_id
+    # link back to this deal (commission_payouts.project_id/quote_id) — petty
+    # cash has no such field (it's a general ledger, not project-scoped), so
+    # it is deliberately left out here; the frontend marks that step
+    # "not tracked per customer" rather than fabricating a link.
+    quote_ids = {q["id"] for q in quotes if lc.phone_key(q.get("phone")) == key}
+    if project or quote_ids:
+        payouts_q: dict = {"$or": [{"project_id": (project or {}).get("id", "__none__")},
+                                    {"quote_id": {"$in": list(quote_ids) or ["__none__"]}}]}
+        out["incentives"] = await db.commission_payouts.find(
+            tenancy.scope(payouts_q, "commission_payouts", user), {"_id": 0}).to_list(100)
+    else:
+        out["incentives"] = []
     return out
 
 
@@ -5247,6 +5374,8 @@ async def visitor_to_lead(visitor_id: str, user: dict = Depends(get_current_user
     await db.visitors.update_one(
         tenancy.scope({"id": visitor_id}, "visitors", user),
         {"$set": {"stage": "Qualified", "converted_lead_id": lead["id"]}})
+    await record_activity("lead", lead["id"], "convert", user,
+                          note=f"From visitor {visitor_id}")
     return lead
 
 
@@ -5271,6 +5400,7 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
     await db.quotes.insert_one(dict(quote))
     await db.leads.update_one(
         tenancy.scope({"id": lead_id}, "leads", user), {"$set": {"stage": "Quoted"}})
+    await record_activity("quote", quote["id"], "convert", user, note=f"From lead {lead_id}")
     return quote
 
 
@@ -5308,6 +5438,7 @@ async def start_project(lead_id: str, user: dict = Depends(get_current_user)):
     tenancy.stamp(project, "projects", user)
     await db.projects.insert_one(dict(project))
     project.pop("_id", None)
+    await record_activity("project", project["id"], "convert", user, note=f"From lead {lead_id}")
     return project
 
 
@@ -5326,6 +5457,7 @@ async def quote_to_sale(quote_id: str, user: dict = Depends(require_admin)):
     sale, _project = await _generate_sales_order_and_project(quote, user)
     await db.quotes.update_one(tenancy.scope({"id": quote_id}, "quotes", user),
                                {"$set": {"stage": "Adv Received", "status": "Won"}})
+    await record_activity("sale", sale["id"], "convert", user, note=f"From quote {quote_id}")
     return sale
 
 
@@ -5370,6 +5502,7 @@ async def survey_to_quote(survey_id: str, user: dict = Depends(get_current_user)
         await db.quote_lines.insert_one(line)
     await db.dw_surveys.update_one(
         tenancy.scope({"id": survey_id}, "dw_surveys", user), {"$set": {"status": "Quoted"}})
+    await record_activity("quote", quote["id"], "convert", user, note=f"From survey {survey_id}")
     return quote
 
 

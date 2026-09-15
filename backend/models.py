@@ -1104,6 +1104,22 @@ class AttendanceCheckIn(BaseModel):
     device_id: Optional[str] = ""  # safe to surface in list views, unlike lat/lng/photo
 
 
+REGULARIZE_REASONS = ["forgot_to_punch", "device_issue", "approved_field_visit", "other"]
+
+
+class AttendanceRegularize(BaseModel):
+    reason: str
+    note: Optional[str] = ""
+    photo_url: Optional[str] = ""
+
+    @field_validator("reason")
+    @classmethod
+    def _valid_reason(cls, v):
+        if v not in REGULARIZE_REASONS:
+            raise ValueError(f"reason must be one of {REGULARIZE_REASONS}")
+        return v
+
+
 class AttendanceRecord(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
