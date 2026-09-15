@@ -2534,6 +2534,8 @@ async def list_cashbook_transactions(
     needs_review: Optional[bool] = None,
     payment_mode: Optional[str] = None,
     tally_synced: Optional[bool] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
     await _require_permission("cashbook", "view", user)
@@ -2544,6 +2546,15 @@ async def list_cashbook_transactions(
         q["payment_mode"] = payment_mode
     if tally_synced is not None:
         q["tally_synced"] = tally_synced
+    if date_from or date_to:
+        # `date` is a plain YYYY-MM-DD string, so a lexicographic $gte/$lte
+        # range is exact — no date parsing needed on either side.
+        date_range: dict = {}
+        if date_from:
+            date_range["$gte"] = date_from
+        if date_to:
+            date_range["$lte"] = date_to
+        q["date"] = date_range
     return await db.cashbook_transactions.find(
         tenancy.scope(q, "cashbook_transactions", user), {"_id": 0}
     ).sort("created_at", -1).to_list(2000)
@@ -2622,6 +2633,27 @@ async def tally_sync_batch(user: dict = Depends(get_current_user)):
     synced = sum(1 for r in results if r["synced"])
     return {"attempted": len(results), "synced": synced,
             "failed": len(results) - synced, "results": results}
+
+
+@api.get("/finance/tally/export-xml")
+async def tally_export_xml(user: dict = Depends(get_current_user)):
+    """Downloadable batch of every reviewed, unsynced transaction's Tally
+    voucher envelope — for a manual import instead of the live HTTP dispatch
+    the sync endpoints above perform. Read-only: nothing here is ever marked
+    synced, so downloading a batch twice is harmless."""
+    await _require_permission("cashbook", "approve", user)
+    pending = await db.cashbook_transactions.find(
+        tenancy.scope({"tally_synced": False, "needs_review": False},
+                      "cashbook_transactions", user), {"_id": 0}).to_list(500)
+    xml_batch = "\n".join(tally.build_voucher_xml(t, TALLY_COMPANY) for t in pending)
+
+    async def _stream():
+        yield xml_batch
+
+    return StreamingResponse(
+        _stream(), media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="tally_export_{lc.today_iso()}.xml"'},
+    )
 
 
 @api.get("/cashbook-entries/export.csv")

@@ -394,3 +394,30 @@ def test_missing_transaction_is_a_404():
             await server.tally_sync_one("nope", user=ADMIN)
         assert e.value.status_code == 404
     asyncio.run(run())
+
+
+def test_list_filters_by_date_range():
+    async def run():
+        await _txn(date="2026-01-05", reference_no="jan")
+        await _txn(date="2026-03-12", reference_no="mar")
+        await _txn(date="2026-06-30", reference_no="jun")
+        in_range = await server.list_cashbook_transactions(date_from="2026-02-01", date_to="2026-04-01", user=ADMIN)
+        assert [t["reference_no"] for t in in_range] == ["mar"]
+        from_only = await server.list_cashbook_transactions(date_from="2026-03-12", user=ADMIN)
+        assert {t["reference_no"] for t in from_only} == {"mar", "jun"}
+    asyncio.run(run())
+
+
+def test_export_xml_downloads_reviewed_unsynced_vouchers_without_dispatching():
+    async def run():
+        reviewed = await _txn(reference_no="ready-ref")
+        await _txn(payment_mode="UPI", reference_no="parked-ref")
+        resp = await server.tally_export_xml(user=ADMIN)
+        body = "".join([chunk async for chunk in resp.body_iterator])
+        assert body.count("<ENVELOPE>") == 1
+        assert "ready-ref" in body
+        assert "parked-ref" not in body
+        # Read-only: nothing gets marked synced just by downloading it.
+        still_pending = await server.db.cashbook_transactions.find_one({"id": reviewed["id"]}, {"_id": 0})
+        assert still_pending["tally_synced"] is False
+    asyncio.run(run())

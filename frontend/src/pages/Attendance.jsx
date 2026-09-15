@@ -227,13 +227,6 @@ export default function Attendance() {
                     </div>
                   </div>
                 </div>
-
-                <div className="text-right">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--ink-3)] block">GPS Coordinates</span>
-                  <span className="font-mono text-xs text-[var(--ink)] font-semibold">
-                    {loc.lat.toFixed(4)}° N, {loc.lng.toFixed(4)}° E
-                  </span>
-                </div>
               </div>
             </div>
 
