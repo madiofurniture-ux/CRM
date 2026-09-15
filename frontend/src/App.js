@@ -16,6 +16,7 @@ import Layout from "@/components/Layout";
 // on, which is most of what made the very first load feel slow.
 import Login from "@/pages/Login";
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const CommandCentre = lazy(() => import("@/pages/CommandCentre"));
 const Pipeline = lazy(() => import("@/pages/Pipeline"));
 const Quotes = lazy(() => import("@/pages/Quotes"));
 const Sales = lazy(() => import("@/pages/Sales"));
@@ -101,6 +102,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/overview" element={<ProtectedRoute page="overview"><Layout><CommandCentre /></Layout></ProtectedRoute>} />
           <Route path="/pipeline" element={<ProtectedRoute page="pipeline"><Layout><Pipeline /></Layout></ProtectedRoute>} />
           <Route path="/quotes" element={<ProtectedRoute page="quotes"><Layout><Quotes /></Layout></ProtectedRoute>} />
           <Route path="/sales" element={<ProtectedRoute page="sales"><Layout><Sales /></Layout></ProtectedRoute>} />

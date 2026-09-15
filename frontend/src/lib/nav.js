@@ -6,13 +6,14 @@ import {
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, ClipboardList, Wand2, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
-  LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare,
+  LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare, Gauge,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
 export const NAV = [
   // Overview (pinned — always shown above the app switcher)
   { app: "overview", id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, pinned: true },
+  { app: "overview", id: "overview", to: "/overview", label: "Command Centre", icon: Gauge },
   { app: "overview", id: "alerts", to: "/alerts", label: "Follow-Up Alerts", icon: Bell, pinned: true },
 
   // Sell

@@ -3295,16 +3295,20 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
     # Projected to just the fields this function and its helpers actually read
     # (below) — the full documents carry line_items/remarks/log/photos that
     # add nothing to these sums but bulk up the initial dashboard payload.
-    quotes, sales, inventory, leads, visitors = await asyncio.gather(
+    quotes, sales, inventory, leads, visitors, projects = await asyncio.gather(
         db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0, "stage": 1, "value": 1}).to_list(5000),
         db.sales.find(tenancy.scope({}, "sales", user),
                       {"_id": 0, "value": 1, "paid": 1, "balance": 1, "division": 1, "date": 1}).to_list(5000),
         db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0, "mrp": 1, "cost": 1, "qty": 1}).to_list(5000),
         db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0, "stage": 1, "follow_up_date": 1}).to_list(5000),
         db.visitors.find(tenancy.scope({}, "visitors", user), {"_id": 0, "date": 1}).to_list(5000),
+        db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0, "stage": 1, "target_date": 1}).to_list(5000),
     )
 
     today = now_iso()[:10]
+    this_month = today[:7]
+    won_this_month = [s for s in sales if (s.get("date") or "")[:7] == this_month]
+    live_projects = [p for p in projects if p.get("stage") != "Closure"]
     return {
         "pipeline_value": sum((q.get("value") or 0) for q in quotes if q.get("stage") in ("New", "Qualified", "Quoted", "Negotiation")),
         "total_sales": sum((s.get("value") or 0) for s in sales),
@@ -3315,6 +3319,10 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
         "active_leads": sum(1 for l in leads if l.get("stage") not in ("Won", "Lost")),
         "todays_visitors": sum(1 for v in visitors if (v.get("date") or "")[:10] == today),
         "overdue_followups": sum(1 for l in leads if l.get("follow_up_date") and l["follow_up_date"] < today and l.get("stage") not in ("Won", "Lost")),
+        "won_this_month_value": sum((s.get("value") or 0) for s in won_this_month),
+        "won_this_month_count": len(won_this_month),
+        "projects_live": len(live_projects),
+        "projects_at_risk": sum(1 for p in live_projects if p.get("target_date") and p["target_date"] < today),
         "by_stage": _calc_stage_split(quotes),
         "division_split": _calc_division_split(sales),
         "monthly_revenue": _calc_monthly_revenue(sales),

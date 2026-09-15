@@ -5,7 +5,7 @@ import {
   Bell, PieChart, DoorOpen, Layers, Database, IndianRupee, AlertTriangle, CalendarDays, FileSpreadsheet,
   CalendarRange, Workflow, X, ClipboardList, Wand2, Contact, PhoneCall, Settings, UsersRound, Lock,
   SlidersHorizontal, PanelLeftClose, PanelLeftOpen, LineChart, CalendarCheck2, HandCoins, LayoutTemplate,
-  Landmark, ShieldCheck, ArrowLeftRight,
+  Landmark, ShieldCheck, ArrowLeftRight, Gauge,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useSidebar } from "@/context/SidebarContext";
@@ -19,6 +19,7 @@ const SECTIONS = [
     title: "Intake & Leads",
     items: [
       { id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard },
+      { id: "overview", to: "/overview", label: "Command Centre", icon: Gauge },
       { id: "visitors", to: "/visitors", label: "Visitors / Walk-ins", icon: UserPlus },
       { id: "leads", to: "/leads", label: "Leads", icon: Sparkles },
       { id: "customers", to: "/customers", label: "Contacts & Accounts", icon: Contact },
