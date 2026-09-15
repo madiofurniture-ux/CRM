@@ -11,14 +11,20 @@ const MODES = ["Cash", "UPI", "Bank"];
 
 export default function PettyCash() {
   const [rows, setRows] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState("All");
   const [show, setShow] = useState(false);
   const [fKind, setFKind] = useState("All");
   const [saving, setSaving] = useState(false);
-  const empty = { date: new Date().toISOString().slice(0, 10), kind: "Out", category: "Misc", party: "", description: "", amount: 0, mode: "Cash", by_user: "", ref: "" };
-  const [form, setForm] = useState(empty);
+  const emptyFor = (kind) => ({ date: new Date().toISOString().slice(0, 10), kind, category: "Misc", party: "", description: "", amount: 0, mode: "Cash", by_user: "", ref: "", project_id: projectId !== "All" ? projectId : "" });
+  const [form, setForm] = useState(emptyFor("Out"));
 
-  const load = async () => { const { data } = await api.get("/petty-cash"); setRows(data); };
-  useEffect(() => { load(); }, []);
+  const load = async () => {
+    const { data } = await api.get("/petty-cash", { params: projectId !== "All" ? { project_id: projectId } : {} });
+    setRows(data);
+  };
+  useEffect(() => { load(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { api.get("/projects").then(({ data }) => setProjects(data)).catch(() => setProjects([])); }, []);
 
   const sorted = useMemo(() => [...rows].sort((a, b) => a.date.localeCompare(b.date) || a.created_at.localeCompare(b.created_at)), [rows]);
   let running = 0;
@@ -35,20 +41,48 @@ export default function PettyCash() {
   const save = async () => {
     if (saving) return;
     setSaving(true);
-    try { await api.post("/petty-cash", form); toast.success("Entry added"); setShow(false); setForm(empty); load(); }
+    try { await api.post("/petty-cash", form); toast.success("Entry added"); setShow(false); setForm(emptyFor("Out")); load(); }
     catch { toast.error("Save failed"); }
     finally { setSaving(false); }
   };
   const remove = async (id) => { if (!window.confirm("Delete entry?")) return; await api.delete(`/petty-cash/${id}`); load(); };
+  const openEntry = (kind) => { setForm(emptyFor(kind)); setShow(true); };
 
   return (
     <>
-      <Topbar title="Petty Cash Ledger" subtitle={`Closing: ${inrFull(closing)}`} onAdd={() => { setForm(empty); setShow(true); }} addLabel="New Entry" />
+      <Topbar title="Petty Cash Ledger" subtitle={`Closing: ${inrFull(closing)}`} onAdd={() => openEntry("Out")} addLabel="New Entry" />
       <div className="p-4 md:p-6 space-y-6" data-testid="petty-page">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Project</label>
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="px-3 py-2 text-sm rounded-xl bg-white border border-[var(--border)] outline-none focus:border-[var(--brand)] min-w-[220px]"
+              data-testid="petty-project-filter"
+            >
+              <option value="All">All Projects</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.customer} · {p.project_no}</option>
+              ))}
+            </select>
+          </div>
+          {projectId !== "All" && (
+            <div className="flex gap-2">
+              <button onClick={() => openEntry("In")} className="btn-primary bg-[var(--moss)] hover:opacity-90 flex items-center gap-1.5" data-testid="petty-cash-in-btn">
+                <ArrowDown size={14} /> Cash In
+              </button>
+              <button onClick={() => openEntry("Out")} className="btn-primary bg-[var(--danger)] hover:opacity-90 flex items-center gap-1.5" data-testid="petty-cash-out-btn">
+                <ArrowUp size={14} /> Cash Out
+              </button>
+            </div>
+          )}
+        </div>
+
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <KpiCard label="Cash In" value={inrFull(totalIn)} accent="moss" icon={ArrowDown} />
-          <KpiCard label="Cash Out" value={inrFull(totalOut)} accent="danger" icon={ArrowUp} />
-          <KpiCard label="Closing" value={inrFull(closing)} accent="brand" icon={Wallet} />
+          <KpiCard label="Cash In" value={inrFull(totalIn)} accent="moss" icon={ArrowDown} testid="petty-kpi-in" />
+          <KpiCard label="Cash Out" value={inrFull(totalOut)} accent="danger" icon={ArrowUp} testid="petty-kpi-out" />
+          <KpiCard label={projectId !== "All" ? "Current Balance" : "Closing"} value={inrFull(closing)} accent="brand" icon={Wallet} testid="petty-kpi-balance" />
           <KpiCard label="Entries" value={rows.length} accent="neutral" />
         </div>
 
@@ -69,6 +103,7 @@ export default function PettyCash() {
                   <th className="text-left font-semibold px-4 py-2.5">Party</th>
                   <th className="text-left font-semibold px-4 py-2.5">Description</th>
                   <th className="text-left font-semibold px-4 py-2.5 hidden md:table-cell">Mode</th>
+                  <th className="text-left font-semibold px-4 py-2.5 hidden lg:table-cell">Logged By</th>
                   <th className="text-right font-semibold px-4 py-2.5">Amount</th>
                   <th className="text-right font-semibold px-4 py-2.5">Balance</th>
                   <th></th>
@@ -87,12 +122,13 @@ export default function PettyCash() {
                     <td className="px-4 py-3">{r.party || "—"}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)] max-w-[240px] truncate">{r.description}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)] hidden md:table-cell">{r.mode}</td>
+                    <td className="px-4 py-3 text-[var(--ink-2)] hidden lg:table-cell">{r.by_user || "—"}</td>
                     <td className={`px-4 py-3 text-right font-mono font-semibold ${r.kind === "In" ? "text-[var(--moss)]" : "text-[var(--danger)]"}`}>{inrFull(r.amount)}</td>
                     <td className="px-4 py-3 text-right font-mono">{inrFull(r.balance)}</td>
                     <td className="px-2 py-3"><button onClick={() => remove(r.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button></td>
                   </tr>
                 ))}
-                {view.length === 0 && <tr><td colSpan="9" className="text-center py-10 text-[var(--ink-3)]">No entries</td></tr>}
+                {view.length === 0 && <tr><td colSpan="10" className="text-center py-10 text-[var(--ink-3)]">No entries</td></tr>}
               </tbody>
             </table>
           </div>
@@ -115,7 +151,7 @@ export default function PettyCash() {
               <F l="Amount" t="number" v={form.amount} oc={(v) => setForm({ ...form, amount: parseFloat(v) || 0 })} t2="petty-amt" />
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Category</label>
-                <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
+                <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" data-testid="petty-category">{(form.project_id ? PROJECT_CATEGORIES : CATEGORIES).map((c) => <option key={c}>{c}</option>)}</select>
               </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Mode</label>
