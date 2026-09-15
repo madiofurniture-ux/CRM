@@ -2275,7 +2275,8 @@ async def daily_planner_rollover(user: dict = Depends(get_current_user)):
         await db.tasks.update_one({"id": t["id"]}, {"$set": {"status": "Rolled Over", "updated_at": now_iso()}})
     return {"rolled_over": len(created), "tasks": created}
 
-make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty", owner_field="by_user")
+make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty", owner_field="by_user",
+          list_filters=("project_id",))
 
 async def _init_cashbook_balance(doc: dict, user: dict):
     """current_balance always starts equal to initial_balance, regardless

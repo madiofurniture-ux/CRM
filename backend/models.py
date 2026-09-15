@@ -799,6 +799,7 @@ class PettyCashBase(BaseModel):
     mode: str = "Other"  # Other (Direct Settlement) / Bank / UPI
     by_user: Optional[str] = ""
     ref: Optional[str] = ""
+    project_id: Optional[str] = ""
 
 
 class PettyCashCreate(PettyCashBase):
