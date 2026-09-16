@@ -82,8 +82,8 @@ export default function BusinessSettings() {
             <Fld l="Display Name" v={form.display_name} oc={(v) => setForm({ ...form, display_name: v })} placeholder="e.g. Acme Interiors CRM" />
             <Fld l="Short Name (sidebar logo)" v={form.short_name} oc={(v) => setForm({ ...form, short_name: v })} placeholder="e.g. ACME" />
             <Fld l="Logo URL" v={form.logo_url} oc={(v) => setForm({ ...form, logo_url: v })} cls="col-span-2" placeholder="https://…" />
-            <Fld l="Primary Color" v={form.primary_color} oc={(v) => setForm({ ...form, primary_color: v })} placeholder="#C85A32" />
-            <Fld l="Secondary Color" v={form.secondary_color} oc={(v) => setForm({ ...form, secondary_color: v })} placeholder="#4A5D4E" />
+            <Fld l="Primary Color" v={form.primary_color} oc={(v) => setForm({ ...form, primary_color: v })} placeholder="#0062d2" color />
+            <Fld l="Secondary Color" v={form.secondary_color} oc={(v) => setForm({ ...form, secondary_color: v })} placeholder="#16a34a" color />
           </div>
         </div>
 
@@ -109,11 +109,30 @@ export default function BusinessSettings() {
   );
 }
 
-function Fld({ l, v, oc, cls = "", placeholder = "" }) {
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+function Fld({ l, v, oc, cls = "", placeholder = "", color = false }) {
+  const swatchValue = HEX_RE.test(v) ? v : placeholder;
   return (
     <div className={cls}>
       <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">{l}</label>
-      <input value={v} placeholder={placeholder} onChange={(e) => oc(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" />
+      <div className="flex items-center gap-2">
+        {color && (
+          <input
+            type="color"
+            value={swatchValue}
+            onChange={(e) => oc(e.target.value)}
+            title="Pick a color"
+            className="h-9 w-9 shrink-0 rounded-lg border border-[var(--border)] p-0.5 cursor-pointer bg-white"
+          />
+        )}
+        <input
+          value={v}
+          placeholder={placeholder}
+          onChange={(e) => oc(e.target.value)}
+          className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)] font-mono"
+        />
+      </div>
     </div>
   );
 }

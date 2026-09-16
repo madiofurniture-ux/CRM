@@ -72,6 +72,19 @@ body {
   font-family: "JetBrains Mono", monospace;
 }
 
+h1, h2, h3 {
+  text-wrap: balance;
+}
+
+p, .text-wrap-pretty {
+  text-wrap: pretty;
+}
+
+img {
+  outline: 1px solid rgba(0, 0, 0, 0.08);
+  outline-offset: -1px;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 10px;
@@ -133,7 +146,9 @@ body {
   border-radius: 0.75rem;
   padding: 0.55rem 1rem;
   font-size: 0.875rem;
-  transition: all 0.15s ease;
+  transition-property: background-color, transform, box-shadow;
+  transition-duration: 0.15s;
+  transition-timing-function: ease-out;
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
@@ -141,6 +156,9 @@ body {
 .btn-primary:hover {
   background: var(--brand-hover);
   transform: translateY(-1px);
+}
+.btn-primary:active {
+  transform: scale(0.97);
 }
 .btn-ghost {
   background: transparent;
@@ -150,7 +168,9 @@ body {
   border-radius: 0.75rem;
   padding: 0.5rem 0.9rem;
   font-size: 0.875rem;
-  transition: all 0.15s ease;
+  transition-property: background-color, border-color;
+  transition-duration: 0.15s;
+  transition-timing-function: ease-out;
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
