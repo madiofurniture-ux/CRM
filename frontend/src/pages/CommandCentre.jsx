@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Search, Download, Bell } from "lucide-react";
-import Header from "@/components/Header";
 import api from "@/lib/api";
 import { inr } from "@/lib/format";
 
@@ -18,11 +17,10 @@ const READINESS = [
 
 const STATES = ["List", "Detail", "Create", "Edit", "Empty", "Error"];
 
-/** Design-mockup screen for the "Baseplate" Command Centre shell — a
- * self-contained page with its own header, not wired into the app-wide
- * Layout/Sidebar every other route uses. */
+/** The Baseplate Command Centre screen. Rendered through the app-wide
+ * Layout like every other page, so the Header above it is shared, not
+ * re-rendered per-page. */
 export default function CommandCentre() {
-  const [navTab, setNavTab] = useState("overview");
   const [uiState, setUiState] = useState("List");
   const [search, setSearch] = useState("");
   const [overview, setOverview] = useState(null);
@@ -53,8 +51,6 @@ export default function CommandCentre() {
 
   return (
     <div className="min-h-screen bg-[#F7F5F3]" data-testid="command-centre-page">
-      <Header activeTab={navTab} onTabChange={setNavTab} />
-
       <div className="p-6 max-w-[1440px] mx-auto space-y-6">
         {/* Title & action row */}
         <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">

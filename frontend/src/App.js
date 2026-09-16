@@ -100,7 +100,7 @@ function App() {
             path="/"
             element={
               <ProtectedRoute page="dashboard">
-                <CommandCentre />
+                <Layout><CommandCentre /></Layout>
               </ProtectedRoute>
             }
           />
@@ -108,7 +108,7 @@ function App() {
             path="/overview"
             element={
               <ProtectedRoute page="dashboard">
-                <CommandCentre />
+                <Layout><CommandCentre /></Layout>
               </ProtectedRoute>
             }
           />

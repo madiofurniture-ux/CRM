@@ -1,7 +1,6 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Menu, Bell, Shield, ShieldCheck } from "lucide-react";
-import { useSidebar } from "@/context/SidebarContext";
+import { Search, Plus, Bell, Shield, ShieldCheck } from "lucide-react";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import api from "@/lib/api";
 
@@ -11,7 +10,6 @@ const RESULT_ROUTE = {
 };
 
 export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actions }) {
-  const { setOpen } = useSidebar();
   const { isOtherHidden, requestUnlock, relock } = usePrivacyMode();
   const nav = useNavigate();
   const [q, setQ] = useState("");
@@ -41,15 +39,6 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
 
   return (
     <header className="sticky top-0 z-30 h-16 bg-white/85 backdrop-blur-md border-b border-[var(--border)] flex items-center px-3 sm:px-6 gap-2 sm:gap-4" data-testid="topbar">
-      <button
-        onClick={() => setOpen(true)}
-        className="p-2 -ml-1 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-2)] lg:hidden shrink-0"
-        aria-label="Open menu"
-        data-testid="sidebar-open-btn"
-      >
-        <Menu size={20} strokeWidth={1.7} />
-      </button>
-
       <div className="flex-1 min-w-0">
         <h1 className="font-heading text-[17px] sm:text-[20px] font-semibold text-[var(--ink)] tracking-tight leading-tight truncate">
           {title}
