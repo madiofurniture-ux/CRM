@@ -51,6 +51,10 @@ TENANT_COLLECTIONS = {
     "project_daily_logs", "business_profiles", "purchase_orders",
     "sites", "cashbook_transactions", "manufacturer_orders", "documents",
     "discussions", "whatsapp_messages",
+    # Canonical CRM v1 (models_canonical.py / api_canonical.py) — same
+    # tenant_id chokepoint as everything else, just new collections.
+    "crm_accounts", "crm_contacts", "crm_leads", "crm_opportunities",
+    "crm_products", "crm_quotations", "crm_activities",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's

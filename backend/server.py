@@ -25,6 +25,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
 
 import tenancy
+import api_canonical
 import lifecycle as lc
 import permissions as perm
 import notifications as notif
@@ -5767,6 +5768,7 @@ async def whatsapp_webhook_receive(request: Request):
 
 
 app.include_router(api)
+app.include_router(api_canonical.router)
 
 # Local-disk uploads served back out at the same /uploads/... path storage.py
 # returns as file_url. check_dir=False: the directory may not exist yet on a
