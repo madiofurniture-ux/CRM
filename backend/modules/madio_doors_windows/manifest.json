@@ -1,0 +1,27 @@
+{
+  "name": "madio_doors_windows",
+  "version": "1.0.0",
+  "depends": ["core_crm"],
+  "description": "Madio Doors & Windows — field survey/measurement/installation extensions.",
+  "custom_fields": {
+    "opportunity": [
+      {"key": "survey_id", "label": "Survey ID", "type": "string"},
+      {"key": "measurement_data", "label": "Measurement Data", "type": "json"},
+      {"key": "product_category", "label": "Product Category", "type": "string"},
+      {"key": "installation_type", "label": "Installation Type", "type": "string"},
+      {"key": "preferred_installation_date", "label": "Preferred Installation Date", "type": "date"}
+    ],
+    "lead": [
+      {"key": "product_category", "label": "Product Category", "type": "string"}
+    ]
+  },
+  "pipelines": {
+    "opportunity": ["qualification", "site_survey", "quotation", "negotiation", "won", "lost"]
+  },
+  "quotations": {
+    "templates": ["doors_windows"]
+  },
+  "permissions": {
+    "default_role": "user"
+  }
+}

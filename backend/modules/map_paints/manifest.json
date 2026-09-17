@@ -1,0 +1,26 @@
+{
+  "name": "map_paints",
+  "version": "1.0.0",
+  "depends": ["core_crm"],
+  "description": "MAP Paints — minimal retail/manufacturing extensions.",
+  "custom_fields": {
+    "opportunity": [
+      {"key": "finish_type", "label": "Finish Type", "type": "string"},
+      {"key": "color_formula_id", "label": "Color Formula ID", "type": "string"},
+      {"key": "batch_id", "label": "Batch ID", "type": "string"}
+    ],
+    "product": [
+      {"key": "finish_type", "label": "Finish Type", "type": "string"},
+      {"key": "color_formula_id", "label": "Color Formula ID", "type": "string"}
+    ]
+  },
+  "pipelines": {
+    "opportunity": ["qualification", "proposal", "negotiation", "won", "lost"]
+  },
+  "quotations": {
+    "templates": ["standard"]
+  },
+  "permissions": {
+    "default_role": "user"
+  }
+}

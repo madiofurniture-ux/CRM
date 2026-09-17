@@ -1,0 +1,25 @@
+{
+  "name": "core_crm",
+  "version": "1.0.0",
+  "depends": [],
+  "description": "Base pipeline, fields and permissions every brand inherits unless it overrides them.",
+  "custom_fields": {
+    "account": [],
+    "contact": [],
+    "lead": [],
+    "opportunity": [],
+    "product": [],
+    "quotation": [],
+    "activity": []
+  },
+  "pipelines": {
+    "lead": ["new", "contacted", "qualified", "converted", "lost"],
+    "opportunity": ["qualification", "proposal", "negotiation", "won", "lost"]
+  },
+  "quotations": {
+    "templates": ["standard"]
+  },
+  "permissions": {
+    "default_role": "user"
+  }
+}
