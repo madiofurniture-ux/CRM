@@ -1007,6 +1007,18 @@ class Discussion(DiscussionCreate):
     author_name: str
     parent_id: str = ""
     created_at: str
+    # Set only by send_direct_message, never from a client payload — a
+    # forged DiscussionCreate can't grant itself DM privacy this way.
+    is_dm: bool = False
+    participant_ids: List[str] = Field(default_factory=list)
+
+
+# A private 1:1 conversation, distinct from DiscussionCreate: no `channel`
+# (the server derives one deterministically from the two participants) and
+# no `attachments` (out of scope for the first cut).
+class DirectMessageCreate(BaseModel):
+    text: str
+    mentions: Optional[List[str]] = []
 
 
 # ------- Agent tasks (a generic, durable background-job queue — "agent"

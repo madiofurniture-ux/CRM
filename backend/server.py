@@ -65,7 +65,7 @@ from models import (
     normalize_remarks_history,
     ProjectDailyLogCreate,
     TenantBusinessProfile, TenantBusinessProfileUpdate,
-    Document, DiscussionCreate, Discussion,
+    Document, DiscussionCreate, Discussion, DirectMessageCreate,
 )
 from seed import seed_all
 
@@ -5618,11 +5618,24 @@ async def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
 DEFAULT_DISCUSSION_CHANNEL = "General"
 
 
+def _reject_dm_channel(channel: str):
+    # dm: channels are only ever readable/writable through the dedicated
+    # endpoints below, which derive the channel from the two participants
+    # server-side — a client can never name one directly here.
+    if channel.startswith("dm:"):
+        raise HTTPException(status_code=400, detail="Use the direct-message endpoints for private conversations")
+
+
+def dm_channel_id(user_id_a: str, user_id_b: str) -> str:
+    a, b = sorted([user_id_a, user_id_b])
+    return f"dm:{a}:{b}"
+
+
 @api.get("/discussions/channels")
 async def list_discussion_channels(user: dict = Depends(get_current_user)):
     await _require_permission("discussions", "view", user)
     q = tenancy.scope({}, "discussions", user)
-    channels = await db.discussions.distinct("channel", q)
+    channels = [c for c in await db.discussions.distinct("channel", q) if not c.startswith("dm:")]
     if not channels:
         channels = [DEFAULT_DISCUSSION_CHANNEL]
     return sorted(channels)
@@ -5630,6 +5643,7 @@ async def list_discussion_channels(user: dict = Depends(get_current_user)):
 
 @api.get("/discussions")
 async def list_discussions(channel: str = DEFAULT_DISCUSSION_CHANNEL, user: dict = Depends(get_current_user)):
+    _reject_dm_channel(channel)
     await _require_permission("discussions", "view", user)
     q = tenancy.scope({"channel": channel}, "discussions", user)
     return await db.discussions.find(q, {"_id": 0}).sort("created_at", 1).to_list(1000)
@@ -5637,6 +5651,7 @@ async def list_discussions(channel: str = DEFAULT_DISCUSSION_CHANNEL, user: dict
 
 @api.post("/discussions")
 async def create_discussion(data: DiscussionCreate, user: dict = Depends(get_current_user)):
+    _reject_dm_channel(data.channel)
     await _require_permission("discussions", "create", user)
     doc = data.dict()
     doc.update(id=new_id(), author_id=user.get("id", ""), author_name=user.get("name", ""),
@@ -5654,6 +5669,11 @@ async def reply_to_discussion(post_id: str, data: DiscussionCreate, user: dict =
     parent = await db.discussions.find_one(owned)
     if not parent:
         raise HTTPException(status_code=404, detail="Not found")
+    if parent.get("is_dm"):
+        # DMs have no threaded-reply concept (use send_direct_message) — and
+        # without this, a leaked DM post id would let anyone with the general
+        # discussions:create grant post into someone else's private channel.
+        raise HTTPException(status_code=400, detail="Direct messages cannot be replied to")
     doc = data.dict()
     doc.update(id=new_id(), channel=parent["channel"], author_id=user.get("id", ""),
                 author_name=user.get("name", ""), parent_id=post_id, created_at=now_iso())
@@ -5661,6 +5681,54 @@ async def reply_to_discussion(post_id: str, data: DiscussionCreate, user: dict =
     await db.discussions.insert_one(dict(doc))
     doc.pop("_id", None)
     return doc
+
+
+# ------- Direct messages: private 1:1 conversations over the same
+# `discussions` collection. Privacy holds by construction, not by checking
+# a client-supplied participant list: the channel is always derived from
+# (caller, other_user_id), so a caller can only ever reach conversations
+# they are actually part of. -------
+@api.post("/discussions/dm/{other_user_id}")
+async def send_direct_message(other_user_id: str, data: DirectMessageCreate, user: dict = Depends(get_current_user)):
+    await _require_permission("discussions", "create", user)
+    doc = data.dict()
+    doc.update(id=new_id(), channel=dm_channel_id(user["id"], other_user_id),
+                author_id=user.get("id", ""), author_name=user.get("name", ""),
+                parent_id="", created_at=now_iso(), is_dm=True,
+                participant_ids=sorted([user["id"], other_user_id]))
+    tenancy.stamp(doc, "discussions", user)
+    await db.discussions.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/discussions/dm/{other_user_id}")
+async def list_direct_messages(other_user_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("discussions", "view", user)
+    channel = dm_channel_id(user["id"], other_user_id)
+    q = tenancy.scope({"channel": channel, "is_dm": True}, "discussions", user)
+    return await db.discussions.find(q, {"_id": 0}).sort("created_at", 1).to_list(1000)
+
+
+@api.get("/discussions/dms")
+async def list_my_dm_conversations(user: dict = Depends(get_current_user)):
+    await _require_permission("discussions", "view", user)
+    q = tenancy.scope({"is_dm": True, "participant_ids": user["id"]}, "discussions", user)
+    rows = await db.discussions.find(q, {"_id": 0}).sort("created_at", 1).to_list(5000)
+    by_other: dict = {}
+    for r in rows:
+        other_id = next((p for p in r.get("participant_ids", []) if p != user["id"]), None)
+        if other_id:
+            by_other[other_id] = r  # ascending sort -> last write per key wins
+    others = await db.users.find({"id": {"$in": list(by_other.keys())}}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    name_by_id = {u["id"]: u["name"] for u in others}
+    convos = [
+        {"other_user_id": oid, "other_user_name": name_by_id.get(oid, "Unknown"),
+         "last_text": r["text"], "last_at": r["created_at"]}
+        for oid, r in by_other.items()
+    ]
+    convos.sort(key=lambda c: c["last_at"], reverse=True)
+    return convos
 
 
 # ------- WhatsApp Cloud API webhook (Phase 4, credential-gated) -------
