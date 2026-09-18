@@ -57,6 +57,7 @@ export const NAV = [
   { app: "command", id: "tasks", to: "/tasks", label: "Tasks", icon: ListTodo },
   { app: "command", id: "daily-planner", to: "/daily-planner", label: "Daily Planner", icon: CalendarCheck2 },
   { app: "command", id: "attendance", to: "/attendance", label: "Attendance", icon: Fingerprint },
+  { app: "command", id: "payroll", to: "/people/payroll", label: "Payroll", icon: IndianRupee },
   { app: "command", id: "data-centre", to: "/data-centre", label: "Data Centre", icon: Database },
   { app: "command", id: "discussions", to: "/discussions", label: "Team Board", icon: MessageSquare },
   { app: "command", id: "record-chain", to: "/record-chain", label: "Record Chain", icon: TrendingUp },
@@ -64,26 +65,6 @@ export const NAV = [
   { app: "command", id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
 ];
 
-export const APPS = [
-  { key: "sell", label: "Sell", icon: "◇" },
-  { key: "deliver", label: "Deliver", icon: "🎨" },
-  { key: "stock", label: "Stock", icon: "▣" },
-  { key: "money", label: "Money", icon: "₹" },
-  { key: "relations", label: "Relations", icon: "✦" },
-  { key: "command", label: "Command", icon: "⌘" },
-];
-
 // Flat list for the Role Manager permission grid.
 export const ALL_PAGES = NAV.filter((n) => !n.adminOnly || n.id === "roles")
   .map((n) => ({ id: n.id, label: n.label }));
-
-// Command Centre's "Sales" sub-nav strip — short codes over the real Sell
-// routes above, so the pill labels can't drift from where they actually go.
-const _navTo = (id) => NAV.find((n) => n.id === id)?.to || "/";
-export const COMMAND_CENTRE_SALES_SUBNAV = [
-  { code: "PI", label: "Pipeline", to: _navTo("pipeline") },
-  { code: "LD", label: "Leads", to: _navTo("leads") },
-  { code: "QT", label: "Quotations", to: _navTo("quotes"), isNew: true },
-  { code: "SR", label: "Sales register", to: _navTo("sales") },
-  { code: "VI", label: "Visitors", to: _navTo("visitors") },
-];

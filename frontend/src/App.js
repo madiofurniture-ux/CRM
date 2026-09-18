@@ -31,6 +31,7 @@ const Tasks = lazy(() => import("@/pages/Tasks"));
 const DailyPlanner = lazy(() => import("@/pages/DailyPlanner"));
 const Projects = lazy(() => import("@/pages/Projects"));
 const Attendance = lazy(() => import("@/pages/Attendance"));
+const PayrollPage = lazy(() => import("@/pages/PayrollPage"));
 const RoleManager = lazy(() => import("@/pages/RoleManager"));
 
 // Previously orphaned — the sidebar linked to these but no route existed
@@ -126,6 +127,7 @@ function App() {
           <Route path="/daily-planner" element={<ProtectedRoute page="daily-planner"><Layout><DailyPlanner /></Layout></ProtectedRoute>} />
           <Route path="/projects" element={<ProtectedRoute page="projects"><Layout><Projects /></Layout></ProtectedRoute>} />
           <Route path="/attendance" element={<ProtectedRoute page="attendance"><Layout><Attendance /></Layout></ProtectedRoute>} />
+          <Route path="/people/payroll" element={<ProtectedRoute page="payroll"><Layout><PayrollPage /></Layout></ProtectedRoute>} />
           <Route path="/admin/roles" element={<ProtectedRoute page="roles"><Layout><RoleManager /></Layout></ProtectedRoute>} />
 
           {/* Previously orphaned — sidebar linked here but no route existed */}
