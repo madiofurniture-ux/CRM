@@ -61,6 +61,9 @@ TENANT_COLLECTIONS = {
     # Tally sync (Phase 5, tally.py / server.py) — per-tenant connection
     # settings and the sync idempotency ledger.
     "tally_connections", "tally_sync_runs", "tally_sync_items",
+    # Wallets (prompt_1_wallets.md, models_wallet.py / api_wallets.py) —
+    # petty-cash -> project cash-position ledger.
+    "wallets", "wallet_transactions",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's

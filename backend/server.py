@@ -27,6 +27,7 @@ from pymongo import ReturnDocument
 import tenancy
 import api_canonical
 import api_hr
+import api_wallets
 import lifecycle as lc
 import permissions as perm
 import notifications as notif
@@ -2463,10 +2464,14 @@ async def normalize_petty_cash(doc: dict, existing: dict | None, user: dict) -> 
         doc["status"] = "Pending" if lc.petty_cash_needs_approval(kind, amount) else "Approved"
         doc["approved_by"] = ""
         doc["approved_at"] = ""
+        # prompt_1_wallets.md: every voucher posts to its project's wallet
+        # (auto-created on first use) or the tenant's Overhead wallet.
+        result = await api_wallets.apply_petty_cash_voucher(db, user, doc)
+        doc["wallet_id"] = result["wallet"]["id"]
 
 
 make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty",
-          owner_field="by_user", normalize=normalize_petty_cash)
+          owner_field="by_user", normalize=normalize_petty_cash, list_filters=("project_id",))
 
 
 @api.post("/petty-cash/{entry_id}/approve")
@@ -6053,6 +6058,7 @@ async def whatsapp_webhook_receive(request: Request):
 app.include_router(api)
 app.include_router(api_canonical.router)
 app.include_router(api_hr.router)
+app.include_router(api_wallets.router)
 
 # Local-disk uploads served back out at the same /uploads/... path storage.py
 # returns as file_url. check_dir=False: the directory may not exist yet on a

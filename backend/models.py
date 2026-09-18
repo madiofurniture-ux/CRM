@@ -816,6 +816,8 @@ class PettyCashBase(BaseModel):
     status: str = "Approved"
     approved_by: Optional[str] = ""
     approved_at: Optional[str] = ""
+    project_id: Optional[str] = ""  # "" = overhead/operating, not linked to a project
+    wallet_id: Optional[str] = ""   # server-derived — the models_wallet.Wallet this voucher posted to
 
 
 class PettyCashCreate(PettyCashBase):
