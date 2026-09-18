@@ -64,6 +64,9 @@ TENANT_COLLECTIONS = {
     # Wallets (prompt_1_wallets.md, models_wallet.py / api_wallets.py) —
     # petty-cash -> project cash-position ledger.
     "wallets", "wallet_transactions",
+    # Budgets (prompt_3_budgets.md, models_budget.py / api_budget.py) —
+    # cost-center spend control (budget/lines/overrides/transactions).
+    "budgets", "budget_lines", "budget_overrides", "budget_transactions",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's

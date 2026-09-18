@@ -1,0 +1,63 @@
+
+> frontend@0.1.0 start
+> craco start
+
+(node:46996) [DEP0176] DeprecationWarning: fs.F_OK is deprecated, use fs.constants.F_OK instead
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:46996) [DEP_WEBPACK_DEV_SERVER_ON_AFTER_SETUP_MIDDLEWARE] DeprecationWarning: 'onAfterSetupMiddleware' option is deprecated. Please use the 'setupMiddlewares' option.
+(node:46996) [DEP_WEBPACK_DEV_SERVER_ON_BEFORE_SETUP_MIDDLEWARE] DeprecationWarning: 'onBeforeSetupMiddleware' option is deprecated. Please use the 'setupMiddlewares' option.
+Starting the development server...
+
+(node:46996) [DEP_WEBPACK_COMPILATION_ASSETS] DeprecationWarning: Compilation.assets will be frozen in future, all modifications are deprecated.
+BREAKING CHANGE: No more changes should happen to Compilation.assets after sealing the Compilation.
+	Do changes to assets earlier, e. g. in Compilation.hooks.processAssets.
+	Make sure to select an appropriate stage from Compilation.PROCESS_ASSETS_STAGE_*.
+Compiled successfully!
+
+You can now view frontend in the browser.
+
+  Local:            http://localhost:3000
+  On Your Network:  http://192.168.0.7:3000
+
+Note that the development build is not optimized.
+To create a production build, use npm run build.
+
+webpack compiled [1m[32msuccessfully[39m[22m
+Compiling...
+Compiled successfully!
+webpack compiled [1m[32msuccessfully[39m[22m
+Compiling...
+Compiled successfully!
+webpack compiled [1m[32msuccessfully[39m[22m
+Compiling...
+Failed to compile.
+
+Attempted import error: 'BASEPLATE_SUBNAV' is not exported from '@/lib/baseplateNav' (imported as 'BASEPLATE_SUBNAV').
+[1m[31mERROR[39m[22m in [1m./src/components/Header.jsx[39m[22m [1m[32m41:50-66[39m[22m
+[1mexport 'BASEPLATE_SUBNAV' (imported as 'BASEPLATE_SUBNAV') was [1m[31mnot found[39m[22m[1m in '@/lib/baseplateNav' (possible exports: [1m[32mALL_BASEPLATE_SUBNAV, BASEPLATE_TABS, tabForPath[39m[22m[1m)[39m[22m
+
+[1m[31mERROR[39m[22m in [1m./src/components/Header.jsx[39m[22m [1m[32m43:18-34[39m[22m
+[1mexport 'BASEPLATE_SUBNAV' (imported as 'BASEPLATE_SUBNAV') was [1m[31mnot found[39m[22m[1m in '@/lib/baseplateNav' (possible exports: [1m[32mALL_BASEPLATE_SUBNAV, BASEPLATE_TABS, tabForPath[39m[22m[1m)[39m[22m
+
+[1m[31mERROR[39m[22m in [1m./src/components/Header.jsx[39m[22m [1m[32m45:19-35[39m[22m
+[1mexport 'BASEPLATE_SUBNAV' (imported as 'BASEPLATE_SUBNAV') was [1m[31mnot found[39m[22m[1m in '@/lib/baseplateNav' (possible exports: [1m[32mALL_BASEPLATE_SUBNAV, BASEPLATE_TABS, tabForPath[39m[22m[1m)[39m[22m
+
+webpack compiled with [1m[31m3 errors[39m[22m
+Compiling...
+Compiled successfully!
+webpack compiled [1m[32msuccessfully[39m[22m
+Compiling...
+Compiled successfully!
+webpack compiled [1m[32msuccessfully[39m[22m
+Compiling...
+Compiled successfully!
+webpack compiled [1m[32msuccessfully[39m[22m
+Compiling...
+Compiled successfully!
+webpack compiled [1m[32msuccessfully[39m[22m
+Compiling...
+Compiled successfully!
+webpack compiled [1m[32msuccessfully[39m[22m
+Compiling...
+Compiled successfully!
+webpack compiled [1m[32msuccessfully[39m[22m

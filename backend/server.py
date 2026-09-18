@@ -28,6 +28,7 @@ import tenancy
 import api_canonical
 import api_hr
 import api_wallets
+import api_budget
 import lifecycle as lc
 import permissions as perm
 import notifications as notif
@@ -2009,6 +2010,16 @@ async def purchase_order_approve(po_id: str, payload: dict, user: dict = Depends
     if not po:
         raise HTTPException(status_code=404, detail="Not found")
     ok = bool(payload.get("approved", True))
+    if ok:
+        # prompt_3_budgets.md: check-before-approval — posts against the
+        # project's "Material" budget line if one exists, raising 400 (and
+        # leaving approval untouched) if that line is already blocked.
+        # No-op when the cost center has no budget set up.
+        await api_budget.apply_budget_transaction(
+            db, user, cost_center_id=po.get("project_id") or "", category="Material",
+            source_type="PurchaseOrder", source_id=po_id,
+            amount_rupees=po.get("grand_total"), posted_at=po.get("date"),
+        )
     upd = {"approval": "approved" if ok else "rejected",
            "approved_by": (user.get("username") or "") if ok else "",
            "approved_at": now_iso() if ok else ""}
@@ -2468,6 +2479,18 @@ async def normalize_petty_cash(doc: dict, existing: dict | None, user: dict) -> 
         # (auto-created on first use) or the tenant's Overhead wallet.
         result = await api_wallets.apply_petty_cash_voucher(db, user, doc)
         doc["wallet_id"] = result["wallet"]["id"]
+        # prompt_3_budgets.md: an Out voucher posts against the project's
+        # "Petty_Cash" budget line if one exists (no-op otherwise — backward
+        # compatible). An In voucher is a reimbursement, not spend, so it
+        # never touches a budget. Runs after the wallet post, mirroring
+        # wallet's own negative-balance guard: either can reject the create
+        # with an HTTPException.
+        if kind == "Out":
+            await api_budget.apply_budget_transaction(
+                db, user, cost_center_id=doc.get("project_id") or "", category="Petty_Cash",
+                source_type="PettyCash", source_id=doc.get("id", ""),
+                amount_rupees=amount, posted_at=doc.get("date"),
+            )
 
 
 make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty",
@@ -6059,6 +6082,7 @@ app.include_router(api)
 app.include_router(api_canonical.router)
 app.include_router(api_hr.router)
 app.include_router(api_wallets.router)
+app.include_router(api_budget.router)
 
 # Local-disk uploads served back out at the same /uploads/... path storage.py
 # returns as file_url. check_dir=False: the directory may not exist yet on a
