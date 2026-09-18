@@ -468,6 +468,14 @@ def petty_cash_needs_approval(kind: str, amount: float) -> bool:
     return str(kind or "") == "Out" and money(amount) > PETTY_CASH_APPROVAL_AMOUNT
 
 
+# prompt_2_attendance_payroll_link.md's payroll approval gate: a payroll
+# period with unresolved attendance exceptions (late/missing-punch/etc.)
+# can't move to Approved without an explicit override. Pure predicate —
+# api_hr.py owns the DB read and the override/audit logic.
+def payroll_approval_blocked(attendance_exceptions: list) -> bool:
+    return bool(attendance_exceptions)
+
+
 def quote_total(subtotal: float, discount: float, tax_pct: float) -> dict:
     """Roll lines → subtotal → discount → tax → grand total. Discount is an absolute ₹."""
     sub = round(money(subtotal), 2)

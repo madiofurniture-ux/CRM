@@ -17,15 +17,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import tenancy
 import permissions as perm
+import lifecycle as lc
 from auth import get_current_user
 from models_hr import (
-    new_id, now_iso, attendance_status, overlap_days,
+    new_id, now_iso, attendance_status, overlap_days, STANDARD_DAY_HOURS,
     AttendanceLogCreate, PayrollPeriodCreate, PayrollStatusUpdate,
     LeaveRequestCreate, LeaveStatusUpdate, BulkPayrollCreate,
+    ImportAttendanceRequest, UnlockAttendanceRequest,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -171,6 +173,62 @@ async def _approved_unpaid_leave_days(db, employee_id: str, start: str, end: str
     return float(sum(overlap_days(r["date_from"], r["date_to"], start, end) for r in rows))
 
 
+async def _attendance_breakdown(db, employee_id: str, start: str, end: str, user: dict) -> dict:
+    """Per-calendar-date reconciliation of hr_attendance_logs + ANY approved
+    leave (paid or unpaid — a day off with sign-off is payable either way,
+    unlike _approved_unpaid_leave_days above which only feeds the pay
+    deduction and deliberately ignores Paid leave) against
+    [start, end]. A date with no log row at all is Absent, same convention
+    as attendance_status(None, ...).
+
+    breakdown buckets: Present/Late/HalfDay/Overtime (worked), Leave
+    (Absent, covered by approved leave), LOP (Absent, not covered) — no
+    Holiday bucket, this codebase has no holiday-calendar concept to derive
+    one from.
+    """
+    rows = await _employee_attendance_rows(db, employee_id, start, end, user)
+    by_date = {r["date"]: r for r in rows}
+    leave_rows = await db[LEAVE_REQUESTS].find(
+        tenancy.scope({"employee_id": employee_id, "status": "Approved"}, LEAVE_REQUESTS, user),
+        {"_id": 0}).to_list(500)
+
+    def _on_approved_leave(date_str: str) -> bool:
+        return any(lr["date_from"] <= date_str <= lr["date_to"] for lr in leave_rows)
+
+    d1, d2 = datetime.fromisoformat(start).date(), datetime.fromisoformat(end).date()
+    breakdown: dict = {}
+    payable_days = lop_days = overtime_hours = 0.0
+    exceptions: list[str] = []
+    cur = d1
+    while cur <= d2:
+        ds = cur.isoformat()
+        row = by_date.get(ds)
+        status = row["status"] if row else "Absent"
+        if status == "Absent":
+            bucket = "Leave" if _on_approved_leave(ds) else "LOP"
+            if bucket == "Leave":
+                payable_days += 1
+            else:
+                lop_days += 1
+        else:
+            bucket = status
+            payable_days += 1
+        breakdown[bucket] = breakdown.get(bucket, 0) + 1
+        if status == "Overtime" and row:
+            overtime_hours += max(0.0, (row.get("total_hours") or 0.0) - STANDARD_DAY_HOURS)
+        if status == "Late":
+            exceptions.append(f"Late on {ds}")
+        if row and row.get("check_in") and not row.get("check_out"):
+            exceptions.append(f"Missing punch on {ds}")
+        cur += timedelta(days=1)
+
+    return {
+        "payable_days": payable_days, "lop_days": lop_days,
+        "overtime_hours": round(overtime_hours, 2),
+        "attendance_breakdown": breakdown, "attendance_exceptions": exceptions,
+    }
+
+
 # =========================== Payroll ===========================
 async def _payroll_roles(db, user: dict) -> list:
     return await _roles_for(db, user)
@@ -275,6 +333,16 @@ async def _calculate_payroll(db, user: dict, payload: PayrollPeriodCreate, *, pe
     incentive_bonus, payout_ids = await _earned_commission_bonus(db, employee.get("name", ""), user)
     net_salary = round(pay["gross_pay"] + payload.bonuses + incentive_bonus - payload.deductions, 2)
 
+    # prompt_2_attendance_payroll_link.md: attendance is imported as part of
+    # this same call (this codebase creates+computes a period in one step —
+    # see this function's own module-level note in
+    # docs/ATTENDANCE_PAYROLL_LINK_DESIGN.md for why). lop_deduction/
+    # overtime_pay reuse compute_gross_pay's OWN day_rate/overtime_pay
+    # rather than recomputing a second formula — same money, same rate.
+    breakdown = await _attendance_breakdown(
+        db, payload.employee_id, payload.period_start, payload.period_end, user)
+    lop_deduction = round(pay["day_rate"] * breakdown["lop_days"], 2)
+
     doc = payload.model_dump(exclude={"working_days_in_period"})
     doc.update({
         "id": new_id(),
@@ -287,6 +355,14 @@ async def _calculate_payroll(db, user: dict, payload: PayrollPeriodCreate, *, pe
         "net_salary": net_salary,
         "status": "Draft",
         "created_at": now_iso(),
+        "payable_days": breakdown["payable_days"], "lop_days": breakdown["lop_days"],
+        "overtime_hours": breakdown["overtime_hours"],
+        "attendance_breakdown": breakdown["attendance_breakdown"],
+        "attendance_exceptions": breakdown["attendance_exceptions"],
+        "lop_deduction": lop_deduction, "overtime_pay": pay["overtime_pay"],
+        "attendance_imported": True, "attendance_imported_at": now_iso(),
+        "attendance_imported_by": (user or {}).get("id", ""),
+        "attendance_locked": True,
     })
     doc["updated_at"] = doc["created_at"]
     tenancy.stamp(doc, PAYROLL_PERIODS, user)
@@ -346,11 +422,136 @@ async def payroll_get(period_id: str, request: Request, user: dict = Depends(get
     return doc
 
 
+async def _period_or_404(db, period_id: str, user: dict) -> dict:
+    owned = tenancy.scope({"id": period_id}, PAYROLL_PERIODS, user)
+    doc = await db[PAYROLL_PERIODS].find_one(owned, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Payroll period not found")
+    return doc
+
+
+@router.post("/payroll/{period_id}/import-attendance")
+async def payroll_import_attendance(period_id: str, payload: ImportAttendanceRequest, request: Request,
+                                     user: dict = Depends(get_current_user)):
+    """Re-derives payable_days/lop_days/overtime_hours/breakdown/exceptions
+    for an existing Draft period from current hr_attendance_logs/leave_requests
+    state. The initial /payroll/calculate already imports once (see that
+    function) — this is for re-importing after attendance data changed,
+    which is why it's blocked once attendance_locked (unlock-attendance
+    first). dry_run=True never persists or unlocks anything."""
+    db = _db(request)
+    await _require_payroll(db, user, "create")
+    period = await _period_or_404(db, period_id, user)
+    if period.get("status") != "Draft":
+        raise HTTPException(status_code=400, detail="Payroll period must be in Draft status to import attendance")
+    if period.get("attendance_locked") and not payload.dry_run:
+        raise HTTPException(
+            status_code=400,
+            detail="Attendance is locked for this period — unlock it first (POST .../unlock-attendance)")
+
+    breakdown = await _attendance_breakdown(
+        db, period["employee_id"], period["period_start"], period["period_end"], user)
+
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    employee = await db.users.find_one(
+        {"id": period["employee_id"], "tenant_id": tid}, {"_id": 0, "pin_hash": 0})
+    working_days = period.get("working_days_in_period") or max(
+        1, (datetime.fromisoformat(period["period_end"]).date()
+            - datetime.fromisoformat(period["period_start"]).date()).days + 1)
+    day_rate = 0.0
+    overtime_pay = 0.0
+    if employee:
+        import server as _server
+        day_rate = (employee.get("base_pay_rate", 0.0) / working_days
+                    if (employee.get("pay_model", "monthly")) != "daily"
+                    else employee.get("base_pay_rate", 0.0))
+        hourly_rate = day_rate / _server.STANDARD_WORKDAY_HOURS
+        if employee.get("overtime_eligible", False):
+            overtime_pay = round(hourly_rate * breakdown["overtime_hours"]
+                                 * float(employee.get("overtime_rate_multiplier", 1.0) or 1.0), 2)
+    lop_deduction = round(day_rate * breakdown["lop_days"], 2)
+
+    result = {
+        "payable_days": breakdown["payable_days"], "lop_days": breakdown["lop_days"],
+        "overtime_hours": breakdown["overtime_hours"],
+        "attendance_breakdown": breakdown["attendance_breakdown"],
+        "attendance_exceptions": breakdown["attendance_exceptions"],
+        "lop_deduction": lop_deduction, "overtime_pay": overtime_pay,
+        "affected_employees": [period["employee_id"]],
+    }
+    if payload.dry_run:
+        return result
+
+    owned = tenancy.scope({"id": period_id}, PAYROLL_PERIODS, user)
+    upd = {**{k: v for k, v in result.items() if k != "affected_employees"},
+           "attendance_imported": True, "attendance_imported_at": now_iso(),
+           "attendance_imported_by": (user or {}).get("id", ""),
+           "attendance_locked": True, "updated_at": now_iso()}
+    await db[PAYROLL_PERIODS].update_one(owned, {"$set": upd})
+    return await db[PAYROLL_PERIODS].find_one(owned, {"_id": 0})
+
+
+@router.get("/payroll/{period_id}/attendance-summary")
+async def payroll_attendance_summary(period_id: str, request: Request,
+                                      user: dict = Depends(get_current_user)):
+    """Live preview (not persisted, doesn't touch attendance_locked) — a
+    payroll period here is always one employee, so this is a one-row list,
+    matching the prompt's declared per-employee response shape."""
+    db = _db(request)
+    await _require_payroll(db, user, "view")
+    period = await _period_or_404(db, period_id, user)
+    breakdown = await _attendance_breakdown(
+        db, period["employee_id"], period["period_start"], period["period_end"], user)
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    employee = await db.users.find_one(
+        {"id": period["employee_id"], "tenant_id": tid}, {"_id": 0, "name": 1})
+    return [{
+        "employee_id": period["employee_id"], "name": (employee or {}).get("name", ""),
+        "payable_days": breakdown["payable_days"], "lop_days": breakdown["lop_days"],
+        "overtime_hours": breakdown["overtime_hours"],
+        "exceptions": breakdown["attendance_exceptions"],
+    }]
+
+
+@router.post("/payroll/{period_id}/unlock-attendance")
+async def payroll_unlock_attendance(period_id: str, payload: UnlockAttendanceRequest, request: Request,
+                                     user: dict = Depends(get_current_user)):
+    """Division-Head-style action — same "payroll:approve" grant this
+    module already uses for status changes (no separate role literal exists
+    in permissions.py; grants are role-configured, not role-named)."""
+    db = _db(request)
+    await _require_payroll(db, user, "approve")
+    period = await _period_or_404(db, period_id, user)
+    owned = tenancy.scope({"id": period_id}, PAYROLL_PERIODS, user)
+    await db[PAYROLL_PERIODS].update_one(
+        owned, {"$set": {"attendance_locked": False, "updated_at": now_iso()}})
+    import server as _server
+    await _server.record_activity(
+        "payroll_period", period_id, "unlock_attendance", user,
+        before={"attendance_locked": period.get("attendance_locked")},
+        after={"attendance_locked": False, "reason": payload.reason or ""})
+    return await db[PAYROLL_PERIODS].find_one(owned, {"_id": 0})
+
+
 @router.post("/payroll/{period_id}/status")
 async def payroll_set_status(period_id: str, payload: PayrollStatusUpdate, request: Request,
                               user: dict = Depends(get_current_user)):
     db = _db(request)
     await _require_payroll(db, user, "approve")
+    period = await _period_or_404(db, period_id, user)
+
+    if payload.status == "Approved" and lc.payroll_approval_blocked(period.get("attendance_exceptions") or []):
+        exceptions = period.get("attendance_exceptions") or []
+        if not payload.override_attendance_exceptions:
+            raise HTTPException(
+                status_code=400,
+                detail={"message": f"{len(exceptions)} attendance exceptions must be resolved",
+                        "exceptions": exceptions})
+        import server as _server
+        await _server.record_activity(
+            "payroll_period", period_id, "override_attendance_exceptions", user,
+            before={"exceptions": exceptions}, after={"reason": payload.override_reason or ""})
+
     owned = tenancy.scope({"id": period_id}, PAYROLL_PERIODS, user)
     res = await db[PAYROLL_PERIODS].update_one(
         owned, {"$set": {"status": payload.status, "updated_at": now_iso()}})

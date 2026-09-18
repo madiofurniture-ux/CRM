@@ -20,7 +20,7 @@ avoid a circular import with server.py.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, Literal
 from datetime import datetime
 
@@ -173,6 +173,25 @@ class PayrollPeriod(BaseModel):
     incentive_bonus: float = 0.0
     net_salary: float = 0.0
     status: Literal["Draft", "Approved", "Paid"] = "Draft"
+    # prompt_2_attendance_payroll_link.md — attendance -> payroll linkage.
+    # payable_days/lop_days/overtime_hours/attendance_breakdown/
+    # attendance_exceptions are computed by api_hr.py's import-attendance
+    # step (folded into the initial /payroll/calculate too — see that
+    # module for why); lop_deduction/overtime_pay are DISPLAY-only register
+    # lines derived from the same day_rate/hourly_rate compute_gross_pay
+    # already produces, never fed back into gross_pay/net_salary (Constraints:
+    # "Preserve existing payroll arithmetic").
+    attendance_imported: bool = False
+    attendance_imported_at: Optional[str] = None
+    attendance_imported_by: Optional[str] = None
+    payable_days: float = 0.0
+    lop_days: float = 0.0
+    overtime_hours: float = 0.0
+    attendance_breakdown: dict = Field(default_factory=dict)
+    attendance_exceptions: list[str] = Field(default_factory=list)
+    attendance_locked: bool = False
+    lop_deduction: float = 0.0
+    overtime_pay: float = 0.0
     tenant_id: str
     created_at: str
     updated_at: str
@@ -180,6 +199,21 @@ class PayrollPeriod(BaseModel):
 
 class PayrollStatusUpdate(BaseModel):
     status: Literal["Draft", "Approved", "Paid"]
+    # Set to bypass the attendance-exceptions approval gate below — requires
+    # the same "payroll:approve" grant as any status change, audited via
+    # record_activity when used.
+    override_attendance_exceptions: bool = False
+    override_reason: Optional[str] = ""
+
+
+class ImportAttendanceRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    dry_run: bool = False
+
+
+class UnlockAttendanceRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    reason: Optional[str] = ""
 
 
 def demo() -> None:
