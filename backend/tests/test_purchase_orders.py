@@ -217,3 +217,138 @@ def test_masked_pnl_still_hides_field_settlement_spend_with_material_cost_presen
         assert row["net_margin"] is None
         assert pnl["summary"]["total_field_settlement_spend"] is None
     asyncio.run(run())
+
+
+# --------------------------------------------------------- Phase 6: approval
+def test_po_under_threshold_needs_no_approval():
+    assert lc.po_needs_approval(lc.PO_APPROVAL_AMOUNT) is False
+    assert lc.po_needs_approval(lc.PO_APPROVAL_AMOUNT + 1) is True
+
+
+def test_normalize_marks_over_threshold_po_pending_and_blocks_issue():
+    async def run():
+        await _make_vendor()
+        doc = {"vendor_id": "v1", "status": "Issued",
+               "line_items": [{"qty": 1, "rate": lc.PO_APPROVAL_AMOUNT + 1000, "tax_pct": 0}]}
+        with pytest.raises(HTTPException) as e:
+            await server.normalize_purchase_order(doc, None, ADMIN)
+        assert e.value.status_code == 400
+    asyncio.run(run())
+
+
+def test_normalize_lets_over_threshold_po_stay_draft():
+    async def run():
+        await _make_vendor()
+        doc = {"vendor_id": "v1", "status": "Draft",
+               "line_items": [{"qty": 1, "rate": lc.PO_APPROVAL_AMOUNT + 1000, "tax_pct": 0}]}
+        await server.normalize_purchase_order(doc, None, ADMIN)
+        assert doc["approval"] == "pending"
+    asyncio.run(run())
+
+
+def test_approving_po_then_issuing_succeeds():
+    async def run():
+        await _make_vendor()
+        doc = {"vendor_id": "v1", "status": "Draft",
+               "line_items": [{"qty": 1, "rate": lc.PO_APPROVAL_AMOUNT + 1000, "tax_pct": 0}]}
+        await server.normalize_purchase_order(doc, None, ADMIN)
+        doc["id"] = "po1"
+        tenancy.stamp(doc, "purchase_orders", ADMIN)
+        doc["created_at"] = "2026-01-01T00:00:00+00:00"
+        await server.db.purchase_orders.insert_one(dict(doc))
+
+        await server.purchase_order_approve("po1", {"approved": True}, ADMIN)
+        existing = await server.db.purchase_orders.find_one({"id": "po1"}, {"_id": 0})
+        assert existing["approval"] == "approved"
+
+        update = {"status": "Issued", "line_items": existing["line_items"]}
+        await server.normalize_purchase_order(update, existing, ADMIN)
+        assert update["approval"] == "approved"  # unchanged amount keeps the sign-off
+    asyncio.run(run())
+
+
+def test_raising_total_after_approval_drops_it_back_to_pending():
+    async def run():
+        await _make_vendor()
+        existing = {"vendor_id": "v1", "status": "Draft", "approval": "approved",
+                    "grand_total": lc.PO_APPROVAL_AMOUNT + 1000,
+                    "line_items": [{"qty": 1, "rate": lc.PO_APPROVAL_AMOUNT + 1000, "tax_pct": 0}]}
+        doc = {"line_items": [{"qty": 1, "rate": lc.PO_APPROVAL_AMOUNT + 5000, "tax_pct": 0}]}
+        await server.normalize_purchase_order(doc, existing, ADMIN)
+        assert doc["approval"] == "pending"
+    asyncio.run(run())
+
+
+# --------------------------------------------------------------- Phase 6: GRN
+async def _seed_issued_po(qty=10):
+    await _make_vendor()
+    doc = {"vendor_id": "v1", "status": "Issued",
+           "line_items": [{"sku": "SKU-1", "description": "Ply sheet", "qty": qty, "rate": 100, "tax_pct": 0}]}
+    await server.normalize_purchase_order(doc, None, ADMIN)
+    doc["id"] = "po1"
+    tenancy.stamp(doc, "purchase_orders", ADMIN)
+    doc["created_at"] = "2026-01-01T00:00:00+00:00"
+    await server.db.purchase_orders.insert_one(dict(doc))
+    return doc
+
+
+def test_partial_receive_stays_issued_and_logs_stock_movement():
+    async def run():
+        await _seed_issued_po(qty=10)
+        out = await server.purchase_order_receive(
+            "po1", {"lines": [{"index": 0, "qty": 4}]}, ADMIN)
+        assert out["status"] == "Issued"
+        assert out["received_qty"] == [4.0]
+        moves = await server.db.stock_movements.find({}, {"_id": 0}).to_list(10)
+        assert len(moves) == 1
+        assert moves[0]["type"] == "Receipt" and moves[0]["qty"] == 4 and moves[0]["source_doc"] == out["po_no"]
+    asyncio.run(run())
+
+
+def test_full_receive_flips_status_to_received():
+    async def run():
+        await _seed_issued_po(qty=10)
+        await server.purchase_order_receive("po1", {"lines": [{"index": 0, "qty": 6}]}, ADMIN)
+        out = await server.purchase_order_receive("po1", {"lines": [{"index": 0, "qty": 4}]}, ADMIN)
+        assert out["status"] == "Received"
+        assert out["received_qty"] == [10.0]
+    asyncio.run(run())
+
+
+def test_cannot_over_receive_past_ordered_qty():
+    async def run():
+        await _seed_issued_po(qty=10)
+        with pytest.raises(HTTPException) as e:
+            await server.purchase_order_receive("po1", {"lines": [{"index": 0, "qty": 11}]}, ADMIN)
+        assert e.value.status_code == 400
+    asyncio.run(run())
+
+
+def test_cannot_receive_a_draft_po():
+    async def run():
+        await _make_vendor()
+        doc = {"vendor_id": "v1", "status": "Draft",
+               "line_items": [{"sku": "SKU-1", "qty": 5, "rate": 100, "tax_pct": 0}]}
+        await server.normalize_purchase_order(doc, None, ADMIN)
+        doc["id"] = "po1"
+        tenancy.stamp(doc, "purchase_orders", ADMIN)
+        doc["created_at"] = "2026-01-01T00:00:00+00:00"
+        await server.db.purchase_orders.insert_one(dict(doc))
+        with pytest.raises(HTTPException) as e:
+            await server.purchase_order_receive("po1", {"lines": [{"index": 0, "qty": 1}]}, ADMIN)
+        assert e.value.status_code == 400
+    asyncio.run(run())
+
+
+# --------------------------------------------------- Phase 6: reservation
+def test_reservation_movements_do_not_affect_physical_on_hand():
+    moves = [{"product_id": "SKU-1", "type": "Receipt", "qty": 10},
+             {"product_id": "SKU-1", "type": "Reservation", "qty": 4}]
+    assert lc.stock_on_hand(moves) == {"SKU-1": 10}
+    assert lc.stock_reserved(moves) == {"SKU-1": 4}
+
+
+def test_reservation_can_be_released_with_a_negative_row():
+    moves = [{"product_id": "SKU-1", "type": "Reservation", "qty": 4},
+             {"product_id": "SKU-1", "type": "Reservation", "qty": -4}]
+    assert lc.stock_reserved(moves) == {"SKU-1": 0}

@@ -107,6 +107,42 @@ def test_daily_log_completion_percentage_only_moves_up():
     asyncio.run(run())
 
 
+def test_daily_log_production_milestone_blocked_without_dw_sign_off():
+    async def run():
+        from fastapi import HTTPException
+        await _make_project(id="p1", division="D&W")
+        await server.db.dw_surveys.insert_one({
+            "id": "s1", "survey_id": "DW-2601-001", "project_id": "p1",
+            "client_sign_off": False, "created_at": "2026-01-01T00:00:00+00:00",
+            "tenant_id": ADMIN["tenant_id"],
+        })
+        with pytest.raises(HTTPException) as exc:
+            await server.create_project_daily_log("p1", ProjectDailyLogCreate(
+                project_id="p1", log_date="2026-01-02", supervisor_name="Vijay",
+                work_completed_today="Frames arrived", current_milestone="Production",
+            ), user=ADMIN)
+        assert exc.value.status_code == 400
+        assert "DW-2601-001" in exc.value.detail
+    asyncio.run(run())
+
+
+def test_daily_log_production_milestone_allowed_after_dw_sign_off():
+    async def run():
+        await _make_project(id="p1", division="D&W")
+        await server.db.dw_surveys.insert_one({
+            "id": "s1", "survey_id": "DW-2601-001", "project_id": "p1",
+            "client_sign_off": True, "created_at": "2026-01-01T00:00:00+00:00",
+            "tenant_id": ADMIN["tenant_id"],
+        })
+        await server.create_project_daily_log("p1", ProjectDailyLogCreate(
+            project_id="p1", log_date="2026-01-02", supervisor_name="Vijay",
+            work_completed_today="Frames arrived", current_milestone="Production",
+        ), user=ADMIN)
+        project = await server.db.projects.find_one({"id": "p1"}, {"_id": 0})
+        assert project["current_milestone"] == "Production"
+    asyncio.run(run())
+
+
 def test_daily_log_for_missing_project_404s():
     async def run():
         from fastapi import HTTPException

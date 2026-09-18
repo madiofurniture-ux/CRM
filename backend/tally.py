@@ -26,6 +26,8 @@ apostrophe are escaped rather than producing a malformed envelope.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import xml.etree.ElementTree as ET
 
 # Voucher classification -------------------------------------------------
@@ -120,6 +122,54 @@ def build_voucher_xml(txn: dict, company: str = "") -> str:
     amount = float(txn.get("amount") or 0)
     _ledger_entry(voucher, str(txn.get("to_ledger") or ""), amount, debit=True)
     _ledger_entry(voucher, str(txn.get("from_ledger") or ""), amount, debit=False)
+
+    return ET.tostring(envelope, encoding="unicode")
+
+
+def content_hash(payload: dict) -> str:
+    """Stable hash of a sync payload's content — the SyncRun/SyncItem
+    idempotency ledger (server.py) keys on this, keyed together with
+    (tenant_id, entity_type, source_id, operation), to answer "did this
+    record's Tally-relevant fields change since the last successful sync"
+    without re-deriving that per entity type."""
+    canonical = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def build_ledger_xml(customer: dict, company: str = "", parent_group: str = "Sundry Debtors") -> str:
+    """A Tally Masters envelope creating/updating one Ledger (a customer, as
+    a Sundry Debtor by default). Same envelope shape as build_voucher_xml's
+    module docstring describes, except REPORTNAME is "All Masters" and the
+    message body is a LEDGER master instead of a VOUCHER — Tally's import
+    format for a master is a different tag under the same envelope, not a
+    different transport."""
+    envelope = ET.Element("ENVELOPE")
+    header = ET.SubElement(envelope, "HEADER")
+    ET.SubElement(header, "TALLYREQUEST").text = "Import Data"
+
+    body = ET.SubElement(envelope, "BODY")
+    importdata = ET.SubElement(body, "IMPORTDATA")
+
+    desc = ET.SubElement(importdata, "REQUESTDESC")
+    ET.SubElement(desc, "REPORTNAME").text = "All Masters"
+    statics = ET.SubElement(desc, "STATICVARIABLES")
+    ET.SubElement(statics, "SVCURRENTCOMPANY").text = company
+
+    data = ET.SubElement(importdata, "REQUESTDATA")
+    message = ET.SubElement(data, "TALLYMESSAGE")
+    message.set("xmlns:UDF", "TallyUDF")
+
+    ledger = ET.SubElement(message, "LEDGER")
+    ledger.set("NAME", str(customer.get("name") or ""))
+    ledger.set("ACTION", "Create")
+    ET.SubElement(ledger, "PARENT").text = parent_group
+    if customer.get("gstin"):
+        ET.SubElement(ledger, "GSTIN").text = str(customer["gstin"])
+    if customer.get("phone"):
+        ET.SubElement(ledger, "LEDGERPHONE").text = str(customer["phone"])
+    if customer.get("address"):
+        addr_list = ET.SubElement(ledger, "ADDRESS.LIST")
+        ET.SubElement(addr_list, "ADDRESS").text = str(customer["address"])
 
     return ET.tostring(envelope, encoding="unicode")
 

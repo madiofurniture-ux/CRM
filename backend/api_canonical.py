@@ -22,7 +22,7 @@ import modules_loader
 from auth import get_current_user
 from models_canonical import (
     new_id, now_iso, LEAD_STATUSES,
-    LeadCreate, AccountCreate, OpportunityCreate,
+    LeadCreate, AccountCreate, OpportunityCreate, ContactCreate, ActivityCreate,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -30,6 +30,9 @@ router = APIRouter(prefix="/api/v1")
 LEADS = "crm_leads"
 OPPORTUNITIES = "crm_opportunities"
 ACCOUNTS = "crm_accounts"
+CONTACTS = "crm_contacts"
+QUOTATIONS = "crm_quotations"
+ACTIVITIES = "crm_activities"
 
 
 def _db(request: Request):
@@ -240,6 +243,124 @@ async def opportunities_set_won(opportunity_id: str, request: Request,
 async def opportunities_set_lost(opportunity_id: str, request: Request,
                                   user: dict = Depends(get_current_user)):
     return await _close(_db(request), opportunity_id, user, won=False)
+
+
+# =========================== Accounts ===========================
+@router.get("/accounts")
+async def accounts_search(
+    brand_id: str, q: Optional[str] = None, type: Optional[str] = None,
+    request: Request = None, user: dict = Depends(get_current_user),
+):
+    _require_brand(brand_id)
+    db = _db(request)
+    query = tenancy.scope({"brand_id": brand_id}, ACCOUNTS, user)
+    if type:
+        query["type"] = type
+    query.update(_search_query(q, ["name", "phone", "email"]))
+    items = await db[ACCOUNTS].find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return items
+
+
+@router.post("/accounts")
+async def accounts_create(payload: AccountCreate, request: Request,
+                           user: dict = Depends(get_current_user)):
+    _require_brand(payload.brand_id)
+    return await _insert(_db(request), ACCOUNTS, payload.model_dump(), user)
+
+
+@router.get("/accounts/{account_id}")
+async def accounts_get(account_id: str, request: Request, user: dict = Depends(get_current_user)):
+    return await _get_or_404(_db(request), ACCOUNTS, account_id, user)
+
+
+@router.put("/accounts/{account_id}")
+async def accounts_update(account_id: str, payload: dict, request: Request,
+                           user: dict = Depends(get_current_user)):
+    return await _apply_update(_db(request), ACCOUNTS, account_id, payload, user)
+
+
+# =========================== Contacts ===========================
+@router.get("/contacts")
+async def contacts_search(
+    brand_id: str, account_id: Optional[str] = None, q: Optional[str] = None,
+    request: Request = None, user: dict = Depends(get_current_user),
+):
+    _require_brand(brand_id)
+    db = _db(request)
+    query = tenancy.scope({"brand_id": brand_id}, CONTACTS, user)
+    if account_id:
+        query["account_id"] = account_id
+    query.update(_search_query(q, ["name", "phone", "email"]))
+    items = await db[CONTACTS].find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return items
+
+
+@router.post("/contacts")
+async def contacts_create(payload: ContactCreate, request: Request,
+                           user: dict = Depends(get_current_user)):
+    _require_brand(payload.brand_id)
+    db = _db(request)
+    if payload.account_id and not await db[ACCOUNTS].find_one(
+            tenancy.scope({"id": payload.account_id}, ACCOUNTS, user)):
+        raise HTTPException(status_code=400, detail=f"Unknown account_id: {payload.account_id!r}")
+    return await _insert(db, CONTACTS, payload.model_dump(), user)
+
+
+@router.get("/contacts/{contact_id}")
+async def contacts_get(contact_id: str, request: Request, user: dict = Depends(get_current_user)):
+    return await _get_or_404(_db(request), CONTACTS, contact_id, user)
+
+
+@router.put("/contacts/{contact_id}")
+async def contacts_update(contact_id: str, payload: dict, request: Request,
+                           user: dict = Depends(get_current_user)):
+    return await _apply_update(_db(request), CONTACTS, contact_id, payload, user)
+
+
+# =========================== Activities ===========================
+# Append-only timeline, deliberately no PUT — a mistaken entry gets a
+# correcting activity, not a silent rewrite (same spirit as chatter/audit
+# logs elsewhere: the record of what was said is itself the point).
+RELATED_COLLECTION = {
+    "account": ACCOUNTS, "contact": CONTACTS, "lead": LEADS,
+    "opportunity": OPPORTUNITIES, "quotation": QUOTATIONS,
+}
+
+
+@router.get("/activities")
+async def activities_search(
+    brand_id: str, related_entity: Optional[str] = None, related_id: Optional[str] = None,
+    request: Request = None, user: dict = Depends(get_current_user),
+):
+    _require_brand(brand_id)
+    db = _db(request)
+    query = tenancy.scope({"brand_id": brand_id}, ACTIVITIES, user)
+    if related_entity:
+        query["related_entity"] = related_entity
+    if related_id:
+        query["related_id"] = related_id
+    items = await db[ACTIVITIES].find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return items
+
+
+@router.post("/activities")
+async def activities_create(payload: ActivityCreate, request: Request,
+                             user: dict = Depends(get_current_user)):
+    _require_brand(payload.brand_id)
+    db = _db(request)
+    collection = RELATED_COLLECTION.get(payload.related_entity)
+    owned = collection and await db[collection].find_one(
+        tenancy.scope({"id": payload.related_id}, collection, user))
+    if not owned:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown {payload.related_entity} id: {payload.related_id!r}")
+    return await _insert(db, ACTIVITIES, payload.model_dump(), user)
+
+
+@router.get("/activities/{activity_id}")
+async def activities_get(activity_id: str, request: Request, user: dict = Depends(get_current_user)):
+    return await _get_or_404(_db(request), ACTIVITIES, activity_id, user)
 
 
 # =========================== Brand config (module manifests) ===========================

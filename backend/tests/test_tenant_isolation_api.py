@@ -45,6 +45,13 @@ ENDPOINTS = [
     ("/api/stock-movements", None), ("/api/dw-surveys", None),
     ("/api/outstanding", "*"), ("/api/reports", "*"), ("/api/alerts", "*"),
     ("/api/analytics/inventory", "*"), ("/api/dashboard/stats", "*"),
+    # Canonical CRM v1 + HR (backend/api_canonical.py, backend/api_hr.py) —
+    # same tenant_id chokepoint, added when those routers were built.
+    ("/api/v1/leads?brand_id=navaki", None),
+    ("/api/v1/attendance", None),
+    ("/api/v1/payroll", None),
+    ("/api/v1/accounts?brand_id=navaki", None),
+    ("/api/v1/contacts?brand_id=navaki", None),
 ]
 
 # One record seeded into tenant A per collection named in the P0 patch spec
@@ -92,6 +99,32 @@ WRITE_ENDPOINTS = {
         "create": "/api/stock-movements",
         "payload": lambda tag: {"product_id": f"SKU-{tag}", "qty": 1},
         "delete": lambda i: f"/api/stock-movements/{i}",
+    },
+    "crm_leads": {
+        # brand_id is a required query param on GET /api/v1/leads (used both
+        # to create below and to re-list for the write-safety check further
+        # down); harmless on POST, which reads brand_id from the JSON body.
+        "create": "/api/v1/leads?brand_id=navaki",
+        "payload": lambda tag: {"brand_id": "navaki", "name": f"Iso CRM Lead {tag}"},
+        "put": lambda i: f"/api/v1/leads/{i}",
+    },
+    "crm_accounts": {
+        "create": "/api/v1/accounts?brand_id=navaki",
+        "payload": lambda tag: {"brand_id": "navaki", "name": f"Iso CRM Account {tag}"},
+        "put": lambda i: f"/api/v1/accounts/{i}",
+    },
+    "crm_contacts": {
+        # account_id is intentionally omitted here — cross-tenant account_id
+        # rejection is proven separately below (own account, real; other
+        # tenant's account, must 400), not through this generic seed loop.
+        "create": "/api/v1/contacts?brand_id=navaki",
+        "payload": lambda tag: {"brand_id": "navaki", "name": f"Iso CRM Contact {tag}"},
+        "put": lambda i: f"/api/v1/contacts/{i}",
+    },
+    "hr_attendance_logs": {
+        "create": "/api/v1/attendance",
+        "payload": lambda tag: {"employee_id": f"iso-emp-{tag}", "date": TODAY,
+                                 "check_in": f"{TODAY}T09:00:00+00:00"},
     },
 }
 
@@ -187,7 +220,10 @@ def main():
     print(f"tenant A: {tenant_a['id']}\ntenant B: {tenant_b['id']} (starts with no records)\n")
 
     # ── seed exactly one record per named collection into tenant A only ────
-    tag = uuid.uuid4().hex[:8]
+    # Hex (uuid4().hex), not decimal — the leads payload below builds a phone
+    # number from tag[-5:], which normalize_indian_phone() rejects whenever
+    # the hex happens to contain a letter (a-f). Digits only avoids that.
+    tag = str(uuid.uuid4().int)[:8]
     created, seed_failures = {}, []
     for coll, spec in WRITE_ENDPOINTS.items():
         s, resp = call(base, "POST", spec["create"], spec["payload"](tag), token_a)
@@ -276,11 +312,59 @@ def main():
             write_fail.append((coll, "record mutated by cross-tenant PUT attempt", "-"))
 
     print()
+    if not write_fail:
+        print(f"  cross-tenant PUT/DELETE correctly rejected for {len(created)} collections")
+
+    # ── payroll cross-tenant employee lookup (backend/api_hr.py) ───────────
+    # POST /api/v1/payroll/calculate looks up the employee by id on the
+    # "users" collection, which tenancy.scope() does NOT filter (users is
+    # deliberately excluded from TENANT_COLLECTIONS — see tenancy.py). A
+    # missing hand-written tenant_id filter there would let tenant B
+    # calculate payroll — i.e. read salary figures — for tenant A's staff by
+    # guessing/knowing their user id. This is a regression test for exactly
+    # that bug (found and fixed in api_hr.py's payroll_calculate).
+    s, my_users = call(base, "GET", "/api/auth/users", None, token_a)
+    a_employee_id = my_users[0]["id"] if s == 200 and my_users else None
+    if not a_employee_id:
+        write_fail.append(("payroll_cross_tenant", "could not fetch tenant A's own user id", s))
+    else:
+        s_self, _ = call(base, "POST", "/api/v1/payroll/calculate",
+                          {"employee_id": a_employee_id, "period_start": TODAY, "period_end": TODAY}, token_a)
+        if s_self != 200:
+            write_fail.append(("payroll_cross_tenant", "tenant A calculating its OWN payroll failed", s_self))
+        s_cross, body_cross = call(base, "POST", "/api/v1/payroll/calculate",
+                                    {"employee_id": a_employee_id, "period_start": TODAY, "period_end": TODAY}, token_b)
+        if s_cross != 404:
+            write_fail.append(("payroll_cross_tenant",
+                                f"tenant B calculated payroll for tenant A's employee_id (got {s_cross}, expected 404)",
+                                body_cross))
+        else:
+            print(f"  cross-tenant payroll employee lookup correctly rejected (404)")
+
+    # ── chain-integrity: a record must never be creatable pointing at
+    #    another tenant's parent record (backend/api_canonical.py) ────────
+    a_account_id = created.get("crm_accounts")
+    if a_account_id:
+        s, body = call(base, "POST", "/api/v1/contacts",
+                        {"brand_id": "navaki", "account_id": a_account_id, "name": "Cross Tenant Contact"},
+                        token_b)
+        if s == 200:
+            write_fail.append(("chain_integrity", "contact created with another tenant's account_id", body))
+        else:
+            print(f"  cross-tenant Contact.account_id correctly rejected ({s})")
+
+        s, body = call(base, "POST", "/api/v1/activities",
+                        {"brand_id": "navaki", "related_entity": "account", "related_id": a_account_id,
+                         "type": "note", "subject": "Cross Tenant Activity"},
+                        token_b)
+        if s == 200:
+            write_fail.append(("chain_integrity", "activity created against another tenant's account", body))
+        else:
+            print(f"  cross-tenant Activity.related_id correctly rejected ({s})")
+
     if write_fail:
         for coll, op, s in write_fail:
-            print(f"  WRITE-LEAK  {coll:<16} {op:<10} expected 404, got {s}")
-    else:
-        print(f"  cross-tenant PUT/DELETE correctly rejected for {len(created)} collections")
+            print(f"  WRITE-LEAK  {coll:<20} {op:<50} {s}")
 
     print(f"\nisolated {len(ok)}   leaking {len(leaks)}   unproven {len(unproven)}   "
           f"write-leaks {len(write_fail)}")

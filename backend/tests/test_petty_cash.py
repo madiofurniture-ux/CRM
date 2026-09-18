@@ -165,3 +165,60 @@ def test_project_petty_cash_summary_aggregates_across_a_projects_wallets():
         assert summary["burn_total"] == 50
         assert summary["pending_total"] == 20
     asyncio.run(run())
+
+
+# ------------------------------------------- Phase 6: flat PettyCash ledger
+# (distinct from the Cashbook wallet system above — see PROJECT_PETTY_CASH_
+# CUTOVER.md for why the two coexist. These cover normalize_petty_cash /
+# petty_cash_approve, the receipt-evidence + approval gate added for it.)
+import lifecycle as lc  # noqa: E402
+from tenancy import stamp  # noqa: E402
+
+
+def test_small_out_entry_is_pre_approved():
+    async def run():
+        doc = {"date": "2026-01-01", "kind": "Out", "amount": 100}
+        await server.normalize_petty_cash(doc, None, ADMIN)
+        assert doc["status"] == "Approved"
+    asyncio.run(run())
+
+
+def test_large_out_entry_starts_pending():
+    async def run():
+        doc = {"date": "2026-01-01", "kind": "Out", "amount": lc.PETTY_CASH_APPROVAL_AMOUNT + 1}
+        await server.normalize_petty_cash(doc, None, ADMIN)
+        assert doc["status"] == "Pending"
+    asyncio.run(run())
+
+
+def test_large_in_entry_is_not_gated():
+    async def run():
+        doc = {"date": "2026-01-01", "kind": "In", "amount": lc.PETTY_CASH_APPROVAL_AMOUNT + 1}
+        await server.normalize_petty_cash(doc, None, ADMIN)
+        assert doc["status"] == "Approved"
+    asyncio.run(run())
+
+
+def test_approving_a_pending_petty_cash_entry():
+    async def run():
+        entry = {"id": "pc1", "date": "2026-01-01", "kind": "Out",
+                 "amount": lc.PETTY_CASH_APPROVAL_AMOUNT + 1, "status": "Pending",
+                 "created_at": "2026-01-01T00:00:00+00:00"}
+        stamp(entry, "petty_cash", ADMIN)
+        await server.db.petty_cash.insert_one(dict(entry))
+        out = await server.petty_cash_approve("pc1", {"approved": True}, ADMIN)
+        assert out["status"] == "Approved"
+        assert out["approved_at"]  # stamped, even though this test user has no "username" field
+    asyncio.run(run())
+
+
+def test_legacy_user_without_approve_grant_cannot_approve_petty_cash():
+    async def run():
+        entry = {"id": "pc1", "date": "2026-01-01", "kind": "Out", "amount": 6000,
+                 "status": "Pending", "created_at": "2026-01-01T00:00:00+00:00"}
+        stamp(entry, "petty_cash", ADMIN)
+        await server.db.petty_cash.insert_one(dict(entry))
+        with pytest.raises(HTTPException) as exc:
+            await server.petty_cash_approve("pc1", {"approved": True}, LEGACY_USER)
+        assert exc.value.status_code == 403
+    asyncio.run(run())

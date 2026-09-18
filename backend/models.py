@@ -529,6 +529,16 @@ class PurchaseOrderBase(BaseModel):
     status: str = "Draft"            # Draft / Issued / Received / Cancelled
     by_user: Optional[str] = ""
     remarks: Optional[str] = ""
+    # "" (no approval needed) | "pending" | "approved" | "rejected" — derived
+    # server-side from lc.po_needs_approval(grand_total), same shape as
+    # Quote.approval. A "pending" PO cannot move to Issued/Received.
+    approval: Optional[str] = ""
+    approved_by: Optional[str] = ""
+    approved_at: Optional[str] = ""
+    # Cumulative received qty per line_items index (GRN) — index-aligned,
+    # padded with 0 for lines not yet received. Populated by
+    # POST /purchase-orders/{id}/receive, never by the client directly.
+    received_qty: List[float] = Field(default_factory=list)
 
     @field_validator("status")
     @classmethod
@@ -799,6 +809,13 @@ class PettyCashBase(BaseModel):
     mode: str = "Other"  # Other (Direct Settlement) / Bank / UPI
     by_user: Optional[str] = ""
     ref: Optional[str] = ""
+    receipt_url: Optional[str] = ""  # evidence photo, shrunk JPEG data URL — same convention as ManufacturerOrder.image_url
+    # Pending / Approved / Rejected — derived server-side from
+    # lc.petty_cash_needs_approval(kind, amount) on create; existing rows
+    # default Approved so this is purely additive.
+    status: str = "Approved"
+    approved_by: Optional[str] = ""
+    approved_at: Optional[str] = ""
 
 
 class PettyCashCreate(PettyCashBase):
@@ -1504,6 +1521,12 @@ class DWSurveyBase(BaseModel):
     # Site photos from the visit, stored as shrunken data URLs so a survey
     # travels as ONE document — engineers are frequently offline on site.
     photos: List[str] = Field(default_factory=list)
+    # Gate for release-to-production (see server.py's create_project_daily_log):
+    # a linked project can't advance current_milestone to "Production" while
+    # any of its D&W surveys have client_sign_off unset.
+    client_sign_off: bool = False
+    client_sign_off_at: Optional[str] = ""
+    client_sign_off_by: Optional[str] = ""
 
 class DWSurveyCreate(DWSurveyBase):
     pass
@@ -2041,3 +2064,14 @@ class PrivacyPinSet(BaseModel):
 class PrivacyPinVerify(BaseModel):
     model_config = ConfigDict(extra="ignore")
     pin: str
+
+
+# ------- Tally connection (per-tenant settings, Phase 5) -------
+# No secrets here by design (docs/FEATURE_ROADMAP.md's Phase 5 note): Tally's
+# import gateway is an unauthenticated local HTTP endpoint, so there is
+# nothing to store but the company name and an optional endpoint override —
+# never a token/password.
+class TallyConnectionUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    company: str = ""
+    endpoint_url: Optional[str] = ""

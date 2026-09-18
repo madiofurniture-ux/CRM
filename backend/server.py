@@ -26,6 +26,7 @@ from pymongo import ReturnDocument
 
 import tenancy
 import api_canonical
+import api_hr
 import lifecycle as lc
 import permissions as perm
 import notifications as notif
@@ -34,6 +35,7 @@ import csv_engine
 import quotation_templates
 import storage
 import tally
+from models import TallyConnectionUpdate
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
     new_id, now_iso,
@@ -131,6 +133,24 @@ async def health():
     """No secrets, no auth required — just enough for a deploy pipeline or a
     person staring at a URL to tell staging and production apart at a glance."""
     return {"status": "ok", "environment": APP_ENV, "version": APP_VERSION}
+
+
+@api.get("/ready")
+async def ready():
+    """Liveness (/health) only proves the process started; a deploy that
+    can't reach Mongo still returns 200 there. This actually pings the DB,
+    so an orchestrator can tell "up" from "can serve traffic" apart."""
+    try:
+        await db.command("ping")
+        mongo_ok = True
+    except Exception as e:
+        mongo_ok = False
+        logger.warning(f"/ready: Mongo ping failed: {e}")
+    body = {"status": "ok" if mongo_ok else "degraded", "mongo": "ok" if mongo_ok else "unreachable",
+            "environment": APP_ENV, "version": APP_VERSION}
+    if not mongo_ok:
+        raise HTTPException(status_code=503, detail=body)
+    return body
 
 
 
@@ -1688,6 +1708,46 @@ async def quotation_templates_list(user: dict = Depends(get_current_user)):
     return quotation_templates.list_templates()
 
 
+@api.get("/quotes/followups")
+async def quote_followups(user: dict = Depends(get_current_user)):
+    """Sales > Follow-ups dashboard: every quote with a scheduled next
+    follow-up, bucketed Overdue/Today/Tomorrow/This Week/Upcoming.
+    Admins see the whole tenant; a regular user sees only their own quotes —
+    this codebase has no separate "management" role, so admin stands in for
+    team-wide visibility until one exists.
+
+    Registered ABOVE /quotes/{quote_id} on purpose: FastAPI matches routes in
+    registration order, so if this came after the {quote_id} route, a request
+    for /quotes/followups would match quote_id="followups" and 404 instead of
+    ever reaching this handler."""
+    q = tenancy.scope({}, "quotes", user)
+    if user.get("role") != "admin":
+        q["by_user"] = user.get("name", "")
+    quotes = await db.quotes.find(q, {"_id": 0}).to_list(5000)
+    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
+    projects = await db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000)
+    sale_by_quote = {s.get("quote_id"): s for s in sales if s.get("quote_id")}
+    project_by_sale = {p.get("sale_id"): p for p in projects if p.get("sale_id")}
+
+    def row(qq: dict) -> dict:
+        sale = sale_by_quote.get(qq.get("id"))
+        project = project_by_sale.get(sale.get("id")) if sale else None
+        log = qq.get("log") or []
+        last = log[-1] if log else None
+        return {
+            "id": qq.get("id"), "quote_no": qq.get("quote_no"), "customer": qq.get("customer"),
+            "project_no": (project or {}).get("project_no", ""),
+            "value": qq.get("grand_total") or qq.get("value") or 0,
+            "confidence_level": qq.get("confidence_level"),
+            "assigned_to": qq.get("by_user", ""), "status": qq.get("derived_status", qq.get("stage")),
+            "next_follow_up": qq.get("next_follow_up", ""),
+            "last_remark": (last or {}).get("text", ""), "last_kind": (last or {}).get("kind", ""),
+        }
+
+    buckets = lc.bucket_followups(quotes)
+    return {b: [row(q) for q in rows] for b, rows in buckets.items()}
+
+
 @api.get("/quotes/{quote_id}")
 async def get_quote(quote_id: str, user: dict = Depends(get_current_user)):
     owned = tenancy.scope({"id": quote_id}, "quotes", user)
@@ -1912,6 +1972,110 @@ async def normalize_purchase_order(doc: dict, existing: dict | None, user: dict)
 
     lines = doc.get("line_items", (existing or {}).get("line_items", [])) or []
     doc.update({k: v for k, v in lc.po_totals(lines).items() if k != "tax_breakup"})
+
+    # Approval gate: same shape as normalize applied to quote discounts — an
+    # existing approval only survives if the amount is unchanged, otherwise
+    # raising the total after sign-off would quietly inherit the old approval.
+    prev_total = lc.money((existing or {}).get("grand_total"))
+    prev_approval = str((existing or {}).get("approval") or "")
+    if not lc.po_needs_approval(doc["grand_total"]):
+        doc["approval"] = ""
+    elif prev_approval == "approved" and abs(doc["grand_total"] - prev_total) < 0.005:
+        doc["approval"] = "approved"
+    else:
+        doc["approval"] = "pending"
+    if doc["approval"] != "approved":
+        doc["approved_by"] = ""
+        doc["approved_at"] = ""
+
+    effective_status = doc.get("status", (existing or {}).get("status", "Draft"))
+    if doc["approval"] == "pending" and effective_status in ("Issued", "Received"):
+        raise HTTPException(
+            status_code=400,
+            detail="This purchase order exceeds the approval threshold and needs sign-off before it can be issued",
+        )
+
+    if existing is None:
+        doc["received_qty"] = [0.0] * len(lines)
+
+
+@api.post("/purchase-orders/{po_id}/approve")
+async def purchase_order_approve(po_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    """Admin/accountant sign-off on a PO past the spend threshold — mirrors quote_approve."""
+    await _require_permission("inventory", "approve", user)
+    owned = tenancy.scope({"id": po_id}, "purchase_orders", user)
+    po = await db.purchase_orders.find_one(owned, {"_id": 0})
+    if not po:
+        raise HTTPException(status_code=404, detail="Not found")
+    ok = bool(payload.get("approved", True))
+    upd = {"approval": "approved" if ok else "rejected",
+           "approved_by": (user.get("username") or "") if ok else "",
+           "approved_at": now_iso() if ok else ""}
+    await db.purchase_orders.update_one(owned, {"$set": upd})
+    out = await db.purchase_orders.find_one(owned, {"_id": 0})
+    await record_activity("purchase_order", po_id, "approve" if ok else "reject", user,
+                          before={"approval": po.get("approval", "")}, after={"approval": upd["approval"]})
+    return out
+
+
+@api.post("/purchase-orders/{po_id}/receive")
+async def purchase_order_receive(po_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    """Goods Receipt Note: records qty actually received against PO lines and
+    mirrors it into the stock ledger as Receipt movements, keyed to the PO
+    number via source_doc. Only flips status to Received once every line is
+    fully received — a PO left partially received stays Issued so it keeps
+    showing up as outstanding procurement.
+    """
+    await _require_permission("inventory", "edit", user)
+    owned = tenancy.scope({"id": po_id}, "purchase_orders", user)
+    po = await db.purchase_orders.find_one(owned, {"_id": 0})
+    if not po:
+        raise HTTPException(status_code=404, detail="Not found")
+    if po.get("status") not in ("Issued", "Received"):
+        raise HTTPException(status_code=400, detail="Only an issued purchase order can be received")
+    if po.get("approval") == "pending":
+        raise HTTPException(status_code=400, detail="This purchase order is still pending approval")
+
+    lines = po.get("line_items") or []
+    received = list(po.get("received_qty") or [])
+    received += [0.0] * (len(lines) - len(received))
+
+    warehouse = str(payload.get("warehouse") or "Main")
+    entries = payload.get("lines") or []
+    existing_moves = await db.stock_movements.find(
+        tenancy.scope({}, "stock_movements", user), {"movement_no": 1, "_id": 0}).to_list(5000)
+    for entry in entries:
+        idx = int(entry.get("index", -1))
+        qty = lc.money(entry.get("qty"))
+        if idx < 0 or idx >= len(lines) or qty <= 0:
+            raise HTTPException(status_code=400, detail=f"Invalid receipt line: {entry}")
+        line = lines[idx]
+        remaining = lc.money(line.get("qty")) - received[idx]
+        if qty > remaining + 0.005:
+            raise HTTPException(status_code=400,
+                                detail=f"Cannot receive {qty} on line {idx}: only {remaining} remaining")
+        move = {
+            "id": new_id(), "created_at": now_iso(),
+            "movement_no": lc.next_movement_id(existing_moves),
+            "date": lc.today_iso(), "type": "Receipt",
+            "product_id": line.get("sku") or "", "qty": qty, "unit": line.get("unit") or "pc",
+            "warehouse": warehouse, "to_warehouse": "",
+            "source_doc": po.get("po_no", ""), "reason": f"GRN against {po.get('po_no', '')}",
+            "by_user": user.get("name", ""),
+        }
+        stamp_fy(move, "stock_movements")
+        tenancy.stamp(move, "stock_movements", user)
+        await db.stock_movements.insert_one(dict(move))
+        existing_moves.append({"movement_no": move["movement_no"]})
+        received[idx] += qty
+
+    fully_received = all(received[i] >= lc.money(lines[i].get("qty")) - 0.005 for i in range(len(lines)))
+    upd = {"received_qty": received, "status": "Received" if fully_received else po.get("status")}
+    await db.purchase_orders.update_one(owned, {"$set": upd})
+    out = await db.purchase_orders.find_one(owned, {"_id": 0})
+    await record_activity("purchase_order", po_id, "receive", user,
+                          before={"received_qty": po.get("received_qty")}, after={"received_qty": received})
+    return out
 
 
 # Gated on the existing "inventory" role module rather than a new one: role
@@ -2289,7 +2453,38 @@ async def daily_planner_rollover(user: dict = Depends(get_current_user)):
         await db.tasks.update_one({"id": t["id"]}, {"$set": {"status": "Rolled Over", "updated_at": now_iso()}})
     return {"rolled_over": len(created), "tasks": created}
 
-make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty", owner_field="by_user")
+async def normalize_petty_cash(doc: dict, existing: dict | None, user: dict) -> None:
+    """An Out entry past lc.PETTY_CASH_APPROVAL_AMOUNT starts Pending — same
+    shape as the PO/quote approval gates, so a receipt gets sign-off before
+    it's trusted rather than after."""
+    if existing is None:
+        kind = doc.get("kind") or "Out"
+        amount = lc.money(doc.get("amount"))
+        doc["status"] = "Pending" if lc.petty_cash_needs_approval(kind, amount) else "Approved"
+        doc["approved_by"] = ""
+        doc["approved_at"] = ""
+
+
+make_crud(api, "petty-cash", "petty_cash", PettyCashCreate, PettyCash, module="petty",
+          owner_field="by_user", normalize=normalize_petty_cash)
+
+
+@api.post("/petty-cash/{entry_id}/approve")
+async def petty_cash_approve(entry_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    await _require_permission("petty", "approve", user)
+    owned = tenancy.scope({"id": entry_id}, "petty_cash", user)
+    entry = await db.petty_cash.find_one(owned, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Not found")
+    ok = bool(payload.get("approved", True))
+    upd = {"status": "Approved" if ok else "Rejected",
+           "approved_by": (user.get("username") or "") if ok else "",
+           "approved_at": now_iso() if ok else ""}
+    await db.petty_cash.update_one(owned, {"$set": upd})
+    out = await db.petty_cash.find_one(owned, {"_id": 0})
+    await record_activity("petty_cash", entry_id, "approve" if ok else "reject", user,
+                          before={"status": entry.get("status", "")}, after={"status": upd["status"]})
+    return out
 
 async def _init_cashbook_balance(doc: dict, user: dict):
     """current_balance always starts equal to initial_balance, regardless
@@ -2479,7 +2674,7 @@ TALLY_COMPANY = os.environ.get("TALLY_COMPANY", "")
 TALLY_TIMEOUT_S = float(os.environ.get("TALLY_TIMEOUT_S", "15"))
 
 
-def _post_to_tally(xml: str) -> tuple[bool, str]:
+def _post_to_tally(xml: str, url: str = "") -> tuple[bool, str]:
     """Blocking POST of one envelope. Returns (accepted, message) and never
     raises: an unreachable Tally is an expected operational state (the gateway
     is a desktop app someone has to have open), not a server error.
@@ -2490,8 +2685,9 @@ def _post_to_tally(xml: str) -> tuple[bool, str]:
     """
     import urllib.error
     import urllib.request
+    target = url or TALLY_URL
     req = urllib.request.Request(
-        TALLY_URL, data=xml.encode("utf-8"), method="POST",
+        target, data=xml.encode("utf-8"), method="POST",
         headers={"Content-Type": "text/xml;charset=utf-8"})
     try:
         with urllib.request.urlopen(req, timeout=TALLY_TIMEOUT_S) as resp:
@@ -2501,8 +2697,119 @@ def _post_to_tally(xml: str) -> tuple[bool, str]:
     except urllib.error.HTTPError as e:
         return False, f"Tally returned HTTP {e.code}"
     except Exception as e:
-        return False, f"Tally gateway unreachable at {TALLY_URL}: {e}"
+        return False, f"Tally gateway unreachable at {target}: {e}"
     return tally.parse_sync_response(body)
+
+
+async def _tally_connection(user: dict) -> dict:
+    """Per-tenant company/endpoint override, falling back to the global env
+    config (TALLY_URL/TALLY_COMPANY) when a tenant hasn't set one — see
+    docs/IMPLEMENTATION_PHASE_5.md. No secrets live here; see
+    TallyConnectionUpdate's docstring in models.py."""
+    conn = await db.tally_connections.find_one(
+        tenancy.scope({}, "tally_connections", user), {"_id": 0})
+    return {
+        "company": (conn or {}).get("company") or TALLY_COMPANY,
+        "endpoint_url": (conn or {}).get("endpoint_url") or TALLY_URL,
+    }
+
+
+@api.get("/finance/tally/connection")
+async def get_tally_connection(user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    conn = await db.tally_connections.find_one(
+        tenancy.scope({}, "tally_connections", user), {"_id": 0})
+    return conn or {"company": TALLY_COMPANY, "endpoint_url": TALLY_URL, "configured": False}
+
+
+@api.put("/finance/tally/connection")
+async def set_tally_connection(payload: TallyConnectionUpdate, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "approve", user)
+    owned = tenancy.scope({}, "tally_connections", user)
+    existing = await db.tally_connections.find_one(owned, {"_id": 0})
+    doc = payload.model_dump()
+    doc["updated_at"] = now_iso()
+    if existing:
+        await db.tally_connections.update_one(owned, {"$set": doc})
+    else:
+        doc.update(id=new_id(), created_at=doc["updated_at"])
+        tenancy.stamp(doc, "tally_connections", user)
+        await db.tally_connections.insert_one(dict(doc))
+    return await db.tally_connections.find_one(owned, {"_id": 0})
+
+
+# ---------- Tally sync idempotency ledger (SyncRun/SyncItem, Phase 5) ------
+# Generic across entity types on purpose: today's caller is the customer
+# ledger sync below, but a future product/invoice/receipt sync (deferred,
+# see docs/IMPLEMENTATION_PHASE_5.md) reuses this unchanged — write the
+# entity's XML builder, call _tally_sync_one with a new entity_type/operation.
+async def _tally_last_synced_item(db, user: dict, entity_type: str, source_id: str, operation: str) -> Optional[dict]:
+    return await db.tally_sync_items.find_one(
+        tenancy.scope({"entity_type": entity_type, "source_id": source_id,
+                        "operation": operation, "status": "synced"}, "tally_sync_items", user),
+        {"_id": 0}, sort=[("created_at", -1)])
+
+
+async def _tally_sync_one(
+    db, user: dict, *, entity_type: str, source_id: str, operation: str,
+    payload_for_hash: dict, xml: str, endpoint_url: str, sync_run_id: str,
+) -> dict:
+    """One entity's sync attempt, deduped by content hash against the ledger.
+    If the last successful SyncItem for (tenant, entity_type, source_id,
+    operation) already has this exact content hash, nothing is re-sent to
+    Tally — this is what makes running the same sync twice produce zero
+    duplicate vouchers/masters, provably (via the ledger), not just "it
+    didn't error."""
+    chash = tally.content_hash(payload_for_hash)
+    last = await _tally_last_synced_item(db, user, entity_type, source_id, operation)
+    if last and last.get("content_hash") == chash:
+        return {"source_id": source_id, "status": "skipped",
+                "message": "No change since last successful sync"}
+
+    accepted, message = await asyncio.to_thread(_post_to_tally, xml, endpoint_url)
+    item = {
+        "id": new_id(), "sync_run_id": sync_run_id, "entity_type": entity_type,
+        "source_id": source_id, "operation": operation, "content_hash": chash,
+        "status": "synced" if accepted else "failed", "detail": message,
+        "created_at": now_iso(),
+    }
+    tenancy.stamp(item, "tally_sync_items", user)
+    await db.tally_sync_items.insert_one(dict(item))
+    return {"source_id": source_id, "status": item["status"], "message": message}
+
+
+@api.post("/finance/tally/sync/customers")
+async def tally_sync_customers(user: dict = Depends(get_current_user)):
+    """Upserts every tenant customer as a Tally Ledger master (Sundry
+    Debtors). Extends Tally sync beyond the cashbook-voucher-only scope this
+    integration had before Phase 5 — see docs/FEATURE_ROADMAP.md."""
+    await _require_permission("cashbook", "approve", user)
+    conn = await _tally_connection(user)
+    customers = await db.customers.find(
+        tenancy.scope({}, "customers", user), {"_id": 0}).to_list(5000)
+
+    run = {"id": new_id(), "entity_type": "customer", "started_at": now_iso(),
+           "attempted": len(customers)}
+    tenancy.stamp(run, "tally_sync_runs", user)
+
+    results = []
+    for c in customers:
+        payload = {"name": c.get("name", ""), "phone": c.get("phone", ""),
+                   "address": c.get("address", ""), "gstin": c.get("gstin", "")}
+        xml = tally.build_ledger_xml(c, conn["company"])
+        results.append(await _tally_sync_one(
+            db, user, entity_type="customer", source_id=c["id"], operation="upsert_ledger",
+            payload_for_hash=payload, xml=xml, endpoint_url=conn["endpoint_url"],
+            sync_run_id=run["id"]))
+
+    run["finished_at"] = now_iso()
+    run["synced"] = sum(1 for r in results if r["status"] == "synced")
+    run["skipped"] = sum(1 for r in results if r["status"] == "skipped")
+    run["failed"] = sum(1 for r in results if r["status"] == "failed")
+    await db.tally_sync_runs.insert_one(dict(run))
+    run.pop("_id", None)
+    run["results"] = results
+    return run
 
 
 async def _sync_one(txn: dict, user: dict) -> dict:
@@ -3787,6 +4094,17 @@ async def create_project_daily_log(project_id: str, payload: ProjectDailyLogCrea
     if not project:
         raise HTTPException(404, "Project not found")
 
+    if payload.current_milestone == "Production":
+        surveys = await db.dw_surveys.find(
+            tenancy.scope({"project_id": project_id}, "dw_surveys", user),
+            {"_id": 0, "survey_id": 1, "client_sign_off": 1}).to_list(50)
+        unsigned = [s.get("survey_id") or "?" for s in surveys if not s.get("client_sign_off")]
+        if unsigned:
+            raise HTTPException(
+                status_code=400,
+                detail=f"D&W survey(s) {unsigned} need client sign-off before release to production",
+            )
+
     doc = payload.model_dump()
     doc["project_id"] = project_id
     doc["id"] = new_id()
@@ -5001,41 +5319,6 @@ async def global_search(q: str = "", user: dict = Depends(get_current_user)):
     return results
 
 
-@api.get("/quotes/followups")
-async def quote_followups(user: dict = Depends(get_current_user)):
-    """Sales > Follow-ups dashboard: every quote with a scheduled next
-    follow-up, bucketed Overdue/Today/Tomorrow/This Week/Upcoming.
-    Admins see the whole tenant; a regular user sees only their own quotes —
-    this codebase has no separate "management" role, so admin stands in for
-    team-wide visibility until one exists."""
-    q = tenancy.scope({}, "quotes", user)
-    if user.get("role") != "admin":
-        q["by_user"] = user.get("name", "")
-    quotes = await db.quotes.find(q, {"_id": 0}).to_list(5000)
-    sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
-    projects = await db.projects.find(tenancy.scope({}, "projects", user), {"_id": 0}).to_list(5000)
-    sale_by_quote = {s.get("quote_id"): s for s in sales if s.get("quote_id")}
-    project_by_sale = {p.get("sale_id"): p for p in projects if p.get("sale_id")}
-
-    def row(qq: dict) -> dict:
-        sale = sale_by_quote.get(qq.get("id"))
-        project = project_by_sale.get(sale.get("id")) if sale else None
-        log = qq.get("log") or []
-        last = log[-1] if log else None
-        return {
-            "id": qq.get("id"), "quote_no": qq.get("quote_no"), "customer": qq.get("customer"),
-            "project_no": (project or {}).get("project_no", ""),
-            "value": qq.get("grand_total") or qq.get("value") or 0,
-            "confidence_level": qq.get("confidence_level"),
-            "assigned_to": qq.get("by_user", ""), "status": qq.get("derived_status", qq.get("stage")),
-            "next_follow_up": qq.get("next_follow_up", ""),
-            "last_remark": (last or {}).get("text", ""), "last_kind": (last or {}).get("kind", ""),
-        }
-
-    buckets = lc.bucket_followups(quotes)
-    return {b: [row(q) for q in rows] for b, rows in buckets.items()}
-
-
 @api.get("/reports")
 async def reports(period: str = "thisweek", user: dict = Depends(get_current_user)):
     leads = await db.leads.find(tenancy.scope({}, "leads", user), {"_id": 0}).to_list(5000)
@@ -5769,6 +6052,7 @@ async def whatsapp_webhook_receive(request: Request):
 
 app.include_router(api)
 app.include_router(api_canonical.router)
+app.include_router(api_hr.router)
 
 # Local-disk uploads served back out at the same /uploads/... path storage.py
 # returns as file_url. check_dir=False: the directory may not exist yet on a

@@ -448,6 +448,26 @@ def needs_approval(subtotal: float, discount: float) -> bool:
     return subtotal > 0 and money(discount) > subtotal * APPROVAL_DISC_PCT / 100
 
 
+# A purchase order committing more than this needs admin/accountant sign-off
+# before it can leave Draft — same shape as the quote discount gate above,
+# but keyed on absolute spend rather than a discount percentage since a PO
+# has no "reasonable default" price to discount against.
+PO_APPROVAL_AMOUNT = 100_000
+
+
+def po_needs_approval(grand_total: float) -> bool:
+    return money(grand_total) > PO_APPROVAL_AMOUNT
+
+
+# A petty-cash *outflow* past this amount needs sign-off before it's trusted
+# — mirrors the Cashbook CASH_OUT approval pattern already used elsewhere.
+PETTY_CASH_APPROVAL_AMOUNT = 5_000
+
+
+def petty_cash_needs_approval(kind: str, amount: float) -> bool:
+    return str(kind or "") == "Out" and money(amount) > PETTY_CASH_APPROVAL_AMOUNT
+
+
 def quote_total(subtotal: float, discount: float, tax_pct: float) -> dict:
     """Roll lines → subtotal → discount → tax → grand total. Discount is an absolute ₹."""
     sub = round(money(subtotal), 2)
@@ -937,8 +957,13 @@ def build_pipeline(phone: Any, *, leads, requirements, product_configs, quotes,
 # Movement types and the sign each applies to on-hand quantity. A transfer is
 # modelled as two rows (an Issue from one warehouse + a Receipt into another) so
 # the global on-hand nets to zero while per-warehouse balances move.
-STOCK_MOVE_TYPES = ["Receipt", "Issue", "Transfer", "Adjustment", "Return"]
+STOCK_MOVE_TYPES = ["Receipt", "Issue", "Transfer", "Adjustment", "Return", "Reservation"]
 _MOVE_SIGN = {"Receipt": 1, "Return": 1, "Issue": -1, "Transfer": -1, "Adjustment": 1}
+# A reservation holds stock for a project/sale without moving it — it must
+# not change physical on-hand qty (absent from _MOVE_SIGN => signed_qty 0
+# below), but it is still tracked so stock_reserved() can report what's
+# spoken for. A negative qty row releases a reservation, same convention as
+# Adjustment.
 
 
 def next_movement_id(moves: Iterable[dict]) -> str:
@@ -963,6 +988,20 @@ def stock_on_hand(movements: Iterable[dict]) -> dict:
             continue
         on_hand[pid] = on_hand.get(pid, 0) + signed_qty(m)
     return on_hand
+
+
+def stock_reserved(movements: Iterable[dict]) -> dict:
+    """product_id → net reserved quantity (Reservation rows only, own sign —
+    a negative row releases stock previously held)."""
+    reserved: dict = {}
+    for m in movements:
+        if str(m.get("type") or "") != "Reservation":
+            continue
+        pid = m.get("product_id")
+        if not pid:
+            continue
+        reserved[pid] = reserved.get(pid, 0) + money(m.get("qty"))
+    return reserved
 
 
 def stock_summary(movements, inventory) -> dict:
