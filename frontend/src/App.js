@@ -1,5 +1,5 @@
 import "@/App.css";
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 
@@ -9,6 +9,7 @@ import { TenantConfigProvider } from "@/context/TenantConfigContext";
 import PrivacyPinModal from "@/components/PrivacyPinModal";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Layout from "@/components/Layout";
+import { UI_THEME } from "@/lib/featureFlags";
 
 // Login is the only screen every visitor needs before auth, so it stays in
 // the main bundle. Everything past it loads on demand — the app was
@@ -81,6 +82,13 @@ function PageLoader() {
 }
 
 function App() {
+  // Static per build (UI_THEME comes from a build-time env var, not runtime
+  // state), so this only needs to run once — sets the attribute every CSS
+  // rule in index.css's [data-ui-theme="light"] block keys off.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-ui-theme", UI_THEME);
+  }, []);
+
   return (
     <AuthProvider>
       <TenantConfigProvider>

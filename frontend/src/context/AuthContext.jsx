@@ -66,9 +66,26 @@ export function AuthProvider({ children }) {
     return Array.isArray(user.pages) && user.pages.includes(pageId);
   };
 
+  // Per-action counterpart to canAccess (which only ever checks "view").
+  // Mirrors permissions.py's LEGACY_IMPLICIT_ACTIONS server-side: an account
+  // with role_id set and a gated module is checked against that specific
+  // action's grant; a legacy account (no role_id) or an ungated module keeps
+  // canAccess's all-or-nothing view grant for create/edit/delete, but never
+  // for approve/export — those never existed in the old pages-only system.
+  const canDo = (moduleId, action) => {
+    if (action === "view") return canAccess(moduleId);
+    if (!canAccess(moduleId)) return false;
+    if (user.role === "admin") return true;
+    if (user.role_id && GATED_MODULES.includes(moduleId)) {
+      const role = roles.find((r) => r.id === user.role_id);
+      const modPerm = role?.permissions?.find((p) => p.module === moduleId);
+      return !!modPerm?.[action];
+    }
+    return action !== "approve" && action !== "export";
+  };
 
   return (
-    <AuthContext.Provider value={{ user, loading, tenant, roles, refreshTenant: loadTenant, refreshRoles: loadRoles, login, logout, canAccess }}>
+    <AuthContext.Provider value={{ user, loading, tenant, roles, refreshTenant: loadTenant, refreshRoles: loadRoles, login, logout, canAccess, canDo }}>
       {children}
     </AuthContext.Provider>
   );

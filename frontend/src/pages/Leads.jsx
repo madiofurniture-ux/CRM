@@ -15,6 +15,7 @@ import CsvImportModal from "@/components/CsvImportModal";
 import RemarksTimeline from "@/components/RemarksTimeline";
 import StarRating from "@/components/StarRating";
 import EmptyState from "@/components/EmptyState";
+import ErrorState from "@/components/ErrorState";
 import { useAuth } from "@/context/AuthContext";
 import { Skeleton } from "@/components/ui/skeleton";
 import useCustomFields from "@/hooks/useCustomFields";
@@ -49,7 +50,10 @@ export default function Leads() {
   const { defs: customFieldDefs } = useCustomFields("lead");
   const [customFilters, setCustomFilters] = useState({});
   const [showImport, setShowImport] = useState(false);
-  const { user } = useAuth();
+  const { user, canDo } = useAuth();
+  const canCreate = canDo("leads", "create");
+  const canEdit = canDo("leads", "edit");
+  const canDelete = canDo("leads", "delete");
   // null = the inline "new architect" sub-form is closed. It lives in its own
   // state so opening or cancelling it never touches `form` — the lead being
   // edited keeps every unsaved field the user has already typed.
@@ -67,15 +71,21 @@ export default function Leads() {
   };
   const [form, setForm] = useState(empty);
 
+  const [loadError, setLoadError] = useState(null);
   const load = async () => {
     setLoading(true);
-    try { const { data } = await api.get("/leads"); setRows(data); }
-    finally { setLoading(false); }
+    setLoadError(null);
+    try {
+      const { data } = await api.get("/leads");
+      setRows(data);
+    } catch (e) {
+      setLoadError(e?.response?.status === 401 || e?.response?.status === 403 ? "unauthorized" : "error");
+    } finally { setLoading(false); }
   };
   useEffect(() => {
     load();
-    api.get("/architects").then(({ data }) => setArchitects(data));
-    api.get("/staff").then(({ data }) => setStaff(data));
+    api.get("/architects").then(({ data }) => setArchitects(data)).catch(() => setArchitects([]));
+    api.get("/staff").then(({ data }) => setStaff(data)).catch(() => setStaff([]));
     api.get("/users/directory").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
   }, []);
   const userName = (id) => users.find((u) => u.id === id)?.name || "";
@@ -204,26 +214,26 @@ export default function Leads() {
       <Topbar
         title="Leads"
         subtitle={`${filtered.length} leads · pipeline ${inrFull(filtered.reduce((a, b) => a + (b.value || 0), 0))}`}
-        onAdd={openNew}
+        onAdd={canCreate ? openNew : undefined}
         addLabel="Add Lead"
         actions={
           <>
-            <button onClick={exportCsv} title="Export CSV" className="p-2 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" data-testid="leads-export"><Download size={16} /></button>
-            <button onClick={() => setShowImport(true)} title="Import CSV" className="p-2 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" data-testid="leads-import-open"><Upload size={16} /></button>
+            <button onClick={exportCsv} title="Export CSV" className="p-2 rounded-lg hover:bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]" data-testid="leads-export"><Download size={16} /></button>
+            <button onClick={() => setShowImport(true)} title="Import CSV" className="p-2 rounded-lg hover:bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]" data-testid="leads-import-open"><Upload size={16} /></button>
           </>
         }
       />
       <div className="p-6" data-testid="leads-page">
         <div className="flex flex-wrap gap-2 mb-3">
-          <input placeholder="Search lead, remarks…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="leads-search" />
-          <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
+          <input placeholder="Search lead, remarks…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm outline-none focus:border-[var(--color-primary)] w-72" data-testid="leads-search" />
+          <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm">
             <option value="All">All</option>
             {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           {customFieldDefs.filter((d) => d.show_filter).map((d) => (
             <select key={d.key} value={customFilters[d.key] || ""} title={d.label}
                     onChange={(e) => setCustomFilters((p) => ({ ...p, [d.key]: e.target.value }))}
-                    className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
+                    className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm">
               <option value="">{d.label}: All</option>
               {d.type === "select"
                 ? (d.options || []).map((o) => <option key={o} value={o}>{o}</option>)
@@ -241,11 +251,18 @@ export default function Leads() {
           />
         </div>
 
-        <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
+        {loadError ? (
+          <ErrorState
+            title={loadError === "unauthorized" ? "You don't have access to Leads" : "Couldn't load leads"}
+            hint={loadError === "unauthorized" ? undefined : "The leads list didn't load — check your connection and try again."}
+            onRetry={loadError === "unauthorized" ? undefined : load}
+          />
+        ) : (
+        <div className="bg-[var(--color-surface)] border border-[var(--color-primary-soft)] rounded-[var(--radius-lg)] overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-[var(--surface-2)]">
-                <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
+              <thead className="bg-[var(--color-surface-muted)]">
+                <tr className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
                   <th className="hidden lg:table-cell text-left font-semibold px-4 py-2.5">Date</th>
                   <th className="text-left font-semibold px-4 py-2.5">Name</th>
                   <th className="hidden md:table-cell text-left font-semibold px-4 py-2.5">Phone</th>
@@ -263,7 +280,7 @@ export default function Leads() {
               </thead>
               <tbody>
                 {loading && Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i} className="border-t border-[var(--border-light)]">
+                  <tr key={i} className="border-t border-[var(--color-border)]">
                     <td className="hidden lg:table-cell px-4 py-3"><Skeleton className="h-4 w-16" /></td>
                     <td className="px-4 py-3"><Skeleton className="h-4 w-28" /></td>
                     <td className="hidden md:table-cell px-4 py-3"><Skeleton className="h-4 w-24" /></td>
@@ -282,37 +299,41 @@ export default function Leads() {
                 {!loading && filtered.map((l) => {
                   const overdue = l.follow_up_date && l.follow_up_date < today && !["Won", "Lost"].includes(l.stage);
                   return (
-                    <tr key={l.id} className="border-t border-[var(--border-light)] hover:bg-[var(--surface-2)]/50">
-                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)] whitespace-nowrap">{fmtDate(l.date)}</td>
+                    <tr key={l.id} className="border-t border-[var(--color-border)] hover:bg-[var(--color-surface-muted)]/50">
+                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)] whitespace-nowrap">{fmtDate(l.date)}</td>
                       <td className="px-4 py-3 font-medium">{l.name}</td>
-                      <td className="hidden md:table-cell px-4 py-3 font-mono text-xs text-[var(--ink-2)]">
-                        {l.phone && <span className="inline-flex items-center gap-1"><Phone size={11} className="text-[var(--ink-3)]" />{l.phone}</span>}
+                      <td className="hidden md:table-cell px-4 py-3 font-mono text-xs text-[var(--color-text-muted)]">
+                        {l.phone && <span className="inline-flex items-center gap-1"><Phone size={11} className="text-[var(--color-text-muted)]" />{l.phone}</span>}
                       </td>
-                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{l.source}</td>
-                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{l.reference}</td>
+                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)]">{l.source}</td>
+                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)]">{l.reference}</td>
                       <td className="px-4 py-3">
-                        <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value)} className="px-2 py-1 rounded-md border border-[var(--border)] bg-white text-xs" title={!isKnownStage(l.stage) ? "Legacy/imported value — pick a stage to normalize it" : undefined}>
+                        <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value)} disabled={!canEdit} className="px-2 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] text-xs disabled:opacity-60 disabled:cursor-not-allowed" title={!canEdit ? "You don't have permission to change a lead's stage" : !isKnownStage(l.stage) ? "Legacy/imported value — pick a stage to normalize it" : undefined}>
                           {l.stage && !isKnownStage(l.stage) && <option value={l.stage}>{l.stage} (unrecognized)</option>}
                           {STAGES.map((s) => <option key={s}>{s}</option>)}
                         </select>
                       </td>
-                      <td className={`hidden md:table-cell px-4 py-3 whitespace-nowrap ${overdue ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-2)]"}`}>
+                      <td className={`hidden md:table-cell px-4 py-3 whitespace-nowrap ${overdue ? "text-[var(--color-danger)] font-semibold" : "text-[var(--color-text-muted)]"}`}>
                         <span className="inline-flex items-center gap-1"><Calendar size={11} />{fmtDate(l.follow_up_date)}</span>
                       </td>
-                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{userName(l.attended_by) || l.assigned_to}</td>
+                      <td className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)]">{userName(l.attended_by) || l.assigned_to}</td>
                       <td className="px-4 py-3 text-right font-mono">{inrFull(l.value)}</td>
                       {customFieldDefs.filter((d) => d.show_table).map((d) => (
-                        <td key={d.key} className="hidden lg:table-cell px-4 py-3 text-[var(--ink-2)]">{String((l.custom_fields || {})[d.key] ?? "")}</td>
+                        <td key={d.key} className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)]">{String((l.custom_fields || {})[d.key] ?? "")}</td>
                       ))}
                       <td className="px-2 py-3 flex items-center gap-1">
                         {l.phone && (
-                          <a href={`tel:${l.phone}`} title="Call" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-call-${l.id}`}><Phone size={13} /></a>
+                          <a href={`tel:${l.phone}`} title="Call" className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]" data-testid={`lead-call-${l.id}`}><Phone size={13} /></a>
                         )}
                         <WhatsAppButton phone={l.phone} context="follow-up" customerName={l.name}
                                         refType="lead" refId={l.id} testId={`lead-wa-${l.id}`} />
-                        <button onClick={() => openEdit(l)} className="p-1.5 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Edit lead" data-testid={`lead-edit-${l.id}`}><Pencil size={13} /></button>
-                        <button onClick={() => setLogLead(l)} title="Follow-up timeline" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" data-testid={`lead-log-${l.id}`}><MessageSquare size={13} /></button>
-                        <button onClick={() => remove(l.id)} title="Delete" className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
+                        {canEdit && (
+                          <button onClick={() => openEdit(l)} className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]" title="Edit lead" data-testid={`lead-edit-${l.id}`}><Pencil size={13} /></button>
+                        )}
+                        <button onClick={() => setLogLead(l)} title="Follow-up timeline" className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]" data-testid={`lead-log-${l.id}`}><MessageSquare size={13} /></button>
+                        {canDelete && (
+                          <button onClick={() => remove(l.id)} title="Delete" className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--color-danger)]"><Trash2 size={13} /></button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -326,35 +347,36 @@ export default function Leads() {
             </table>
           </div>
         </div>
+        )}
       </div>
 
       {show && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setShow(false)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[var(--color-surface)] rounded-t-2xl sm:rounded-xl border border-[var(--color-border)] w-full max-w-xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">{editing ? "Edit Lead" : "New Lead"}</h3>
-              <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+              <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)]"><X size={16} /></button>
             </div>
             <div className="px-5 pt-4">
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Search Existing Customer</label>
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Search Existing Customer</label>
               <CustomerResolver onSelect={(c) => setForm({ ...form, name: c.name, phone: c.phone })} />
             </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <Fld l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />
               <Fld l="Name" v={form.name} oc={(v) => setForm({ ...form, name: v })} t2="lf-name" />
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Phone</label>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Phone</label>
                 <input
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
                   placeholder="9876543210 or +919876543210"
-                  className={`w-full px-3 py-2 rounded-lg border bg-white text-sm outline-none ${phoneCheck.valid ? "border-[var(--border)] focus:border-[var(--brand)]" : "border-[var(--danger)] focus:border-[var(--danger)]"}`}
+                  className={`w-full px-3 py-2 rounded-lg border bg-[var(--color-surface)] text-sm outline-none ${phoneCheck.valid ? "border-[var(--color-border)] focus:border-[var(--color-primary)]" : "border-[var(--color-danger)] focus:border-[var(--color-danger)]"}`}
                   data-testid="lf-phone"
                 />
-                {!phoneCheck.valid && <div className="text-[11px] text-[var(--danger)] mt-1" data-testid="lf-phone-error">{phoneCheck.message}</div>}
+                {!phoneCheck.valid && <div className="text-[11px] text-[var(--color-danger)] mt-1" data-testid="lf-phone-error">{phoneCheck.message}</div>}
               </div>
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Source</label>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Source</label>
                 <select
                   value={form.source}
                   onChange={(e) => {
@@ -363,7 +385,7 @@ export default function Leads() {
                       ? { ...f, source }
                       : { ...f, source, architect_id: "", architect_name: "" });
                   }}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm"
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm"
                   data-testid="lf-source"
                 >
                   {form.source && !isKnownSource(form.source) && <option value={form.source}>{form.source} (unrecognized)</option>}
@@ -372,7 +394,7 @@ export default function Leads() {
               </div>
               {form.source === "Architect" && (
                 <div className="col-span-2">
-                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Architect</label>
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Architect</label>
                   <SearchSelect
                     options={architectOptions}
                     value={form.architect_id}
@@ -396,8 +418,8 @@ export default function Leads() {
                     onCreate={(term) => setArchDraft({ name: term, phone: "", firm: "", email: "" })}
                   />
                   {archDraft && (
-                    <div className="mt-2 border border-[var(--brand)] rounded-lg p-3 bg-[var(--surface-2)]" data-testid="lf-architect-new">
-                      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-2">New Architect</div>
+                    <div className="mt-2 border border-[var(--color-primary)] rounded-lg p-3 bg-[var(--color-surface-muted)]" data-testid="lf-architect-new">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2">New Architect</div>
                       <div className="grid grid-cols-2 gap-3">
                         <Fld l="Name *" v={archDraft.name} oc={(v) => setArchDraft((d) => ({ ...d, name: v }))} t2="lf-arch-name" />
                         <Fld l="Phone *" v={archDraft.phone} oc={(v) => setArchDraft((d) => ({ ...d, phone: v }))} t2="lf-arch-phone" />
@@ -416,21 +438,21 @@ export default function Leads() {
               )}
               <Fld l="Reference *" v={form.reference} oc={(v) => setForm({ ...form, reference: v })} />
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Attended by</label>
-                <select value={form.attended_by} onChange={(e) => setForm({ ...form, attended_by: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Attended by</label>
+                <select value={form.attended_by} onChange={(e) => setForm({ ...form, attended_by: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm">
                   <option value="">— Select —</option>
                   {users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
               </div>
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Stage</label>
-                <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Stage</label>
+                <select value={form.stage} onChange={(e) => setForm({ ...form, stage: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm">
                   {STAGES.map((s) => <option key={s}>{s}</option>)}
                 </select>
               </div>
               <Fld l="Follow up" t="date" v={form.follow_up_date} oc={(v) => setForm({ ...form, follow_up_date: v })} />
               <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Assigned to (Staff)</label>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Assigned to (Staff)</label>
                 <SearchSelect
                   options={staffOptions}
                   value={form.assigned_to_id}
@@ -440,7 +462,7 @@ export default function Leads() {
                   testId="lf-assigned"
                 />
                 {!form.assigned_to_id && form.assigned_to && (
-                  <div className="text-[11px] text-[var(--ink-3)] mt-1">Currently: {form.assigned_to} (unlinked — pick from the list to link)</div>
+                  <div className="text-[11px] text-[var(--color-text-muted)] mt-1">Currently: {form.assigned_to} (unlinked — pick from the list to link)</div>
                 )}
               </div>
               <StarRating label="Confidence" testId="lead-confidence" value={form.confidence_level}
@@ -474,10 +496,10 @@ export default function Leads() {
 
       {logLead && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setLogLead(null)}>
-          <div className="bg-white rounded-t-2xl sm:rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-[var(--color-surface)] rounded-t-2xl sm:rounded-xl border border-[var(--color-border)] w-full max-w-xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">Follow-ups — {logLead.name}</h3>
-              <button onClick={() => setLogLead(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+              <button onClick={() => setLogLead(null)} className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)]"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
               <StageProgressBar stages={leadLifecycleStages(logLead)} />
@@ -505,8 +527,8 @@ export default function Leads() {
 function Fld({ l, v, oc, t = "text", cls = "", t2 }) {
   return (
     <div className={cls}>
-      <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">{l}</label>
-      <input type={t} value={v} onChange={(e) => oc(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" data-testid={t2} />
+      <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">{l}</label>
+      <input type={t} value={v} onChange={(e) => oc(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm outline-none focus:border-[var(--color-primary)]" data-testid={t2} />
     </div>
   );
 }

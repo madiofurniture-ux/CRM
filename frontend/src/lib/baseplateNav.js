@@ -1,4 +1,8 @@
-import { SHOW_LEGACY_MENUS } from "./featureFlags";
+import {
+  SHOW_LEGACY_MENUS,
+  SHOW_DELIVERY, SHOW_INVENTORY, SHOW_FINANCE,
+  SHOW_REPORTS, SHOW_RECORD_CHAIN, SHOW_INCENTIVES,
+} from "./featureFlags";
 
 // Sub-nav content for every Baseplate primary pill, keyed by tab id.
 // Every `to` is copied from an actual <Route path> in App.js — not invented.
@@ -15,6 +19,14 @@ import { SHOW_LEGACY_MENUS } from "./featureFlags";
 // the Madio Canonical CRM v1 scope (CRM: Leads/Opportunities/Accounts &
 // Contacts/Quotations; HR: Attendance/Payroll; Admin: Users/Brands) but are
 // kept visible per "if unsure, keep it" — revisit once v1 scope is final.
+//
+// TODO(v1.2 reconciliation, docs/MODULE_READINESS_MATRIX.md): Budgets and
+// Wallets are backend-only (backend/api_budget.py, backend/api_wallets.py)
+// with no frontend page yet — no entry added here until
+// docs/SCREEN_API_MODEL_MATRIX.md's "smallest implementation" ships;
+// adding a `to` with no matching <Route> would violate this file's own
+// "not invented" rule above. SHOW_BUDGETS/SHOW_WALLETS in featureFlags.js
+// exist so that wiring is a one-line addition once the pages exist.
 export const ALL_BASEPLATE_SUBNAV = {
   overview: [
     { code: "DA", label: "Dashboard", to: "/", page: "dashboard" },
@@ -64,6 +76,13 @@ export const ALL_BASEPLATE_SUBNAV = {
     { code: "DP", label: "Daily Planner", to: "/daily-planner", page: "daily-planner" },
     { code: "AT", label: "Attendance", to: "/attendance", page: "attendance" },
     { code: "PR2", label: "Payroll", to: "/people/payroll", page: "payroll" },
+    // Duplicate of the "finance" tab's "IN" entry above (same route/page) —
+    // this reconciliation pass groups Incentives under People (matching the
+    // reference UI), the pre-existing baseplateNav put it under Finance;
+    // kept both rather than deleting the Finance one, which isn't this
+    // pass's call to make. Coded "IN2" (not "IN") so ITEM_FLAGS below can
+    // gate it independently.
+    { code: "IN2", label: "Incentives", to: "/incentives", page: "incentives" },
     { code: "TM", label: "Team & Access", to: "/admin/teams", page: "teams", adminOnly: true },
     { code: "US", label: "Users", to: "/admin/roles", page: "roles", adminOnly: true },
   ],
@@ -96,30 +115,38 @@ export const ALL_BASEPLATE_TABS = [
   { n: "09", label: "Product", tab: "product" },
 ];
 
-// Whole tabs outside v1 scope (CRM/HR/Admin — see the mission this was built
-// for, docs/GO_LIVE_V1_CHECKLIST.md "UI Cleanup"): Delivery (project
-// execution), Inventory (stock), Finance (invoicing/petty cash/cashbooks —
-// distinct from HR Payroll, which has no dedicated page yet, see the
-// checklist). Not deleted — just excluded from the exported, rendered list
-// below unless SHOW_LEGACY_MENUS is on.
-const LEGACY_TABS = new Set(["delivery", "inventory", "finance"]);
+// Whole tabs gated per-module (docs/MODULE_READINESS_MATRIX.md: each of
+// these is a verified full vertical slice — frontend + live API +
+// persistence + tenant/RBAC + backend tests) rather than by the single
+// SHOW_LEGACY_MENUS switch. SHOW_LEGACY_MENUS still forces all of them on
+// (umbrella override), same as before.
+const TAB_FLAGS = { delivery: SHOW_DELIVERY, inventory: SHOW_INVENTORY, finance: SHOW_FINANCE };
 
-// Individual sub-nav items, outside v1 scope but living in tabs that stay
-// (Reports/Executive Analytics are "advanced analytics"; Record Chain and
-// Team Board/Discussions are outside CRM/HR/Admin v1 scope). Matched by code.
-const LEGACY_ITEM_CODES = new Set(["RP", "EX", "RC", "TB"]);
+// Individual sub-nav items gated per-module, same reasoning as TAB_FLAGS.
+// Record Chain/Team Board live inside the always-visible "control" tab;
+// Reports/Executive Analytics inside the always-visible "overview" tab —
+// hence per-item rather than per-tab gating for these. The two Incentives
+// entries (IN/IN2) share SHOW_INCENTIVES.
+const ITEM_FLAGS = {
+  RP: SHOW_REPORTS, EX: SHOW_REPORTS, RC: SHOW_RECORD_CHAIN, TB: SHOW_LEGACY_MENUS,
+  IN: SHOW_INCENTIVES, IN2: SHOW_INCENTIVES,
+};
 
-export const BASEPLATE_SUBNAV = SHOW_LEGACY_MENUS
-  ? ALL_BASEPLATE_SUBNAV
-  : Object.fromEntries(
-      Object.entries(ALL_BASEPLATE_SUBNAV)
-        .filter(([tab]) => !LEGACY_TABS.has(tab))
-        .map(([tab, items]) => [tab, items.filter((i) => !LEGACY_ITEM_CODES.has(i.code))])
-    );
+function tabVisible(tab) {
+  return SHOW_LEGACY_MENUS || !(tab in TAB_FLAGS) || TAB_FLAGS[tab];
+}
 
-export const BASEPLATE_TABS = SHOW_LEGACY_MENUS
-  ? ALL_BASEPLATE_TABS
-  : ALL_BASEPLATE_TABS.filter((t) => !LEGACY_TABS.has(t.tab));
+function itemVisible(item) {
+  return SHOW_LEGACY_MENUS || !(item.code in ITEM_FLAGS) || ITEM_FLAGS[item.code];
+}
+
+export const BASEPLATE_SUBNAV = Object.fromEntries(
+  Object.entries(ALL_BASEPLATE_SUBNAV)
+    .filter(([tab]) => tabVisible(tab))
+    .map(([tab, items]) => [tab, items.filter(itemVisible)])
+);
+
+export const BASEPLATE_TABS = ALL_BASEPLATE_TABS.filter((t) => tabVisible(t.tab));
 
 // Which tab a given pathname belongs to, so the header highlights the right
 // pill/sub-item on a hard refresh or a link followed from outside the header.

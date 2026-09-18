@@ -179,3 +179,187 @@ No data migration ran, so there is nothing to roll back at the database level �
 # optional, only if you want to remove the test data these smoke tests created
 mongosh $env:MONGO_URL --eval "db.getSiblingDB('madio_crm').crm_leads.drop(); db.getSiblingDB('madio_crm').crm_opportunities.drop(); db.getSiblingDB('madio_crm').crm_accounts.drop();"
 ```
+
+## v1.2 — Nav Reconciliation
+
+> **Superseded for go-live**: the "Enabled by default now" list directly
+> below described a *broader* rollout recommendation. A follow-up go-live
+> readiness pass reverted those six flags back to **off** by default — v1
+> launch scope stays CRM (Leads/Opportunities/Accounts & Contacts/
+> Quotations) + HR (Attendance/Payroll) + basic Admin (Users/Brands) only,
+> same scope the original "UI Cleanup" section above already defined. The
+> per-module flag *infrastructure* this pass built is still in place and
+> still the supported way to turn any one of them back on — only the
+> defaults changed. See the current state further down this section.
+
+ECC Product Reconciliation Agent pass, per `docs/UI_BACKEND_DIFFERENTIAL.md`,
+`docs/MODULE_READINESS_MATRIX.md`, `docs/SCREEN_API_MODEL_MATRIX.md`.
+Headline finding: almost everything behind `SHOW_LEGACY_MENUS` already had a
+real frontend page, live API, and (mostly) backend tests — it just needed
+verification, not new construction. The single `SHOW_LEGACY_MENUS` switch
+became per-module flags in `frontend/src/lib/featureFlags.js` (this part
+still stands); this section's original recommendation to default them all
+**on** does not (see the box above).
+
+**Original recommendation here (superseded — kept for history):**
+- `SHOW_DELIVERY` — Projects, D&W Survey/BOQ, Outstanding
+- `SHOW_INVENTORY` — Stock, Stock Ledger, Purchase Orders, Manufacturer Orders
+- `SHOW_FINANCE` — Tax Invoices, Petty Cash, Cashbooks, Project P&L, Payments
+- `SHOW_REPORTS` — Reports, Executive Analytics
+- `SHOW_RECORD_CHAIN` — Record Chain
+- `SHOW_INCENTIVES` — Incentives (also added under the People tab, matching
+  the reference UI's grouping, alongside its existing Finance-tab entry)
+
+**Current state (go-live default, all six `moduleFlag(..., false)` in
+`frontend/src/lib/featureFlags.js`):** all six of the above are **hidden**
+by default. Every one of them is still a verified, fully working vertical
+slice per `docs/MODULE_READINESS_MATRIX.md` — this is a nav-scope decision
+for launch, not a readiness gap. **To re-enable any one:** set its
+`REACT_APP_SHOW_<NAME>=true` in `frontend/.env` (e.g.
+`REACT_APP_SHOW_DELIVERY=true`) and rebuild — no code change needed. To
+re-enable everything at once, `REACT_APP_SHOW_LEGACY_MENUS=true` still works
+as the umbrella override, same as before this pass.
+
+**Still off by default** (backend-only, no frontend page exists):
+- `SHOW_BUDGETS` — `backend/api_budget.py`/`models_budget.py`, 14 backend
+  tests, but no `Budgets.jsx`. See `docs/SCREEN_API_MODEL_MATRIX.md`
+  "Budgets" for the smallest implementation.
+- `SHOW_WALLETS` — `backend/api_wallets.py`/`models_wallet.py`, 10 backend
+  tests, no `Wallets.jsx`, AND its Cashbook/Petty-Cash overlap
+  (`docs/WALLETS_DESIGN.md`) is unresolved — turning this on before that's
+  settled would show a second, disagreeing cash-in-hand figure.
+
+**Genuinely missing** (not flagged, not built — see
+`docs/MODULE_READINESS_MATRIX.md`'s Product group and Delivery's Production/
+Installation/Service Warranty rows): Vendors page (backend CRUD exists),
+Leaves page (backend exists), Documents page (backend exists), company-wide
+P&L, Production, Installation detail, Service Warranty, and the Product-tab
+SaaS-platform-admin set (Installs Console, Provisioning, Plans/Billing,
+Industry Presets, Template Org) — none of these have a "flip a flag" fix;
+each needs the smallest-implementation build described per-item in
+`docs/SCREEN_API_MODEL_MATRIX.md`.
+
+**Verification run this pass:**
+```
+cd backend
+python -m pytest tests/ -q                          # 623 passed
+python -m pytest tests/test_tenant_isolation_api.py tests/test_tenancy.py -v   # 26 passed
+python -m py_compile server.py api_budget.py api_wallets.py api_hr.py \
+  api_canonical.py models_budget.py models_wallet.py tenancy.py permissions.py lifecycle.py
+
+cd ../frontend
+CI=true npm run build                                # Compiled successfully
+```
+Live smoke test (real `mongod`, disposable `DB_NAME=v1_2_smoke_test`, dropped after):
+```
+uvicorn server:app --host 127.0.0.1 --port 8000     # DB_NAME=v1_2_smoke_test
+curl http://127.0.0.1:8000/api/v1/brands                                    # 200
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/projects   # 200 []
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"project_no":"SMOKE-1","customer":"Smoke Test Customer","division":"Furniture"}' \
+  http://127.0.0.1:8000/api/projects                                        # 200, round-trips
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/inventory  # 200 []
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/invoices   # 200 []
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/purchase-orders   # 200 []
+curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8000/api/reports?period=month"  # 200, real aggregation
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/budgets?status=       # 200 [] (backend-only, confirmed live)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/v1/wallets               # 200 [] (backend-only, confirmed live)
+curl http://127.0.0.1:8000/api/projects             # no token → 401, auth enforced
+```
+
+**Rollback (frontend-only, no backend/data changes this pass beyond docs):**
+```
+git log --oneline -5
+git checkout <previous-sha> -- frontend/src/lib/featureFlags.js frontend/src/lib/baseplateNav.js
+```
+Or, without touching code: set `REACT_APP_SHOW_DELIVERY=false
+REACT_APP_SHOW_INVENTORY=false REACT_APP_SHOW_FINANCE=false
+REACT_APP_SHOW_REPORTS=false REACT_APP_SHOW_RECORD_CHAIN=false
+REACT_APP_SHOW_INCENTIVES=false` in `frontend/.env` and rebuild — restores
+the exact pre-this-pass nav with zero code changes, same reversibility
+guarantee the original `SHOW_LEGACY_MENUS` flag had.
+
+**Next recommended vertical slice:** Budgets read-only UI (`Budgets.jsx`) —
+no unresolved dependency (unlike Wallets), backend fully tested, and it's
+the smallest of the genuinely-missing-UI items per
+`docs/SCREEN_API_MODEL_MATRIX.md`.
+
+## Light theme (design-system migration)
+
+Per `docs/LIGHT_THEME_MIGRATION_PLAN.md`/`docs/DESIGN_TOKEN_MAP.md`. A
+second, opt-in shell — light blue-gray background, white/blue-tint cards,
+blue primary actions, spacious left sidebar — alongside the existing
+"baseplate" dark-header shell. **Default stays baseplate everywhere**,
+including local dev, per the migration plan's "preserve current production
+default" decision.
+
+**Enable:** `REACT_APP_UI_THEME=light` in `frontend/.env`, restart/rebuild.
+**Rollback:** remove that line (or set it to anything else, e.g.
+`baseplate`), restart/rebuild. No code path was removed — `Header.jsx`/
+`baseplateNav.js` are untouched.
+
+Files created: `frontend/src/components/light/{LightAppShell,LightSidebar,
+LightTopbar}.jsx`; `frontend/src/components/{MetricCard,SectionCard,
+StatusBadge,PrimaryButton,SecondaryButton,PageHeader,ErrorState,
+LoadingSkeleton,FilterBar}.jsx`; `docs/LIGHT_THEME_MIGRATION_PLAN.md`;
+`docs/DESIGN_TOKEN_MAP.md`.
+
+Files modified: `frontend/src/index.css` (new `--color-*`/`--radius-*`/
+`--space-*`/`--font-size-*` tokens), `frontend/src/lib/featureFlags.js`
+(`UI_THEME`/`IS_LIGHT_THEME`), `frontend/src/App.js` (sets
+`data-ui-theme`), `frontend/src/components/Layout.jsx` (theme branch),
+`frontend/src/pages/CommandCentre.jsx` (rebuilt on real data with the new
+components — see the migration plan's "Known gaps" for the KPIs
+deliberately NOT added: forecast, win rate, a working period filter).
+
+**Verified this pass:**
+- `CI=true npm run build` — Compiled successfully (baseplate default)
+- `CI=true REACT_APP_UI_THEME=light npm run build` — Compiled successfully
+- `cd backend && python -m pytest tests/ -q` — 623 passed, unchanged
+  (no backend file touched by this migration)
+- Live browser smoke test (real login, real tenant data) against the light
+  shell: profile-picker login → PIN → Overview renders with a real
+  greeting ("Good morning, Admin"), real tenant name, real role-aware
+  subtitle, real KPI values, real pipeline-by-unit chart, refresh
+  timestamp, and the sidebar's Overview/Pipeline/Contacts-Clients/Tasks/
+  Team/Reports grouping — all against the developer's own local dev
+  database, not sample data. Session-token flakiness was hit mid-walkthrough
+  from an unrelated stray backend process already listening on port 8000
+  from an earlier session (not caused by this migration's code); a full
+  automated click-through of every listed page (Leads, Pipeline, Customers,
+  Attendance, Payroll, logout) was not completed as a result — recommend
+  re-running the browser smoke test in a clean environment before sign-off.
+
+**Not done this pass:** individual page migrations for Leads/Pipeline/
+Customers/Attendance/Payroll (they render correctly inside the new shell,
+but their own internal card styling isn't yet token-driven — see the
+migration plan). Accessibility/responsive checks were verified by
+construction (semantic buttons, `aria-label`s, `:focus-visible` ring
+already global in `index.css`, `md:`/mobile drawer breakpoints in
+`LightAppShell`) rather than a full manual pass with a screen reader.
+
+## Light theme — Sales pages (Leads / Pipeline / Quotations / Customers)
+
+Per `docs/LIGHT_SALES_UI.md`. Migrated the 4 Sales-flow pages to the light
+design tokens/components (same technique as Overview: one file, token-swap,
+correct under both themes). Also added `AuthContext.canDo(moduleId, action)`
+— additive, gates Add/Edit/Delete controls on real per-action role grants
+instead of only page-level view access — and fixed two real frontend
+defects found live while testing with a restricted role (unhandled 403 on
+`Leads.jsx`'s architect/staff pickers; an Inventory 403 wrongly blocking the
+whole Quotations list in `Quotes.jsx`). No backend file touched — 623 tests
+still pass unchanged.
+
+**Validated live** against the real local dev database (`127.0.0.1:8001`;
+port 8000 has a pre-existing process from outside this session that
+couldn't be identified/killed — see chat history — so testing moved to
+8001 instead): admin and a freshly-seeded restricted (view-only) role, a
+populated tenant and an empty tenant, both `baseplate` and `light` themes,
+zero console errors after the two fixes. All QA test fixtures were deleted
+afterward. Full checklist and API/permission mapping in
+`docs/LIGHT_SALES_UI.md`.
+
+**Rollback:** identical to the base light-theme migration — unset
+`REACT_APP_UI_THEME` and rebuild. The `canDo` gating and the two defect
+fixes are correctness fixes, not visual ones, and apply under both themes,
+so there is nothing to roll back for those.
