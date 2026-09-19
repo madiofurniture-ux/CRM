@@ -10,7 +10,19 @@ const GATED_MODULES = [
   "leads", "customers", "quotes", "sales", "inventory",
   "visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
   "commissions", "cashbook", "record-contacts",
+  // api_hr.py's own permissions.py-backed modules (_can_hr/_require_hr) —
+  // added so a role_id account's Payroll/Leave route+action access mirrors
+  // its actual configured grant instead of falling through to the legacy
+  // `pages` array, same as every module above.
+  "payroll", "leave",
 ];
+
+// api_hr.py's _can_hr() bypasses the role-permission check entirely for
+// role === "admin" OR "accountant" on these two modules specifically — the
+// literal-role floor this codebase's HR API has always had, never narrowed
+// by the later permissions.py engine. Mirrored here so the UI never shows
+// (or hides) an action the backend would answer differently for.
+const HR_ROLE_BYPASS_MODULES = ["payroll", "leave"];
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null); // null = checking; false = anon; obj = user
@@ -57,6 +69,7 @@ export function AuthProvider({ children }) {
     if (!user) return false;
     if (tenant && Array.isArray(tenant.enabled_modules) && !tenant.enabled_modules.includes(pageId)) return false;
     if (user.role === "admin") return true;
+    if (user.role === "accountant" && HR_ROLE_BYPASS_MODULES.includes(pageId)) return true;
     if (user.role_id && GATED_MODULES.includes(pageId)) {
       const role = roles.find((r) => r.id === user.role_id);
       const modPerm = role?.permissions?.find((p) => p.module === pageId);
@@ -76,6 +89,7 @@ export function AuthProvider({ children }) {
     if (action === "view") return canAccess(moduleId);
     if (!canAccess(moduleId)) return false;
     if (user.role === "admin") return true;
+    if (user.role === "accountant" && HR_ROLE_BYPASS_MODULES.includes(moduleId)) return true;
     if (user.role_id && GATED_MODULES.includes(moduleId)) {
       const role = roles.find((r) => r.id === user.role_id);
       const modPerm = role?.permissions?.find((p) => p.module === moduleId);

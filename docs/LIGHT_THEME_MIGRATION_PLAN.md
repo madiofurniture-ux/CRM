@@ -78,7 +78,9 @@ verified by construction (same flags, same source array
 | Quotations (`Quotes.jsx`) | **Migrated** — see `docs/LIGHT_SALES_UI.md` |
 | Customers / Contacts (`Customers.jsx`) | **Migrated** — see `docs/LIGHT_SALES_UI.md` |
 | Shared: `Topbar.jsx`, `EmptyState.jsx`, `.btn-primary`/`.btn-ghost` (`index.css`) | **Migrated** — token-swapped, used by every page above and many others, so this repaints correctly under `[data-ui-theme="light"]` even on pages not individually touched |
-| Everything else (Attendance, Payroll, ...) | **Unmigrated this pass** — renders correctly *inside* the new `LightAppShell` (routing/API/permissions all work), but each page's own internal card/color styling still uses its original hardcoded values |
+| Attendance (`Attendance.jsx`, `AttendanceExceptionDrawer.jsx`) | **Migrated** — see `docs/LIGHT_PEOPLE_UI.md` |
+| Payroll (`PayrollPage.jsx`) | **Migrated** — see `docs/LIGHT_PEOPLE_UI.md` |
+| Everything else | **Unmigrated this pass** — renders correctly *inside* the new `LightAppShell` (routing/API/permissions all work), but each page's own internal card/color styling still uses its original hardcoded values |
 
 Per the brief's own "do not migrate unfinished pages merely for
 appearance" and the size of this repo (~40 page components), rebuilding

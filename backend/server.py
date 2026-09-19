@@ -831,6 +831,7 @@ ALL_MODULE_IDS = [
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
     "finance-payments", "purchase-orders", "master-data", "manufacturer-orders",
+    "payroll",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a

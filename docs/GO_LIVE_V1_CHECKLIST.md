@@ -363,3 +363,44 @@ afterward. Full checklist and API/permission mapping in
 `REACT_APP_UI_THEME` and rebuild. The `canDo` gating and the two defect
 fixes are correctness fixes, not visual ones, and apply under both themes,
 so there is nothing to roll back for those.
+
+## Light theme — Attendance & Payroll
+
+Per `docs/LIGHT_PEOPLE_UI.md`. Migrated Attendance (`Attendance.jsx`,
+`AttendanceExceptionDrawer.jsx`) and Payroll (`PayrollPage.jsx`) to the
+light design tokens — same technique as every prior page, one file, no
+per-theme fork. Added real Present/Absent/Overtime/Open-exceptions summary
+cards to Attendance (computed from already-fetched rows, no invented
+Late/LOP/Holiday data — neither has a real source in this attendance
+system). Rebuilt Payroll with the full real column set (Payable Days/LOP
+Days/OT Hours/LOP Deduction/OT Pay/Net Pay/Status), permission-gated
+Calculate/Approve/Mark Paid/Unlock actions, and a prominent (never hidden)
+attendance-exceptions block with the existing override-and-approve flow.
+
+**Two real defects found and fixed during this pass's own required
+browser smoke test:**
+1. **Backend, one line**: `"payroll"` was never in `server.py`'s
+   `ALL_MODULE_IDS`, so every tenant's default `enabled_modules` list
+   omitted it — `/people/payroll` showed "No access" to every user,
+   **including admins**, on every tenant. Fixed by adding the one string;
+   no payroll arithmetic/approval logic touched, 623 tests unchanged.
+2. **Frontend**: `AuthContext`'s `canDo`/`canAccess` couldn't consult a
+   role's actual `payroll`/`leave` permission grant (missing from
+   `GATED_MODULES`) — added both, plus the `admin`/`accountant`-literal
+   bypass `api_hr.py` has always had. Verified live: a `payroll:view`-only
+   role sees the list with zero write controls, and a direct API call from
+   that same account is independently rejected `403` by the backend.
+
+**Validated live** against the real local dev database: admin and a
+freshly-seeded restricted role, a populated tenant and an empty tenant,
+both themes, zero console errors, full Draft→Approved→Paid lifecycle
+exercised end-to-end. Port 8001 turned out to be another unkillable
+pre-existing process (same class of issue as the port-8000 case earlier in
+this engagement) — testing moved to port 8002 for a verifiably clean
+process. All QA fixtures deleted afterward. Full checklist in
+`docs/LIGHT_PEOPLE_UI.md`.
+
+**Rollback:** identical to every prior light-theme pass — unset
+`REACT_APP_UI_THEME` and rebuild. The `ALL_MODULE_IDS` fix and the
+`GATED_MODULES`/`canDo` permission work are correctness fixes that apply
+under both themes; nothing to roll back for those.
