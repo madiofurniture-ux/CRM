@@ -1,0 +1,8 @@
+{
+  "name": "MADIO CRM",
+  "description": "MADIO Group CRM with WhatsApp-style confidential project chat groups, document & site picture sharing, lead management, quotes, sales, project execution & petty cash tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
