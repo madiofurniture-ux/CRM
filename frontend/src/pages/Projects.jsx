@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
@@ -13,12 +13,13 @@ import useWorkflow, { stageErrorMessage } from "@/hooks/useWorkflow";
 import StakeholdersCard from "@/components/StakeholdersCard";
 import ProjectTrackingTab from "@/components/ProjectTrackingTab";
 import JourneyDrawer from "@/components/JourneyDrawer";
+import ProjectOpsPanel from "@/components/ProjectOpsPanel";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import { projectLifecycleStages } from "@/lib/lifecycle";
 import api from "@/lib/api";
 import { inrFull, fmtDate, marginTone } from "@/lib/format";
-import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2, MessageSquare } from "lucide-react";
+import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2, FolderOpen, Phone, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 
 const STAGES = [
@@ -75,8 +76,13 @@ export default function Projects() {
     target_date: "",
     remarks: "",
     quote_ref: "",
+    project_name: "",
+    project_type: "",
+    project_manager: "",
+    architect_name: "",
   };
   const [form, setForm] = useState(emptyForm);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [pnlByProject, setPnlByProject] = useState({});
   const [divisionFilter, setDivisionFilter] = usePersistedState("projects.division", "All");
   const [divisionPulse, setDivisionPulse] = useState([]);
@@ -101,6 +107,19 @@ export default function Projects() {
     loadDivisionPulse();
   }, []);
 
+  // /projects?open=<id> (global search, service tickets, customer 360) opens
+  // that project's detail directly.
+  useEffect(() => {
+    const id = searchParams.get("open");
+    if (!id || !rows.length) return;
+    const p = rows.find((r) => r.id === id);
+    if (p) setLogProject(p);
+  }, [searchParams, rows]);
+  const closeDetail = () => {
+    setLogProject(null);
+    if (searchParams.get("open")) { searchParams.delete("open"); setSearchParams(searchParams, { replace: true }); }
+  };
+
   // Margin is masked server-side under Privacy Mode, so this refetches on
   // unlock/relock instead of holding a stale figure.
   useEffect(() => {
@@ -119,6 +138,8 @@ export default function Projects() {
         (r.customer || "").toLowerCase().includes(q) ||
         (r.project_no || "").toLowerCase().includes(q) ||
         (r.site_address || "").toLowerCase().includes(q) ||
+        (r.project_name || "").toLowerCase().includes(q) ||
+        (r.phone || "").includes(q) ||
         (r.assigned_engineer || "").toLowerCase().includes(q);
       return matchStage && matchDivision && matchQuery;
     });
@@ -168,8 +189,9 @@ export default function Projects() {
       setShowModal(false);
       setForm(emptyForm);
       load();
-    } catch {
-      toast.error(editing ? "Failed to update project" : "Failed to create project");
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : editing ? "Failed to update project" : "Failed to create project");
     } finally {
       setSaving(false);
     }
@@ -181,8 +203,9 @@ export default function Projects() {
       await api.delete(`/projects/${p.id}`);
       toast.success("Project deleted");
       load();
-    } catch {
-      toast.error("Failed to delete project");
+    } catch (e) {
+      const d = e?.response?.data?.detail;
+      toast.error(typeof d === "string" ? d : "Failed to delete project");
     }
   };
 
@@ -192,13 +215,13 @@ export default function Projects() {
   return (
     <>
       <Topbar
-        title="Project Execution Workflow"
+        title="Projects"
         subtitle={`${filtered.length} projects · Value ${inrFull(totalValue)} · Collected ${inrFull(totalPaid)}`}
         onAdd={openNew}
         addLabel="New Project"
       />
 
-      <div className="p-6" data-testid="projects-page">
+      <div className="p-3 sm:p-6" data-testid="projects-page">
         {/* Stage Workflow Pipeline Bar */}
         <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-2">
           <button
@@ -265,13 +288,13 @@ export default function Projects() {
         )}
 
         {/* Filter / Search input */}
-        <div className="mb-5 flex items-center justify-between gap-4">
+        <div className="mb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
           <input
             type="text"
             placeholder="Search project #, customer, address, engineer..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-80 px-3.5 py-2 text-sm rounded-xl bg-white border border-[var(--border)] outline-none focus:border-[var(--brand)] transition"
+            className="w-full sm:w-80 px-3.5 py-2 text-sm rounded-xl bg-white border border-[var(--border)] outline-none focus:border-[var(--brand)] transition"
           />
           <select
             value={divisionFilter}
@@ -314,10 +337,10 @@ export default function Projects() {
                       <button
                         onClick={() => setLogProject(p)}
                         className="p-1 rounded hover:bg-[var(--surface-2)] text-[var(--ink-2)]"
-                        title="Follow-up timeline"
+                        title="Open project"
                         data-testid={`project-log-${p.id}`}
                       >
-                        <MessageSquare size={13} />
+                        <FolderOpen size={13} />
                       </button>
                       <button
                         onClick={() => remove(p)}
@@ -345,6 +368,7 @@ export default function Projects() {
                     // stays plain text rather than a control that does nothing.
                     <h3 className="font-heading font-bold text-base text-[var(--ink)] mb-1">{p.customer}</h3>
                   )}
+                  {p.project_name && <div className="text-xs text-[var(--ink-2)] -mt-0.5 mb-1">{p.project_name}</div>}
                   <div className="text-xs text-[var(--ink-2)] mb-3 flex items-center gap-1.5">
                     <span className="font-medium text-[var(--brand)] bg-[var(--brand-light)] px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider">
                       {p.division}
@@ -371,6 +395,28 @@ export default function Projects() {
                     )}
                   </div>
 
+                  <button type="button" onClick={() => setLogProject(p)} className="w-full text-left mb-3" data-testid={`project-progress-${p.id}`}>
+                    <div className="flex items-center justify-between text-[11px] mb-1">
+                      <span className="text-[var(--ink-2)]">
+                        {p.current_milestone ? <>Next: <b className="text-[var(--ink)]">{p.current_milestone}</b></> : "Open stage checklist"}
+                      </span>
+                      <span className="font-mono text-[var(--ink-3)]">{p.completion_percentage || 0}%</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-[var(--surface-2)] overflow-hidden">
+                      <div className="h-full bg-[var(--moss)]" style={{ width: `${Math.min(100, p.completion_percentage || 0)}%` }} />
+                    </div>
+                  </button>
+                  {p.phone && (
+                    <div className="flex gap-2 mb-3">
+                      <a href={`tel:${p.phone}`} className="flex-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-lg border border-[var(--border)] text-xs font-semibold text-[var(--ink)] hover:bg-[var(--surface-2)]">
+                        <Phone size={13} /> Call
+                      </a>
+                      <a href={`https://wa.me/91${String(p.phone).replace(/\D/g, "").slice(-10)}`} target="_blank" rel="noreferrer"
+                        className="flex-1 inline-flex items-center justify-center gap-1.5 py-2 rounded-lg border border-emerald-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">
+                        <MessageCircle size={13} /> WhatsApp
+                      </a>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between text-xs font-mono mb-2 pt-1">
                     <div>
                       <div className="text-[10px] text-[var(--ink-3)] uppercase tracking-wider">Value</div>
@@ -432,8 +478,8 @@ export default function Projects() {
 
       {/* New Project Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-[var(--border)] w-full max-w-lg shadow-xl overflow-hidden animate-in fade-in zoom-in duration-150">
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl border border-[var(--border)] w-full max-w-lg shadow-xl max-h-[95vh] overflow-y-auto animate-in fade-in zoom-in duration-150">
             <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface-2)]">
               <h3 className="font-heading font-bold text-base text-[var(--ink)]">{editing ? "Edit Project" : "Create Project Workflow"}</h3>
               <button onClick={() => setShowModal(false)} className="p-1 rounded-lg text-[var(--ink-3)] hover:bg-white">
@@ -463,6 +509,22 @@ export default function Projects() {
                     {divisions.map((d) => (
                       <option key={d.id} value={d.slug}>{d.name}</option>
                     ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Project Name</label>
+                  <input type="text" placeholder="e.g. Villa 12 living + dining" value={form.project_name || ""}
+                    onChange={(e) => setForm({ ...form, project_name: e.target.value })}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Project Type</label>
+                  <select value={form.project_type || ""} onChange={(e) => setForm({ ...form, project_type: e.target.value })}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)] bg-white">
+                    {["", "Villa", "Apartment", "Independent House", "Office", "Showroom", "Hospitality", "Other"].map((t) => <option key={t} value={t}>{t || "—"}</option>)}
                   </select>
                 </div>
               </div>
@@ -499,6 +561,29 @@ export default function Projects() {
                     onChange={(e) => setForm({ ...form, assigned_engineer: e.target.value })}
                     className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]"
                   />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Project Manager</label>
+                  <input type="text" value={form.project_manager || ""} onChange={(e) => setForm({ ...form, project_manager: e.target.value })}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Architect / Designer</label>
+                  <input type="text" value={form.architect_name || ""} onChange={(e) => setForm({ ...form, architect_name: e.target.value })}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Start Date</label>
+                  <input type="date" value={form.start_date || ""} onChange={(e) => setForm({ ...form, start_date: e.target.value })}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Expected Completion</label>
+                  <input type="date" value={form.target_date || ""} min={form.start_date || undefined} onChange={(e) => setForm({ ...form, target_date: e.target.value })}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]" />
                 </div>
               </div>
 
@@ -573,11 +658,11 @@ export default function Projects() {
       <JourneyDrawer phone={jny?.phone} name={jny?.name} onClose={() => setJny(null)} />
 
       {logProject && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setLogProject(null)}>
-          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b">
-              <h3 className="font-heading font-semibold text-lg flex items-center gap-2">
-                Follow-ups — {logProject.project_no}
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={closeDetail}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl border border-[var(--border)] w-full max-w-2xl shadow-2xl max-h-[96vh] overflow-y-auto" onClick={(e) => e.stopPropagation()} data-testid="project-detail">
+            <div className="sticky top-0 z-10 bg-white flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 border-b">
+              <h3 className="font-heading font-semibold text-base sm:text-lg flex flex-wrap items-center gap-2">
+                {logProject.project_no} · {logProject.customer}
                 {pnlByProject[logProject.id]?.wallet_count > 0 && (() => {
                   const masked = pnlByProject[logProject.id].margin_pct == null;
                   const tone = marginTone(pnlByProject[logProject.id].margin_pct);
@@ -588,9 +673,16 @@ export default function Projects() {
                   );
                 })()}
               </h3>
-              <button onClick={() => setLogProject(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
+              <button onClick={closeDetail} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]" aria-label="Close"><X size={16} /></button>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="p-3 sm:p-5 space-y-4">
+              <ProjectOpsPanel
+                project={logProject}
+                onProjectUpdated={(updated) => {
+                  setLogProject(updated);
+                  setRows((p) => p.map((x) => x.id === updated.id ? { ...x, ...updated } : x));
+                }}
+              />
               <Link to={`/finance/pnl?project_id=${logProject.id}`} className="inline-flex text-sm font-medium text-[var(--color-primary)] hover:underline">
                 View deal P&L: visitor to profit
               </Link>

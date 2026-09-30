@@ -47,11 +47,18 @@ export default function CommandCentre() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
+  const [fu, setFu] = useState(null);
   const showMoney = canAccess("expenses");
+  const showFollowups = canAccess("leads");
 
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
+    if (showFollowups) {
+      api.get("/followups/summary", { skipCache: true })
+        .then((r) => setFu(r.data?.counts || null))
+        .catch(() => setFu(null));
+    }
     if (showMoney) {
       api.get("/money-requests/summary", { skipCache: true })
         .then((r) => setMoneySummary(r.data))
@@ -68,7 +75,7 @@ export default function CommandCentre() {
         setError({ unauthorized: status === 401 || status === 403 });
       })
       .finally(() => setLoading(false));
-  }, [showMoney]);
+  }, [showMoney, showFollowups]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -115,6 +122,23 @@ export default function CommandCentre() {
           />
         ) : (
           <>
+            {fu && (
+              <Link to="/follow-ups" className="grid grid-cols-3 gap-3" data-testid="followup-strip" aria-label="Open follow-ups">
+                {[["Overdue", fu.overdue, "bg-red-50 text-red-700 border-red-200"],
+                  ["Today", fu.today, "bg-amber-50 text-amber-700 border-amber-200"],
+                  ["Upcoming", fu.upcoming, "bg-blue-50 text-blue-700 border-blue-200"]].map(([label, n, tone]) => (
+                  <div key={label} className={`rounded-[var(--radius-lg)] border p-3 md:p-4 ${tone}`}>
+                    <div className="text-[10px] md:text-xs font-bold uppercase tracking-wider">{label} follow-ups</div>
+                    <div className="font-heading font-bold text-2xl md:text-3xl">{num(n)}</div>
+                  </div>
+                ))}
+                {(num(fu.no_follow_up) + num(fu.no_next_action) + num(fu.unassigned)) > 0 && (
+                  <div className="col-span-3 text-xs text-[var(--color-text-muted)] -mt-1">
+                    {num(fu.no_follow_up)} open leads have no follow-up date · {num(fu.no_next_action)} have no next action · {num(fu.unassigned)} unassigned · {num(fu.open_service_tickets)} open service tickets
+                  </div>
+                )}
+              </Link>
+            )}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               {loading && !overview
                 ? Array.from({ length: 5 }).map((_, i) => <MetricCard key={i} label="" loading />)
@@ -149,8 +173,8 @@ export default function CommandCentre() {
                     <div className="h-24 rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] animate-pulse" />
                   ) : (
                     <div className="space-y-2" data-testid="today-panel">
-                      <TodayRow to="/leads" label="Lead follow-ups due" count={num(today.follow_ups_due)} />
-                      <TodayRow to="/leads" label="Follow-ups overdue" count={num(today.follow_ups_overdue)} tone="danger" />
+                      <TodayRow to="/follow-ups" label="Lead follow-ups due" count={num(today.follow_ups_due)} />
+                      <TodayRow to="/follow-ups" label="Follow-ups overdue" count={num(today.follow_ups_overdue)} tone="danger" />
                       <TodayRow to="/tasks" label="Overdue tasks" count={breaches} tone="danger" />
                       {showMoney && (
                         <TodayRow to="/approvals" label="Money requests waiting on you" count={moneyForYou} />

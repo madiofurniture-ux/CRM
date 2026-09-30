@@ -7,9 +7,13 @@ import {
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
   LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare, PhoneOutgoing,
+  AlarmClock, LifeBuoy,
 } from "lucide-react";
 
-// app: the switcher group · id: permission key · to: route · label/icon: display
+// app: the switcher group · id: unique key · to: route · label/icon: display
+// perm (optional): the page grant that gates this item when it differs from
+// id — lets a new screen ride an existing grant (Follow-ups -> leads,
+// Service -> projects) so no existing account needs re-permissioning.
 export const NAV = [
   // Overview (pinned — always shown above the app switcher)
   { app: "overview", id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, pinned: true },
@@ -18,16 +22,18 @@ export const NAV = [
 
   // Sell
   { app: "sell", id: "leads", to: "/leads", label: "Leads", icon: Sparkles },
+  { app: "sell", id: "followups", perm: "leads", to: "/follow-ups", label: "Lead Follow-ups", icon: AlarmClock },
   { app: "sell", id: "calls", to: "/calls", label: "Call Log", icon: PhoneOutgoing },
   { app: "sell", id: "pipeline", to: "/pipeline", label: "Pipeline", icon: Columns3 },
   { app: "sell", id: "quotes", to: "/quotes", label: "Deals / Quotes", icon: FileText },
   { app: "sell", id: "quote-builder", to: "/quotes/builder", label: "Quote Builder", icon: LayoutTemplate },
-  { app: "sell", id: "quote-followups", to: "/quotes/followups", label: "Follow-ups", icon: PhoneCall },
+  { app: "sell", id: "quote-followups", to: "/quotes/followups", label: "Quote Follow-ups", icon: PhoneCall },
   { app: "sell", id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
   { app: "sell", id: "visitors", to: "/visitors", label: "Visitors", icon: UserPlus },
 
   // Deliver
-  { app: "deliver", id: "projects", to: "/projects", label: "MAP Projects", icon: Hammer },
+  { app: "deliver", id: "projects", to: "/projects", label: "Projects", icon: Hammer },
+  { app: "deliver", id: "service", perm: "projects", to: "/service", label: "Service & Warranty", icon: LifeBuoy },
   { app: "deliver", id: "dwsurvey", to: "/dw-survey", label: "D&W Survey", icon: DoorOpen },
   { app: "deliver", id: "outstanding", to: "/outstanding", label: "Outstanding", icon: AlertTriangle },
 
@@ -68,5 +74,5 @@ export const NAV = [
 ];
 
 // Flat list for the Role Manager permission grid.
-export const ALL_PAGES = NAV.filter((n) => !n.adminOnly || n.id === "roles")
+export const ALL_PAGES = NAV.filter((n) => (!n.adminOnly || n.id === "roles") && !n.perm)
   .map((n) => ({ id: n.id, label: n.label }));

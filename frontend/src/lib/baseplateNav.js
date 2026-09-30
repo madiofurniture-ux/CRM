@@ -38,10 +38,11 @@ export const ALL_BASEPLATE_SUBNAV = {
   sales: [
     { code: "PI", label: "Pipeline", to: "/pipeline", page: "pipeline" },
     { code: "LD", label: "Leads", to: "/leads", page: "leads" },
+    { code: "LF", label: "Lead Follow-ups", to: "/follow-ups", page: "leads" },
     { code: "CL", label: "Call Log", to: "/calls", page: "calls" },
     { code: "QT", label: "Quotations", to: "/quotes", page: "quotes", isNew: true },
     { code: "QB", label: "Quote Builder", to: "/quotes/builder", page: "quote-builder" },
-    { code: "FU", label: "Follow-ups", to: "/quotes/followups", page: "quote-followups" },
+    { code: "FU", label: "Quote Follow-ups", to: "/quotes/followups", page: "quote-followups" },
     { code: "SR", label: "Sales register", to: "/sales", page: "sales" },
     { code: "VI", label: "Visitors", to: "/visitors", page: "visitors" },
   ],
@@ -53,6 +54,7 @@ export const ALL_BASEPLATE_SUBNAV = {
   delivery: [
     { code: "PR", label: "Projects", to: "/projects", page: "projects" },
     { code: "DW", label: "D&W Survey", to: "/dw-survey", page: "dwsurvey" },
+    { code: "SV", label: "Service & Warranty", to: "/service", page: "projects" },
     { code: "OS", label: "Outstanding", to: "/outstanding", page: "outstanding" },
   ],
   inventory: [

@@ -13,7 +13,7 @@ import {
 // group) so a single flagged item inside an otherwise-visible group (e.g.
 // "incentives" inside "money") can be gated independently.
 const ITEM_FLAG = {
-  projects: SHOW_DELIVERY, dwsurvey: SHOW_DELIVERY, outstanding: SHOW_DELIVERY,
+  projects: SHOW_DELIVERY, dwsurvey: SHOW_DELIVERY, outstanding: SHOW_DELIVERY, service: SHOW_DELIVERY,
   inventory: SHOW_INVENTORY, "stock-ledger": SHOW_INVENTORY,
   "purchase-orders": SHOW_INVENTORY, "manufacturer-orders": SHOW_INVENTORY,
   "inv-analytics": SHOW_INVENTORY,
@@ -32,13 +32,13 @@ const ITEM_FLAG = {
 // just grouped for a left sidebar instead of a top pill bar.
 const SECTIONS = [
   { label: "Overview", ids: ["dashboard", "analytics", "alerts"] },
-  { label: "Pipeline", ids: ["leads", "calls", "pipeline", "quotes",
+  { label: "Pipeline", ids: ["leads", "followups", "calls", "pipeline", "quotes",
     "quote-builder", "quote-followups", "sales", "visitors"] },
   { label: "Contacts / Clients", ids: ["customers", "architects", "meetplan"] },
   { label: "Tasks", ids: ["tasks", "daily-planner"] },
   { label: "Team", ids: ["attendance", "payroll", "roles"] },
   { label: "Reports", ids: ["reports", "executive", "record-chain"] },
-  { label: "Delivery", ids: ["projects", "dwsurvey", "outstanding"] },
+  { label: "Delivery", ids: ["projects", "dwsurvey", "service", "outstanding"] },
   { label: "Inventory", ids: ["inventory", "stock-ledger", "purchase-orders", "manufacturer-orders", "inv-analytics"] },
   { label: "Finance", ids: ["expenses", "cashbook", "pnl", "project-pnl", "finance-payments", "invoice-gen", "incentives", "petty"] },
   { label: "Admin", ids: ["data-centre", "discussions", "audit-trail"] },
@@ -54,7 +54,7 @@ export default function LightSidebar({ collapsed = false, onNavigate }) {
     if (!item) return false;
     if (id in ITEM_FLAG && !ITEM_FLAG[id]) return false;
     if (item.adminOnly && user?.role !== "admin") return false;
-    return canAccess(item.id);
+    return canAccess(item.perm || item.id);
   };
 
   return (

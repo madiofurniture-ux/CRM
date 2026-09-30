@@ -2,6 +2,8 @@ import { useEffect, useState, useMemo } from "react";
 import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import JourneyDrawer from "@/components/JourneyDrawer";
+import CustomerOverviewDrawer from "@/components/CustomerOverviewDrawer";
+import { useSearchParams } from "react-router-dom";
 import StarRating from "@/components/StarRating";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
@@ -14,7 +16,7 @@ import useCustomFields from "@/hooks/useCustomFields";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
-import { Compass, X, Pencil, Phone, MessageCircle, Contact, Download, Upload } from "lucide-react";
+import { Compass, X, Pencil, Phone, MessageCircle, Contact, Download, Upload, FolderOpen } from "lucide-react";
 
 const waLink = (phone, text = "") => {
   const ph = String(phone || "").replace(/\D/g, "").slice(-10);
@@ -33,6 +35,10 @@ export default function Customers() {
   const [search, setSearch] = useState("");
   const [fStage, setFStage] = usePersistedState("customers.stage", "All");
   const [jny, setJny] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const overviewId = searchParams.get("open");
+  const openOverview = (id) => { searchParams.set("open", id); setSearchParams(searchParams); };
+  const closeOverview = () => { searchParams.delete("open"); setSearchParams(searchParams, { replace: true }); };
   const [editing, setEditing] = useState(null);   // existing customer being edited, or null
   const [show, setShow] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -242,6 +248,14 @@ export default function Customers() {
                         </button>
                       )}
                       <button
+                        onClick={() => openOverview(c.id)}
+                        title="Projects, payments & service"
+                        className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]"
+                        data-testid={`customer-overview-${c.id}`}
+                      >
+                        <FolderOpen size={14} />
+                      </button>
+                      <button
                         onClick={() => setJny({ phone: c.phone, name: c.name })}
                         title="Customer 360"
                         className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]"
@@ -316,6 +330,7 @@ export default function Customers() {
       )}
 
       <JourneyDrawer phone={jny?.phone} name={jny?.name} onClose={() => setJny(null)} />
+      <CustomerOverviewDrawer customerId={overviewId} onClose={closeOverview} />
 
       {showImport && (
         <CsvImportModal entity="customers" onClose={() => setShowImport(false)} onImported={load} />

@@ -37,8 +37,10 @@ function moduleFlag(name, defaultOn) {
   return defaultOn;
 }
 
-// Delivery (Projects, D&W Survey/BOQ, Outstanding) — outside v1 scope.
-export const SHOW_DELIVERY = moduleFlag("DELIVERY", false);
+// Delivery (Projects, D&W Survey/BOQ, Service & Warranty, Outstanding).
+// ON for go-live: projects, site surveys, payments and service are the
+// operational core of all three divisions. REACT_APP_SHOW_DELIVERY=false hides it.
+export const SHOW_DELIVERY = moduleFlag("DELIVERY", true);
 
 // Inventory (Stock, Stock Ledger, Purchasing) — outside v1 scope.
 export const SHOW_INVENTORY = moduleFlag("INVENTORY", false);

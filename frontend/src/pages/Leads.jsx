@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
@@ -35,7 +36,11 @@ const DEFAULT_STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation"
 // "Architect Ref"/"WhatsApp"/etc are pre-existing source values seeded/used
 // before this became a dropdown — kept as real options rather than dropped,
 // same "unrecognized" fallback pattern as STAGES above covers anything else.
-const SOURCES = ["Walk-in", "Architect", "Referral", "Website", "Social Media", "WhatsApp", "Instagram", "Site Visit", "Cold Call", "Other"];
+const SOURCES = ["Walk-in", "Architect", "Referral", "Website", "WhatsApp", "Instagram", "Facebook", "Google",
+  "Phone", "Existing Customer", "Social Media", "Site Visit", "Cold Call", "Other"];
+const DIVISIONS = ["Furniture", "D&W", "MAP"];
+const PRIORITIES = ["Low", "Medium", "High", "Hot"];
+const PRIORITY_TONE = { Hot: "bg-red-50 text-red-700", High: "bg-amber-50 text-amber-700", Medium: "", Low: "" };
 const isKnownSource = (s) => SOURCES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 
 export default function Leads() {
@@ -52,6 +57,10 @@ export default function Leads() {
   const [logLead, setLogLead] = useState(null);
   const { defs: customFieldDefs } = useCustomFields("lead");
   const [customFilters, setCustomFilters] = useState({});
+  const [fDivision, setFDivision] = usePersistedState("leads.division", "All");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [converting, setConverting] = useState("");
   const [showImport, setShowImport] = useState(false);
   const { user, canDo } = useAuth();
   const canCreate = canDo("leads", "create");
@@ -74,6 +83,7 @@ export default function Leads() {
     reference: "", attended_by: "", confidence_level: "",
     stage: "New", follow_up_date: "", remarks_history: [], assigned_to: "", assigned_to_id: "", value: 0,
     custom_fields: {},
+    division: "", email: "", whatsapp: "", location: "", requirement: "", priority: "Medium", next_action: "",
   };
   const [form, setForm] = useState(empty);
 
@@ -112,23 +122,59 @@ export default function Leads() {
   })), [staff]);
 
   const phoneCheck = useMemo(() => validateIndianPhone(form.phone), [form.phone]);
+  const waCheck = useMemo(() => validateIndianPhone(form.whatsapp), [form.whatsapp]);
+
+  // /leads?open=<id> (global search, follow-ups) opens that lead's timeline.
+  useEffect(() => {
+    const id = searchParams.get("open");
+    if (!id || !rows.length) return;
+    const l = rows.find((r) => r.id === id);
+    if (l) setLogLead(l);
+  }, [searchParams, rows]);
+  const closeLog = () => {
+    setLogLead(null);
+    if (searchParams.get("open")) { searchParams.delete("open"); setSearchParams(searchParams, { replace: true }); }
+  };
+
+  const convert = async (lead, kind) => {
+    if (converting) return;
+    setConverting(kind);
+    try {
+      if (kind === "quote") {
+        const { data } = await api.post(`/convert/lead-to-quote/${lead.id}`);
+        toast.success(`Quotation ${data.quote_no || ""} created`);
+        navigate(data.id ? `/quotes/ws/${data.id}` : "/quotes");
+      } else {
+        const { data } = await api.post(`/leads/${lead.id}/start-project`);
+        toast.success(`Project ${data.project_no} ready`);
+        navigate(`/projects?open=${data.id}`);
+      }
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail) || "Conversion failed");
+    } finally {
+      setConverting("");
+    }
+  };
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return rows.filter((r) => {
       const stage = String(r.stage || "New").trim().toLowerCase();
       if (fStage !== "All" && stage !== fStage.toLowerCase()) return false;
+      if (fDivision !== "All" && (r.division || "") !== fDivision) return false;
       // Search the legacy flat remark AND every entry in the history, so a
       // note added after this change is still findable.
       const remarkText = [r.remarks || "", ...(r.remarks_history || []).map((e) => e.text || "")].join(" ").toLowerCase();
-      if (q && !(r.name || "").toLowerCase().includes(q) && !remarkText.includes(q)) return false;
+      if (q && !(r.name || "").toLowerCase().includes(q) && !remarkText.includes(q)
+          && !String(r.phone || "").includes(q) && !String(r.email || "").toLowerCase().includes(q)
+          && !String(r.location || "").toLowerCase().includes(q)) return false;
       for (const [key, val] of Object.entries(customFilters)) {
         if (!val) continue;
         if (String((r.custom_fields || {})[key] ?? "") !== String(val)) return false;
       }
       return true;
     });
-  }, [rows, search, fStage, customFilters]);
+  }, [rows, search, fStage, fDivision, customFilters]);
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -173,8 +219,12 @@ export default function Leads() {
     if (!phoneCheck.valid) { toast.error(phoneCheck.message); return; }
     if (!form.source.trim()) return toast.error("Source is required");
     if (!editing && !form.reference.trim()) return toast.error("Reference is required");
+    if (!waCheck.valid) { toast.error(`WhatsApp: ${waCheck.message}`); return; }
+    if (form.email && !/^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/.test(form.email.trim())) { toast.error("Enter a valid email address"); return; }
+    const closed = ["won", "lost"].includes(String(form.stage || "").toLowerCase());
+    if (!closed && !form.follow_up_date) toast.warning("No follow-up date — this lead will show under 'No follow-up date' until one is set.");
     setSaving(true);
-    const payload = { ...form, phone: phoneCheck.normalized };
+    const payload = { ...form, phone: phoneCheck.normalized, whatsapp: waCheck.normalized, email: (form.email || "").trim() };
     try {
       if (editing) {
         await api.put(`/leads/${editing.id}`, payload);
@@ -238,9 +288,13 @@ export default function Leads() {
           </>
         }
       />
-      <div className="p-6" data-testid="leads-page">
+      <div className="p-3 sm:p-6" data-testid="leads-page">
         <div className="flex flex-wrap gap-2 mb-3">
-          <input placeholder="Search lead, remarks…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm outline-none focus:border-[var(--color-primary)] w-72" data-testid="leads-search" />
+          <input placeholder="Search name, phone, email, remarks…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm outline-none focus:border-[var(--color-primary)] w-full sm:w-72" data-testid="leads-search" />
+          <select value={fDivision} onChange={(e) => setFDivision(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm" data-testid="leads-division-filter">
+            <option value="All">All divisions</option>
+            {DIVISIONS.map((d) => <option key={d}>{d}</option>)}
+          </select>
           <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm">
             <option value="All">All</option>
             {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -316,7 +370,14 @@ export default function Leads() {
                   return (
                     <tr key={l.id} className="border-t border-[var(--color-border)] hover:bg-[var(--color-surface-muted)]/50">
                       <td className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)] whitespace-nowrap">{fmtDate(l.date)}</td>
-                      <td className="px-4 py-3 font-medium">{l.name}</td>
+                      <td className="px-4 py-3">
+                        <button type="button" onClick={() => setLogLead(l)} className="font-medium text-left hover:underline">{l.name}</button>
+                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                          {l.division && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-primary-soft)] text-[var(--color-primary)] font-semibold">{l.division}</span>}
+                          {l.priority && PRIORITY_TONE[l.priority] && <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PRIORITY_TONE[l.priority]}`}>{l.priority}</span>}
+                          <span className={`md:hidden text-[10px] ${overdue ? "text-[var(--color-danger)] font-semibold" : "text-[var(--color-text-muted)]"}`}>{l.follow_up_date ? `FU ${fmtDate(l.follow_up_date)}` : ""}</span>
+                        </div>
+                      </td>
                       <td className="hidden md:table-cell px-4 py-3 font-mono text-xs text-[var(--color-text-muted)]">
                         {l.phone && <span className="inline-flex items-center gap-1"><Phone size={11} className="text-[var(--color-text-muted)]" />{l.phone}</span>}
                       </td>
@@ -330,6 +391,9 @@ export default function Leads() {
                       </td>
                       <td className={`hidden md:table-cell px-4 py-3 whitespace-nowrap ${overdue ? "text-[var(--color-danger)] font-semibold" : "text-[var(--color-text-muted)]"}`}>
                         <span className="inline-flex items-center gap-1"><Calendar size={11} />{fmtDate(l.follow_up_date)}</span>
+                        {l.next_action
+                          ? <div className="text-[11px] text-[var(--color-text)] truncate max-w-[180px]" title={l.next_action}>{l.next_action}</div>
+                          : !["Won", "Lost"].includes(l.stage) && <div className="text-[11px] text-[var(--color-danger)]">no next action</div>}
                       </td>
                       <td className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)]">{userName(l.attended_by) || l.assigned_to}</td>
                       <td className="px-4 py-3 text-right font-mono">{inrFull(l.value)}</td>
@@ -453,6 +517,28 @@ export default function Leads() {
               )}
               <Fld l="Reference *" v={form.reference} oc={(v) => setForm({ ...form, reference: v })} />
               <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Division</label>
+                <select value={form.division || ""} onChange={(e) => setForm({ ...form, division: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" data-testid="lf-division">
+                  <option value="">— Select —</option>
+                  {DIVISIONS.map((d) => <option key={d}>{d}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">WhatsApp (if different)</label>
+                <input value={form.whatsapp || ""} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} inputMode="tel"
+                  className={`w-full px-3 py-2 rounded-lg border bg-[var(--color-surface)] text-sm outline-none ${waCheck.valid ? "border-[var(--color-border)]" : "border-[var(--color-danger)]"}`} data-testid="lf-whatsapp" />
+                {!waCheck.valid && <div className="text-[11px] text-[var(--color-danger)] mt-1">{waCheck.message}</div>}
+              </div>
+              <Fld l="Email" t="email" v={form.email || ""} oc={(v) => setForm({ ...form, email: v })} t2="lf-email" />
+              <Fld l="Location / Area" v={form.location || ""} oc={(v) => setForm({ ...form, location: v })} t2="lf-location" />
+              <Fld l="Requirement" v={form.requirement || ""} oc={(v) => setForm({ ...form, requirement: v })} cls="col-span-2" t2="lf-requirement" />
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Priority</label>
+                <select value={form.priority || "Medium"} onChange={(e) => setForm({ ...form, priority: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" data-testid="lf-priority">
+                  {PRIORITIES.map((p) => <option key={p}>{p}</option>)}
+                </select>
+              </div>
+              <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Attended by</label>
                 <select value={form.attended_by} onChange={(e) => setForm({ ...form, attended_by: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm">
                   <option value="">— Select —</option>
@@ -466,6 +552,7 @@ export default function Leads() {
                 </select>
               </div>
               <Fld l="Follow up" t="date" v={form.follow_up_date} oc={(v) => setForm({ ...form, follow_up_date: v })} />
+              <Fld l="Next action" v={form.next_action || ""} oc={(v) => setForm({ ...form, next_action: v })} cls="col-span-2" t2="lf-next-action" />
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Assigned to (Staff)</label>
                 <SearchSelect
@@ -482,7 +569,7 @@ export default function Leads() {
               </div>
               <StarRating label="Confidence" testId="lead-confidence" value={form.confidence_level}
                 onChange={(pct) => setForm({ ...form, confidence_level: pct })} />
-              <Fld l="Value" t="number" v={form.value} oc={(v) => setForm({ ...form, value: parseFloat(v) || 0 })} />
+              <Fld l="Estimated budget / value (₹)" t="number" v={form.value} oc={(v) => setForm({ ...form, value: parseFloat(v) || 0 })} />
               <div className="col-span-2">
                 <RemarksTimeline
                   entries={form.remarks_history}
@@ -510,13 +597,27 @@ export default function Leads() {
       )}
 
       {logLead && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={() => setLogLead(null)}>
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={closeLog}>
           <div className="bg-[var(--color-surface)] rounded-t-2xl sm:rounded-xl border border-[var(--color-border)] w-full max-w-xl shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
-              <h3 className="font-heading font-semibold text-lg">Follow-ups — {logLead.name}</h3>
-              <button onClick={() => setLogLead(null)} className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)]"><X size={16} /></button>
+              <h3 className="font-heading font-semibold text-lg">{logLead.name}</h3>
+              <button onClick={closeLog} className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)]" aria-label="Close"><X size={16} /></button>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="p-4 sm:p-5 space-y-4">
+              <div className="text-xs text-[var(--color-text-muted)] space-y-0.5">
+                <div>{[logLead.phone, logLead.email, logLead.location].filter(Boolean).join(" · ") || "No contact details"}</div>
+                <div>{[logLead.division, logLead.source, logLead.assigned_to && `Owner: ${logLead.assigned_to}`, logLead.value ? inrFull(logLead.value) : ""].filter(Boolean).join(" · ")}</div>
+                {logLead.requirement && <div>Requirement: {logLead.requirement}</div>}
+                <div>Next: <b className="text-[var(--color-text)]">{logLead.next_action || "—"}</b>{logLead.follow_up_date ? ` on ${fmtDate(logLead.follow_up_date)}` : ""}</div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {logLead.phone && <a href={`tel:${logLead.phone}`} className="btn-ghost justify-center"><Phone size={14} /> Call</a>}
+                {(logLead.whatsapp || logLead.phone) && (
+                  <a href={`https://wa.me/91${String(logLead.whatsapp || logLead.phone).replace(/\D/g, "").slice(-10)}`} target="_blank" rel="noreferrer" className="btn-ghost justify-center">WhatsApp</a>
+                )}
+                {canCreate && <button className="btn-ghost justify-center" disabled={!!converting} onClick={() => convert(logLead, "quote")} data-testid="lead-to-quote">{converting === "quote" ? "Creating…" : "Create quotation"}</button>}
+                {canCreate && <button className="btn-primary justify-center" disabled={!!converting} onClick={() => convert(logLead, "project")} data-testid="lead-to-project">{converting === "project" ? "Starting…" : "Start project"}</button>}
+              </div>
               <StagePath wf={lw} value={logLead.stage} record={logLead} canEdit={canEdit}
                          onChange={(stage) => updateStage(logLead, stage)} />
               <StageProgressBar stages={leadLifecycleStages(logLead)} />
