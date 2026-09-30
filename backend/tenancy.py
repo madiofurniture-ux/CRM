@@ -108,6 +108,9 @@ TENANT_COLLECTIONS = {
     # Budgets (prompt_3_budgets.md, models_budget.py / api_budget.py) —
     # cost-center spend control (budget/lines/overrides/transactions).
     "budgets", "budget_lines", "budget_overrides", "budget_transactions",
+    # Delivery go-live (operations.py): service/warranty tickets and the
+    # Furniture/MAP site surveys (D&W keeps dw_surveys).
+    "service_tickets", "site_surveys",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's

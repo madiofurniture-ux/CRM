@@ -250,19 +250,19 @@ def main():
     arch = (archs or [None])[0]
     if s == 200 and arch:
         s, bad = call("POST", "/api/leads",
-                      {"date": "2026-08-26", "name": "ZZ Bad Phone", "phone": "1234567890", "source": "Website"},
+                      {"date": "2026-08-26", "name": "ZZ Bad Phone", "phone": "1234567890", "source": "Website", "reference": "e2e"},
                       token=admin_tok)
         check("invalid phone is rejected on create", s == 400, f"got {s} {bad}")
 
         s, l1 = call("POST", "/api/leads",
-                     {"date": "2026-08-26", "name": "ZZ Phone A", "phone": "9876500011", "source": "Website"},
+                     {"date": "2026-08-26", "name": "ZZ Phone A", "phone": "9876500011", "source": "Website", "reference": "e2e"},
                      token=admin_tok)
         check("valid 10-digit phone accepted", s == 200 and l1, f"got {s} {l1}")
         try:
             if l1:
                 check("phone normalized to bare 10 digits", l1.get("phone") == "9876500011", f"got {l1.get('phone')}")
                 s, dup = call("POST", "/api/leads",
-                              {"date": "2026-08-26", "name": "ZZ Phone B", "phone": "+919876500011", "source": "Referral"},
+                              {"date": "2026-08-26", "name": "ZZ Phone B", "phone": "+919876500011", "source": "Referral", "reference": "e2e"},
                               token=admin_tok)
                 check("+91-prefixed duplicate of an existing phone is rejected", s == 400, f"got {s} {dup}")
 
@@ -271,7 +271,7 @@ def main():
 
                 s, arch_lead = call("POST", "/api/leads",
                                      {"date": "2026-08-26", "name": "ZZ Architect Lead", "phone": "9876500022",
-                                      "source": "Architect", "architect_id": arch["id"], "architect_name": arch["name"]},
+                                      "source": "Architect", "architect_id": arch["id"], "architect_name": arch["name"], "reference": "e2e"},
                                      token=admin_tok)
                 check("architect source keeps the linked architect", s == 200 and arch_lead
                       and arch_lead.get("architect_id") == arch["id"], f"got {s} {arch_lead}")
@@ -311,7 +311,7 @@ def main():
                       f"got {mine}")
 
                 s, dup = call("POST", "/api/leads",
-                              {"date": "2026-08-26", "name": "ZZ Dup", "phone": "9876522001", "source": "Walk-in"},
+                              {"date": "2026-08-26", "name": "ZZ Dup", "phone": "9876522001", "source": "Walk-in", "reference": "e2e"},
                               token=admin_tok)
                 check("the converted phone still can't be duplicated as a second lead", s == 400, f"got {s} {dup}")
             finally:
@@ -326,7 +326,7 @@ def main():
     # the seed data) should link to that lead, not fail with a 400.
     s, pre_lead = call("POST", "/api/leads",
                         {"date": "2026-08-26", "name": "ZZ Pre-existing Lead", "phone": "9876522002",
-                         "source": "Website"}, token=admin_tok)
+                         "source": "Website", "reference": "e2e"}, token=admin_tok)
     s2, visitor2 = call("POST", "/api/visitors",
                          {"date": "2026-08-26", "name": "ZZ Same Customer", "phone": "9876522002"},
                          token=admin_tok)

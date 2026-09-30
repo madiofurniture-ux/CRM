@@ -179,6 +179,15 @@ class LeadBase(BaseModel):
     team_id: Optional[str] = ""           # direct team link for reporting; independent of assigned_to's own team_id
     visitor_id: Optional[str] = ""        # lineage when converted from a Visitor
     value: Optional[float] = 0
+    # Go-live CRM fields. All optional so every existing row and client keeps
+    # working; server.normalize_lead validates email/division/priority/whatsapp.
+    division: Optional[str] = ""          # Furniture / D&W / MAP
+    email: Optional[str] = ""
+    whatsapp: Optional[str] = ""          # blank = same as phone
+    location: Optional[str] = ""
+    requirement: Optional[str] = ""
+    priority: Optional[str] = "Medium"    # Low / Medium / High / Hot
+    next_action: Optional[str] = ""       # what happens at follow_up_date
     # Dated, multi-entry audit trail: [{at, by, by_id, text, confidence_level, kind}].
     # `remarks` above stays a plain string (unmigrated) — old screens still read it.
     log: List[dict] = Field(default_factory=list)
@@ -1338,6 +1347,18 @@ class ProjectBase(BaseModel):
     current_milestone: Optional[str] = ""
     completion_percentage: Optional[int] = 0
     custom_fields: dict = Field(default_factory=dict)  # key (CustomFieldDef.key) -> value
+    # Go-live project fields (all optional — existing rows stay valid).
+    project_name: Optional[str] = ""
+    project_type: Optional[str] = ""          # e.g. Villa / Apartment / Office / Showroom
+    customer_id: Optional[str] = ""           # Customer.id — one customer, many projects
+    project_manager: Optional[str] = ""
+    architect_name: Optional[str] = ""
+    estimated_value: Optional[float] = 0
+    completion_date: Optional[str] = ""
+    next_payment_due: Optional[str] = ""
+    # {estimated: {Material: n, ...}, actual: {...}} — written only through
+    # PUT /projects/{id}/costing so categories/negatives are validated.
+    costing: Optional[dict] = None
 
 
 class ProjectCreate(ProjectBase):
@@ -1361,6 +1382,16 @@ class ProjectUpdate(BaseModel):
     current_milestone: Optional[str] = None
     completion_percentage: Optional[int] = None
     custom_fields: Optional[dict] = None
+    project_name: Optional[str] = None
+    project_type: Optional[str] = None
+    customer_id: Optional[str] = None
+    project_manager: Optional[str] = None
+    architect_id: Optional[str] = None
+    architect_name: Optional[str] = None
+    sales_rep_id: Optional[str] = None
+    estimated_value: Optional[float] = None
+    completion_date: Optional[str] = None
+    next_payment_due: Optional[str] = None
 
 
 class ProjectStageUpdate(BaseModel):
@@ -2134,3 +2165,75 @@ class TallyConnectionUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
     company: str = ""
     endpoint_url: Optional[str] = ""
+
+
+# ------- Service & warranty tickets (operations.py holds the rules) -------
+class ServiceTicketCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    project_id: str                      # every ticket belongs to a real project
+    complaint: str
+    ticket_type: Optional[str] = "Warranty"
+    priority: Optional[str] = "Medium"
+    assigned_to: Optional[str] = ""
+    visit_date: Optional[str] = ""
+    status: Optional[str] = "OPEN"
+    resolution: Optional[str] = ""
+    parts_used: Optional[str] = ""
+    customer_signed: Optional[bool] = False
+    signed_by: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class ServiceTicketUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    complaint: Optional[str] = None
+    ticket_type: Optional[str] = None
+    priority: Optional[str] = None
+    assigned_to: Optional[str] = None
+    visit_date: Optional[str] = None
+    status: Optional[str] = None
+    resolution: Optional[str] = None
+    parts_used: Optional[str] = None
+    customer_signed: Optional[bool] = None
+    signed_by: Optional[str] = None
+    notes: Optional[str] = None
+
+
+# ------- Furniture / MAP site survey (D&W uses DWSurvey + openings) -------
+class SiteSurveyCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    project_id: str
+    survey_date: Optional[str] = ""
+    surveyor: Optional[str] = ""
+    site_address: Optional[str] = ""
+    notes: Optional[str] = ""
+    rows: List[dict] = Field(default_factory=list)
+    status: Optional[str] = "Draft"
+    customer_signed: Optional[bool] = False
+    signed_by: Optional[str] = ""
+
+
+class SiteSurveyUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    survey_date: Optional[str] = None
+    surveyor: Optional[str] = None
+    site_address: Optional[str] = None
+    notes: Optional[str] = None
+    rows: Optional[List[dict]] = None
+    status: Optional[str] = None
+    customer_signed: Optional[bool] = None
+    signed_by: Optional[str] = None
+
+
+class MilestoneToggle(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str
+    done: bool = True
+    note: Optional[str] = ""
+
+
+class ProjectCostingUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    estimated: Optional[dict] = None
+    actual: Optional[dict] = None
+    next_payment_due: Optional[str] = None

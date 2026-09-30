@@ -15,8 +15,7 @@ import asyncio
 from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
-from fastapi.responses import JSONResponse, StreamingResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse, StreamingResponse, Response, FileResponse
 from pydantic import ValidationError as PydanticValidationError
 from pymongo.errors import DuplicateKeyError
 from starlette.middleware.cors import CORSMiddleware
@@ -29,6 +28,7 @@ import api_canonical
 import api_hr
 import api_wallets
 import api_budget
+import operations as ops
 import lifecycle as lc
 import permissions as perm
 import notifications as notif
@@ -774,6 +774,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         doc = payload.model_dump()
         doc["id"] = new_id()
         doc["created_at"] = now_iso()
+        doc["updated_at"] = doc["created_at"]
         if personal:
             # Stamped server-side, never taken from the payload: on a personal
             # collection `created_by` decides who can see the record, so a
@@ -833,6 +834,9 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         await validate_stage(collection, payload, user, existing)
         stamp_fy(payload, collection)
         stamp_closure(payload, collection, existing)
+        # Last-touched stamp (follow-up engine's "inactive for N days" and
+        # Madi AI's recency questions read it). Server-owned, never client.
+        payload["updated_at"] = now_iso()
         try:
             await db[collection].update_one(owned, {"$set": payload})
         except DuplicateKeyError:
@@ -843,9 +847,10 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         stage_key_field = tenancy.stage_field(tenancy.COLLECTION_ENTITY.get(collection, ""))
         await run_stage_automation(collection, existing.get(stage_key_field), out, user)
         if entity:
-            changed = {k: existing.get(k) for k in payload}
+            keys = [k for k in payload if k != "updated_at"]
+            changed = {k: existing.get(k) for k in keys}
             await record_activity(entity, item_id, "update", user, before=changed,
-                                   after={k: out.get(k) for k in payload})
+                                   after={k: out.get(k) for k in keys})
         if mask and mask_other:
             out = mask(out)
         return redact(out, user) if redact else out
@@ -1582,6 +1587,23 @@ async def normalize_lead(doc: dict, existing: dict | None, user: dict) -> None:
     # is stamped here so a client can't forge an author or a timestamp.
     if "remarks_history" in doc:
         doc["remarks_history"] = _shape_remark_history(doc["remarks_history"], user)
+    # Go-live lead fields — validated server-side, never trusted from the UI.
+    try:
+        if doc.get("email"):
+            doc["email"] = ops.validate_email(doc["email"])
+        if doc.get("division"):
+            doc["division"] = ops.validate_division(doc["division"])
+        if "priority" in doc:
+            doc["priority"] = ops.normalize_priority(doc.get("priority"), ops.LEAD_PRIORITIES)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if doc.get("whatsapp") and not (existing is not None and doc["whatsapp"] == existing.get("whatsapp")):
+        doc["whatsapp"] = _phone_or_400(doc["whatsapp"])
+    if doc.get("follow_up_date") and not lc.parse_date(doc["follow_up_date"]):
+        raise HTTPException(status_code=400, detail="follow_up_date must be a valid date (YYYY-MM-DD)")
+    for k in ("next_action", "location", "requirement"):
+        if k in doc and doc[k] is not None:
+            doc[k] = str(doc[k]).strip()[:500]
 
 
 async def normalize_architect(doc: dict, existing: dict | None, user: dict) -> None:
@@ -4832,9 +4854,17 @@ async def get_projects(user=Depends(get_current_user)):
 
 @api.post("/projects", response_model=dict)
 async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
-    doc = data.dict()
+    await _require_permission("projects", "create", user)
+    doc = data.model_dump()
     doc["id"] = new_id()
-    doc["created_at"] = now_iso()
+    doc["created_at"] = doc["updated_at"] = now_iso()
+    await _check_project_integrity(doc, None, user)
+    if not doc.get("milestones"):
+        doc["milestones"] = ops.division_milestones(doc["division"])
+    if not doc.get("project_no"):
+        existing_nos = await db.projects.find(
+            tenancy.scope({}, "projects", user), {"project_no": 1, "_id": 0}).to_list(5000)
+        doc["project_no"] = lc.next_project_no(existing_nos)
     await validate_stage("projects", doc, user)
     stamp_fy(doc, "projects")
     tenancy.stamp(doc, "projects", user)
@@ -4847,7 +4877,8 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
 
 @api.put("/projects/{project_id}", response_model=dict)
 async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_current_user)):
-    patch = {k: v for k, v in data.dict().items() if v is not None}
+    await _require_permission("projects", "edit", user)
+    patch = {k: v for k, v in data.model_dump().items() if v is not None}
     if not patch:
         raise HTTPException(400, "No fields to update")
     stamp_fy(patch, "projects")
@@ -4855,6 +4886,11 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
     existing = await db.projects.find_one(owned, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Project not found")
+    await _check_project_integrity(patch, existing, user)
+    if "division" in patch and patch["division"] != ops.normalize_division(existing.get("division")):
+        # Carry recorded progress over to the new division's checklist.
+        patch["milestones"] = ops.merge_milestones(existing.get("milestones"), patch["division"])
+    patch["updated_at"] = now_iso()
     await validate_stage("projects", patch, user, existing)
     res = await db.projects.update_one(owned, {"$set": patch})
     if res.matched_count == 0:
@@ -4862,7 +4898,43 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
     item = await db.projects.find_one(owned)
     item.pop("_id", None)
     await run_stage_automation("projects", existing.get("stage"), item, user)
+    changed = [k for k in patch if k not in ("updated_at", "fy") and existing.get(k) != patch[k]]
+    if changed:
+        await record_activity("project", project_id, "update", user,
+                              before={k: existing.get(k) for k in changed if k != "milestones"},
+                              after={k: patch[k] for k in changed if k != "milestones"})
     return item
+
+
+async def _check_project_integrity(doc: dict, existing: dict | None, user: dict) -> None:
+    """Server-side rules for a project write (create: existing=None; update:
+    doc is the partial patch). No orphan projects, no impossible dates."""
+    merged = {**(existing or {}), **doc}
+    if existing is None or "customer" in doc:
+        doc_customer = str(merged.get("customer") or "").strip()
+        if not doc_customer:
+            raise HTTPException(400, "A project must have a customer")
+        if "customer" in doc:
+            doc["customer"] = doc_customer
+    if existing is None or "division" in doc:
+        try:
+            doc["division"] = ops.validate_division(merged.get("division") or "Furniture")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    if doc.get("customer_id"):
+        if not await db.customers.find_one(tenancy.scope({"id": doc["customer_id"]}, "customers", user), {"_id": 1}):
+            raise HTTPException(400, "customer_id does not match a customer")
+    for f in ("start_date", "target_date", "completion_date", "next_payment_due"):
+        if doc.get(f) and not lc.parse_date(doc[f]):
+            raise HTTPException(400, f"{f} must be a valid date (YYYY-MM-DD)")
+    start = lc.parse_date(merged.get("start_date")) if merged.get("start_date") else None
+    for f, label in (("target_date", "Expected completion"), ("completion_date", "Completion date")):
+        d = lc.parse_date(merged.get(f)) if merged.get(f) else None
+        if start and d and d < start:
+            raise HTTPException(400, f"{label} cannot be before the start date")
+    for f in ("value", "estimated_value", "paid"):
+        if f in doc and doc[f] is not None and lc.money(doc[f]) < 0:
+            raise HTTPException(400, f"{f} cannot be negative")
 
 
 @api.put("/projects/{project_id}/stage", response_model=dict)
@@ -4895,12 +4967,514 @@ async def update_project_stage(project_id: str, data: ProjectStageUpdate, user=D
 
 
 @api.delete("/projects/{project_id}")
-async def delete_project(project_id: str, user=Depends(get_current_user)):
-    res = await db.projects.delete_one(tenancy.scope({"id": project_id}, "projects", user))
+async def delete_project(project_id: str, user=Depends(require_admin)):
+    """Admin-only, and refused once commercial history hangs off the project
+    (a sales order, payments or service tickets) — that history must never be
+    erased from a normal UI action. Mark such a project Completed instead."""
+    owned_p = tenancy.scope({"id": project_id}, "projects", user)
+    project = await db.projects.find_one(owned_p, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if project.get("sale_id"):
+        raise HTTPException(409, "This project has a sales order — it cannot be deleted")
+    if await db.service_tickets.count_documents(tenancy.scope({"project_id": project_id}, "service_tickets", user)):
+        raise HTTPException(409, "This project has service tickets — it cannot be deleted")
+    res = await db.projects.delete_one(owned_p)
     if res.deleted_count == 0:
         raise HTTPException(404, "Project not found")
-    await record_activity("project", project_id, "delete", user)
+    await record_activity("project", project_id, "delete", user, before=project)
     return {"status": "deleted"}
+
+
+# =====================================================================
+# Delivery go-live: division workflows, costing, service, site surveys,
+# follow-up engine, project/customer 360. Rules live in operations.py.
+# Every route is tenant-scoped via tenancy.scope/stamp and permission-gated
+# on the existing "projects"/"leads"/"customers" modules, so no role or
+# page grant has to be migrated for existing accounts.
+# =====================================================================
+from models import (  # noqa: E402
+    ServiceTicketCreate, ServiceTicketUpdate, SiteSurveyCreate, SiteSurveyUpdate,
+    MilestoneToggle, ProjectCostingUpdate,
+)
+
+
+async def _project_or_404(project_id: str, user: dict) -> dict:
+    project = await db.projects.find_one(tenancy.scope({"id": project_id}, "projects", user), {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+async def _project_received(project: dict, user: dict) -> float:
+    """Customer money actually received for this project: payments booked
+    against its sales order (In − Refund). A project with no sales order
+    yet falls back to its own `paid` field."""
+    sale_id = project.get("sale_id")
+    if not sale_id:
+        return lc.money(project.get("paid"))
+    pays = await db.payments.find(tenancy.scope({"against_sale_id": sale_id}, "payments", user),
+                                  {"_id": 0, "amount": 1, "direction": 1}).to_list(2000)
+    if not pays:
+        return lc.money(project.get("paid"))
+    total = 0.0
+    for p in pays:
+        amt = lc.money(p.get("amount"))
+        total += -amt if str(p.get("direction") or "In") in ("Refund", "Out") else amt
+    return round(total, 2)
+
+
+def _project_workflow_view(project: dict) -> dict:
+    milestones = ops.merge_milestones(project.get("milestones"), project.get("division"))
+    return {"project_id": project.get("id"), "division": ops.normalize_division(project.get("division")),
+            "stages": ops.division_workflow(project.get("division")),
+            "milestones": milestones, "progress": ops.workflow_progress(milestones)}
+
+
+@api.get("/projects/{project_id}/workflow")
+async def project_workflow(project_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "view", user)
+    return _project_workflow_view(await _project_or_404(project_id, user))
+
+
+@api.post("/projects/{project_id}/milestones")
+async def toggle_project_milestone(project_id: str, payload: MilestoneToggle,
+                                   user: dict = Depends(get_current_user)):
+    """Tick (or untick) one stage of the project's division checklist."""
+    await _require_permission("projects", "edit", user)
+    project = await _project_or_404(project_id, user)
+    milestones = ops.merge_milestones(project.get("milestones"), project.get("division"))
+    name = payload.name.strip()
+    # Same integrity gate the daily log enforces: D&W goes to production only
+    # after the client has signed off the measurement survey.
+    if name == "Production" and payload.done:
+        surveys = await db.dw_surveys.find(
+            tenancy.scope({"project_id": project_id}, "dw_surveys", user),
+            {"_id": 0, "survey_id": 1, "client_sign_off": 1}).to_list(50)
+        unsigned = [s.get("survey_id") or "?" for s in surveys if not s.get("client_sign_off")]
+        if unsigned:
+            raise HTTPException(status_code=400, detail=(
+                f"D&W survey(s) {unsigned} need client sign-off before release to production"))
+    try:
+        milestones = ops.set_milestone(milestones, name, payload.done, user.get("name", ""),
+                                       now_iso(), payload.note or "")
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"'{name}' is not a stage of this project's workflow")
+    progress = ops.workflow_progress(milestones)
+    patch = {"milestones": milestones, "completion_percentage": progress["percent"],
+             "current_milestone": progress["current"], "updated_at": now_iso()}
+    if name == ops.COMPLETION_STAGE:
+        patch["completion_date"] = lc.today_iso() if payload.done else ""
+    owned = tenancy.scope({"id": project_id}, "projects", user)
+    await db.projects.update_one(owned, {"$set": patch})
+    await record_activity("project", project_id, "stage_change", user,
+                          before={"milestone": name}, after={"milestone": name, "done": payload.done},
+                          note=f"{name} {'completed' if payload.done else 'reopened'}"
+                               + (f" — {payload.note}" if payload.note else ""))
+    return _project_workflow_view({**project, **patch})
+
+
+def _costing_view(project: dict, received: float) -> dict:
+    costing = project.get("costing") or {}
+    order_value = lc.money(project.get("value")) or lc.money(project.get("estimated_value"))
+    out = ops.costing_summary(order_value, costing.get("estimated"), costing.get("actual"))
+    out.update(ops.payment_status(order_value, received, project.get("next_payment_due", "")))
+    out["project_id"] = project.get("id")
+    return out
+
+
+@api.get("/projects/{project_id}/costing")
+async def get_project_costing(project_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "view", user)
+    project = await _project_or_404(project_id, user)
+    return _costing_view(project, await _project_received(project, user))
+
+
+@api.put("/projects/{project_id}/costing")
+async def update_project_costing(project_id: str, payload: ProjectCostingUpdate,
+                                 user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "edit", user)
+    project = await _project_or_404(project_id, user)
+    costing = dict(project.get("costing") or {})
+    try:
+        if payload.estimated is not None:
+            costing["estimated"] = ops.clean_cost_map(payload.estimated)
+        if payload.actual is not None:
+            costing["actual"] = ops.clean_cost_map(payload.actual)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    patch = {"costing": costing, "updated_at": now_iso()}
+    if payload.next_payment_due is not None:
+        if payload.next_payment_due and not lc.parse_date(payload.next_payment_due):
+            raise HTTPException(status_code=400, detail="next_payment_due must be a valid date (YYYY-MM-DD)")
+        patch["next_payment_due"] = payload.next_payment_due
+    await db.projects.update_one(tenancy.scope({"id": project_id}, "projects", user), {"$set": patch})
+    await record_activity("project", project_id, "update", user,
+                          before={"costing": project.get("costing")}, after={"costing": costing},
+                          note="Costing updated")
+    project = {**project, **patch}
+    return _costing_view(project, await _project_received(project, user))
+
+
+@api.get("/projects/{project_id}/summary")
+async def project_summary(project_id: str, user: dict = Depends(get_current_user)):
+    """One call with everything about a project — the detail screen and any
+    future integration (Madi AI, WhatsApp bot) read this instead of
+    stitching six collections together client-side."""
+    await _require_permission("projects", "view", user)
+    project = await _project_or_404(project_id, user)
+    received = await _project_received(project, user)
+    tickets = await db.service_tickets.find(
+        tenancy.scope({"project_id": project_id}, "service_tickets", user), {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
+    site_surveys = await db.site_surveys.find(
+        tenancy.scope({"project_id": project_id}, "site_surveys", user), {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    dw = await db.dw_surveys.find(
+        tenancy.scope({"project_id": project_id}, "dw_surveys", user),
+        {"_id": 0, "id": 1, "survey_id": 1, "status": 1, "client_sign_off": 1, "created_at": 1}).to_list(50)
+    quote_q = {"$or": [{"id": project.get("quote_id")}] if project.get("quote_id") else []}
+    if project.get("lead_id"):
+        quote_q["$or"].append({"lead_id": project["lead_id"]})
+    quotes = []
+    if quote_q["$or"]:
+        quotes = await db.quotes.find(tenancy.scope(quote_q, "quotes", user),
+                                      {"_id": 0, "id": 1, "quote_no": 1, "version": 1, "stage": 1,
+                                       "status": 1, "grand_total": 1, "value": 1, "date": 1}).to_list(50)
+    payments = []
+    if project.get("sale_id"):
+        payments = await db.payments.find(
+            tenancy.scope({"against_sale_id": project["sale_id"]}, "payments", user), {"_id": 0}
+        ).sort("date", -1).to_list(200)
+    timeline = await db.activities.find(
+        tenancy.scope({"entity": "project", "entity_id": project_id}, "activities", user),
+        {"_id": 0, "before": 0, "after": 0}).sort("at", -1).to_list(100)
+    return {
+        "project": project,
+        "workflow": _project_workflow_view(project),
+        "costing": _costing_view(project, received),
+        "warranty_active": ops.warranty_active(project),
+        "service_tickets": tickets,
+        "site_surveys": site_surveys, "dw_surveys": dw,
+        "quotes": quotes, "payments": payments,
+        "timeline": timeline + [
+            {"entity": "project", "action": "log", "note": e.get("text", ""),
+             "by_user": e.get("by", ""), "at": e.get("at", "")} for e in project.get("log") or []],
+    }
+
+
+# ------------------------------------------------------- service & warranty
+@api.get("/service-tickets")
+async def list_service_tickets(status: str = "", project_id: str = "", customer_id: str = "",
+                               phone: str = "", open_only: bool = False,
+                               user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "view", user)
+    q: dict = {}
+    if status:
+        q["status"] = status.upper()
+    elif open_only:
+        q["status"] = {"$in": sorted(ops.OPEN_SERVICE_STATUSES)}
+    if project_id:
+        q["project_id"] = project_id
+    if customer_id:
+        q["customer_id"] = customer_id
+    if phone:
+        q["phone"] = phone
+    return await db.service_tickets.find(tenancy.scope(q, "service_tickets", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(3000)
+
+
+async def _ticket_or_404(ticket_id: str, user: dict) -> dict:
+    t = await db.service_tickets.find_one(tenancy.scope({"id": ticket_id}, "service_tickets", user), {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Service ticket not found")
+    return t
+
+
+@api.get("/service-tickets/{ticket_id}")
+async def get_service_ticket(ticket_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "view", user)
+    return await _ticket_or_404(ticket_id, user)
+
+
+@api.post("/service-tickets")
+async def create_service_ticket(payload: ServiceTicketCreate, user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "create", user)
+    project = await _project_or_404(payload.project_id, user)
+    doc = payload.model_dump()
+    doc["complaint"] = str(doc.get("complaint") or "").strip()
+    if not doc["complaint"]:
+        raise HTTPException(status_code=400, detail="Describe the complaint")
+    try:
+        doc["status"] = ops.normalize_service_status(doc.get("status") or "OPEN")
+        doc["priority"] = ops.normalize_priority(doc.get("priority"))
+        if doc.get("ticket_type") not in ops.SERVICE_TYPES:
+            doc["ticket_type"] = "Warranty" if ops.warranty_active(project) else "Complaint"
+        ops.check_service_transition(doc)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    existing = await db.service_tickets.find(tenancy.scope({}, "service_tickets", user),
+                                             {"_id": 0, "ticket_no": 1}).to_list(10000)
+    now = now_iso()
+    doc.update({
+        "id": new_id(), "ticket_no": ops.next_ticket_no(existing),
+        "created_at": now, "updated_at": now, "created_by": user.get("name", ""),
+        # Denormalised from the project so lists/search/WhatsApp never need a join.
+        "project_no": project.get("project_no", ""), "customer": project.get("customer", ""),
+        "customer_id": project.get("customer_id", ""), "phone": project.get("phone", ""),
+        "division": ops.normalize_division(project.get("division")),
+        "site_address": project.get("site_address", ""),
+        "under_warranty": ops.warranty_active(project),
+        "history": [{"at": now, "by": user.get("name", ""), "status": doc["status"], "note": "Ticket raised"}],
+    })
+    if doc["status"] in ("RESOLVED", "CLOSED"):
+        doc["resolved_at"] = now
+    tenancy.stamp(doc, "service_tickets", user)
+    await db.service_tickets.insert_one(dict(doc))
+    doc.pop("_id", None)
+    await record_activity("service_ticket", doc["id"], "create", user, after={"ticket_no": doc["ticket_no"]})
+    await record_activity("project", project["id"], "update", user,
+                          note=f"Service ticket {doc['ticket_no']} raised: {doc['complaint'][:120]}")
+    return doc
+
+
+@api.put("/service-tickets/{ticket_id}")
+async def update_service_ticket(ticket_id: str, payload: ServiceTicketUpdate,
+                                user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "edit", user)
+    ticket = await _ticket_or_404(ticket_id, user)
+    patch = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not patch:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    try:
+        if "status" in patch:
+            patch["status"] = ops.normalize_service_status(patch["status"])
+        if "priority" in patch:
+            patch["priority"] = ops.normalize_priority(patch["priority"])
+        if "ticket_type" in patch and patch["ticket_type"] not in ops.SERVICE_TYPES:
+            raise ValueError(f"Type must be one of {', '.join(ops.SERVICE_TYPES)}")
+        if "complaint" in patch and not str(patch["complaint"]).strip():
+            raise ValueError("Complaint cannot be empty")
+        merged = {**ticket, **patch}
+        # Auto-advance OPEN -> ASSIGNED when someone is assigned, so the
+        # common "assign it to Ravi" action doesn't need two edits.
+        if "status" not in patch and patch.get("assigned_to") and ticket.get("status") == "OPEN":
+            patch["status"] = merged["status"] = "ASSIGNED"
+        ops.check_service_transition(merged)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    now = now_iso()
+    patch["updated_at"] = now
+    if patch.get("status") in ("RESOLVED", "CLOSED") and not ticket.get("resolved_at"):
+        patch["resolved_at"] = now
+    if patch.get("status") == "CLOSED":
+        patch["closed_at"] = now
+    history = list(ticket.get("history") or [])
+    if patch.get("status") and patch["status"] != ticket.get("status"):
+        history.append({"at": now, "by": user.get("name", ""), "status": patch["status"],
+                        "note": str(patch.get("resolution") or patch.get("notes") or "")[:300]})
+        patch["history"] = history
+    await db.service_tickets.update_one(tenancy.scope({"id": ticket_id}, "service_tickets", user),
+                                        {"$set": patch})
+    if patch.get("status") and patch["status"] != ticket.get("status"):
+        await record_activity("service_ticket", ticket_id, "stage_change", user,
+                              before={"status": ticket.get("status")}, after={"status": patch["status"]})
+    return await _ticket_or_404(ticket_id, user)
+
+
+# ------------------------------------------------ Furniture / MAP site survey
+def _survey_division(project: dict) -> str:
+    division = ops.normalize_division(project.get("division"))
+    if division not in ops.SURVEY_DIVISIONS:
+        raise HTTPException(status_code=400, detail=(
+            "Doors & Windows projects use the D&W Survey (openings + BOQ) — open it from D&W Survey."))
+    return division
+
+
+@api.get("/site-surveys")
+async def list_site_surveys(project_id: str = "", division: str = "",
+                            user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "view", user)
+    q: dict = {}
+    if project_id:
+        q["project_id"] = project_id
+    if division:
+        q["division"] = ops.normalize_division(division)
+    return await db.site_surveys.find(tenancy.scope(q, "site_surveys", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(2000)
+
+
+async def _site_survey_or_404(survey_id: str, user: dict) -> dict:
+    s = await db.site_surveys.find_one(tenancy.scope({"id": survey_id}, "site_surveys", user), {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Survey not found")
+    return s
+
+
+@api.get("/site-surveys/{survey_id}")
+async def get_site_survey(survey_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "view", user)
+    return await _site_survey_or_404(survey_id, user)
+
+
+def _check_survey_fields(doc: dict) -> None:
+    if doc.get("survey_date") and not lc.parse_date(doc["survey_date"]):
+        raise HTTPException(status_code=400, detail="survey_date must be a valid date (YYYY-MM-DD)")
+    if doc.get("status") and doc["status"] not in ops.SURVEY_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {ops.SURVEY_STATUSES}")
+
+
+@api.post("/site-surveys")
+async def create_site_survey(payload: SiteSurveyCreate, user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "create", user)
+    project = await _project_or_404(payload.project_id, user)
+    division = _survey_division(project)
+    doc = payload.model_dump()
+    _check_survey_fields(doc)
+    try:
+        doc["rows"], doc["totals"] = ops.clean_survey_rows(division, doc.get("rows"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    existing = await db.site_surveys.find(tenancy.scope({"project_id": project["id"]}, "site_surveys", user),
+                                          {"_id": 0, "id": 1}).to_list(500)
+    now = now_iso()
+    doc.update({
+        "id": new_id(), "created_at": now, "updated_at": now, "created_by": user.get("name", ""),
+        "survey_no": f"{project.get('project_no') or 'SRV'}-S{len(existing) + 1}",
+        "division": division, "project_no": project.get("project_no", ""),
+        "customer": project.get("customer", ""), "customer_id": project.get("customer_id", ""),
+        "phone": project.get("phone", ""),
+        "survey_date": doc.get("survey_date") or lc.today_iso(),
+        "surveyor": doc.get("surveyor") or user.get("name", ""),
+        "site_address": doc.get("site_address") or project.get("site_address", ""),
+    })
+    tenancy.stamp(doc, "site_surveys", user)
+    await db.site_surveys.insert_one(dict(doc))
+    doc.pop("_id", None)
+    await record_activity("project", project["id"], "update", user,
+                          note=f"Site survey {doc['survey_no']} recorded by {doc['surveyor']}")
+    return doc
+
+
+@api.put("/site-surveys/{survey_id}")
+async def update_site_survey(survey_id: str, payload: SiteSurveyUpdate,
+                             user: dict = Depends(get_current_user)):
+    await _require_permission("projects", "edit", user)
+    survey = await _site_survey_or_404(survey_id, user)
+    patch = {k: v for k, v in payload.model_dump().items() if v is not None}
+    _check_survey_fields(patch)
+    if "rows" in patch:
+        try:
+            patch["rows"], patch["totals"] = ops.clean_survey_rows(survey["division"], patch["rows"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    patch["updated_at"] = now_iso()
+    await db.site_surveys.update_one(tenancy.scope({"id": survey_id}, "site_surveys", user), {"$set": patch})
+    return await _site_survey_or_404(survey_id, user)
+
+
+# ------------------------------------------------------------ follow-up engine
+def _slim_lead(l: dict) -> dict:
+    return {k: l.get(k, "") for k in ("id", "name", "phone", "whatsapp", "stage", "division", "source",
+                                      "assigned_to", "follow_up_date", "next_action", "priority",
+                                      "value", "updated_at")}
+
+
+@api.get("/followups/summary")
+async def followups_summary(assigned_to: str = "", division: str = "", inactive_days: int = 14,
+                            user: dict = Depends(get_current_user)):
+    """OVERDUE / TODAY / UPCOMING plus the leads most likely to be forgotten:
+    no follow-up date, no next action, untouched for `inactive_days`. Also
+    overdue customer payments and open service tickets, so one screen answers
+    "who do I need to chase today?". Respects the caller's lead scope."""
+    roles = await _require_permission("leads", "view", user)
+    q: dict = {"stage": {"$nin": sorted(ops.CLOSED_LEAD_STAGES)}}
+    owners = await _scope_owners(user, roles, "leads")
+    if owners is not None:
+        q["assigned_to"] = {"$in": owners}
+    if assigned_to:
+        q["assigned_to"] = assigned_to
+    if division:
+        q["division"] = ops.normalize_division(division)
+    leads = await db.leads.find(tenancy.scope(q, "leads", user), {"_id": 0}).to_list(5000)
+    b = ops.followup_buckets(leads, inactive_days=max(1, min(inactive_days, 365)))
+    no_action = [l for l in leads if not str(l.get("next_action") or "").strip()]
+    unassigned = [l for l in leads if not str(l.get("assigned_to") or "").strip()]
+
+    today = lc.today_iso()
+    overdue_payments = []
+    try:
+        await _require_permission("projects", "view", user)
+        projs = await db.projects.find(
+            tenancy.scope({"next_payment_due": {"$lt": today, "$ne": ""}}, "projects", user),
+            {"_id": 0}).to_list(2000)
+        for p in projs:
+            view = ops.payment_status(p.get("value"), await _project_received(p, user), p.get("next_payment_due"))
+            if view["payment_status"] == "OVERDUE":
+                overdue_payments.append({"project_id": p["id"], "project_no": p.get("project_no", ""),
+                                         "customer": p.get("customer", ""), "phone": p.get("phone", ""),
+                                         **view})
+        open_tickets = await db.service_tickets.count_documents(
+            tenancy.scope({"status": {"$in": sorted(ops.OPEN_SERVICE_STATUSES)}}, "service_tickets", user))
+    except HTTPException:
+        open_tickets = 0
+
+    def pack(rows):
+        return [_slim_lead(r) for r in rows[:200]]
+
+    return {
+        "counts": {"overdue": len(b["overdue"]), "today": len(b["today"]), "upcoming": len(b["upcoming"]),
+                   "no_follow_up": len(b["no_follow_up"]), "no_next_action": len(no_action),
+                   "inactive": len(b["inactive"]), "unassigned": len(unassigned),
+                   "overdue_payments": len(overdue_payments), "open_service_tickets": open_tickets},
+        "overdue": pack(b["overdue"]), "today": pack(b["today"]), "upcoming": pack(b["upcoming"]),
+        "no_follow_up": pack(b["no_follow_up"]), "no_next_action": pack(no_action),
+        "inactive": pack(b["inactive"]), "unassigned": pack(unassigned),
+        "overdue_payments": overdue_payments,
+        "inactive_days": inactive_days,
+    }
+
+
+# --------------------------------------------------------- customer overview
+@api.get("/customers/{customer_id}/overview")
+async def customer_overview(customer_id: str, user: dict = Depends(get_current_user)):
+    """Customer 360: every project, quote, payment and service ticket, matched
+    by customer_id OR phone (legacy rows predate customer_id)."""
+    await _require_permission("customers", "view", user)
+    customer = await db.customers.find_one(tenancy.scope({"id": customer_id}, "customers", user), {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    match = [{"customer_id": customer_id}]
+    if customer.get("phone"):
+        match.append({"phone": customer["phone"]})
+    q = {"$or": match}
+    projects = await db.projects.find(tenancy.scope(q, "projects", user), {"_id": 0}).sort("created_at", -1).to_list(200)
+    quotes = await db.quotes.find(tenancy.scope(q, "quotes", user),
+                                  {"_id": 0, "id": 1, "quote_no": 1, "version": 1, "stage": 1, "status": 1,
+                                   "division": 1, "grand_total": 1, "value": 1, "date": 1}).sort("date", -1).to_list(200)
+    tickets = await db.service_tickets.find(tenancy.scope(q, "service_tickets", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(200)
+    pay_q = {"phone": customer["phone"]} if customer.get("phone") else {"phone": "__none__"}
+    sale_ids = [p.get("sale_id") for p in projects if p.get("sale_id")]
+    if sale_ids:
+        pay_q = {"$or": [pay_q, {"against_sale_id": {"$in": sale_ids}}]}
+    payments = await db.payments.find(tenancy.scope(pay_q, "payments", user), {"_id": 0}).sort("date", -1).to_list(500)
+    received = round(sum(lc.money(p.get("amount")) * (-1 if p.get("direction") in ("Refund", "Out") else 1)
+                         for p in payments), 2)
+    order_value = round(sum(lc.money(p.get("value")) for p in projects), 2)
+    project_rows = []
+    for p in projects:
+        wf = ops.workflow_progress(ops.merge_milestones(p.get("milestones"), p.get("division")))
+        project_rows.append({**{k: p.get(k, "") for k in ("id", "project_no", "project_name", "division",
+                                                           "stage", "value", "site_address", "target_date")},
+                             "progress": wf["percent"], "current_stage": wf["current"]})
+    return {
+        "customer": customer, "projects": project_rows, "quotes": quotes,
+        "payments": payments, "service_tickets": tickets,
+        "totals": {"projects": len(projects), "order_value": order_value, "received": received,
+                   "pending": round(max(order_value - received, 0), 2),
+                   "open_service_tickets": sum(1 for t in tickets if t.get("status") in ops.OPEN_SERVICE_STATUSES)},
+    }
 
 
 # ------- Stakeholder search: 1-click lookup across the existing people
@@ -5481,7 +6055,7 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         patch = {"sale_id": sale["id"], "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id,
                  "value": value}
         if not adopted.get("milestones"):
-            patch["milestones"] = lc.default_milestones()
+            patch["milestones"] = ops.division_milestones(adopted.get("division") or quote.get("division"))
         await db.projects.update_one(owned, {"$set": patch})
         project = await db.projects.find_one(owned, {"_id": 0})
         project = await _ensure_project_artifacts(project, user)
@@ -5498,8 +6072,8 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         "stage": "Survey", "site_address": "", "assigned_engineer": "",
         "start_date": lc.today_iso(), "target_date": "", "remarks": "",
         "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id, "sale_id": sale["id"],
-        "lead_id": lead_id,
-        "milestones": lc.default_milestones(),
+        "lead_id": lead_id, "customer_id": quote.get("customer_id", ""),
+        "milestones": ops.division_milestones(quote.get("division")),
     }
     stamp_fy(project, "projects")
     tenancy.stamp(project, "projects", user)
@@ -5522,7 +6096,7 @@ async def _ensure_project_artifacts(project: dict, user: dict) -> dict:
     """
     owned = tenancy.scope({"id": project["id"]}, "projects", user)
     if not project.get("milestones"):
-        await db.projects.update_one(owned, {"$set": {"milestones": lc.default_milestones()}})
+        await db.projects.update_one(owned, {"$set": {"milestones": ops.division_milestones(project.get("division"))}})
         project = await db.projects.find_one(owned, {"_id": 0}) or project
 
     existing_task = await db.tasks.find_one(tenancy.scope(
@@ -6096,14 +6670,22 @@ async def global_search(q: str = "", user: dict = Depends(get_current_user)):
             results.append({"type": kind, "id": r.get("id"), "title": r.get(title_field, ""),
                              "subtitle": subtitle_fn(r)})
 
-    await add(db.customers.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"alt_phone": rx}]}, "customers", user), {"_id": 0}),
+    await add(db.customers.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"alt_phone": rx}, {"email": rx}]}, "customers", user), {"_id": 0}),
               "customer", "name", lambda r: r.get("phone", ""))
-    await add(db.leads.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"reference": rx}]}, "leads", user), {"_id": 0}),
-              "lead", "name", lambda r: r.get("phone", ""))
+    await add(db.leads.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"reference": rx}, {"email": rx},
+                                                    {"whatsapp": rx}, {"id": q}]}, "leads", user), {"_id": 0}),
+              "lead", "name", lambda r: " · ".join(x for x in (r.get("phone", ""), r.get("stage", ""), r.get("division", "")) if x))
     await add(db.quotes.find(tenancy.scope({"$or": [{"quote_no": rx}, {"customer": rx}]}, "quotes", user), {"_id": 0}),
               "quotation", "quote_no", lambda r: f"{r.get('customer', '')} · ₹{r.get('grand_total') or r.get('value') or 0:,.0f}")
-    await add(db.projects.find(tenancy.scope({"$or": [{"project_no": rx}, {"customer": rx}]}, "projects", user), {"_id": 0}),
-              "project", "project_no", lambda r: r.get("customer", ""))
+    await add(db.projects.find(tenancy.scope({"$or": [{"project_no": rx}, {"customer": rx}, {"project_name": rx},
+                                                       {"phone": rx}]}, "projects", user), {"_id": 0}),
+              "project", "project_no", lambda r: " · ".join(x for x in (r.get("customer", ""), r.get("division", "")) if x))
+    await add(db.architects.find(tenancy.scope({"$or": [{"name": rx}, {"firm": rx}, {"phone": rx}, {"email": rx}]},
+                                               "architects", user), {"_id": 0}),
+              "architect", "name", lambda r: " · ".join(x for x in (r.get("firm", ""), r.get("phone", "")) if x))
+    await add(db.service_tickets.find(tenancy.scope({"$or": [{"ticket_no": rx}, {"customer": rx}, {"phone": rx},
+                                                              {"project_no": rx}]}, "service_tickets", user), {"_id": 0}),
+              "service_ticket", "ticket_no", lambda r: f"{r.get('customer', '')} · {r.get('status', '')}")
     await add(db.inventory.find(tenancy.scope({"$or": [{"sku": rx}, {"vendor_code": rx}, {"name": rx}]}, "inventory", user), {"_id": 0}),
               "inventory", "name", lambda r: f"SKU {r.get('sku', '')} · Vendor {r.get('vendor_code') or '—'}")
     await add(db.users.find({"tenant_id": tenancy.tenant_of(user) or "__no_tenant__", "name": rx}, {"_id": 0}),
@@ -6517,7 +7099,7 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
         "id": new_id(), "created_at": now_iso(),
         "quote_no": lc.next_quote_no(existing), "date": lc.today_iso(),
         "customer": lead.get("name", ""), "phone": lead.get("phone", ""),
-        "reference": lead.get("source", ""), "division": lead.get("division", "Furniture"),
+        "reference": lead.get("source", ""), "division": (lead.get("division") or "Furniture"),
         "by_user": user.get("name", ""), "stage": "Quoted", "status": "Sent",
         "value": 0, "remarks": lead.get("requirement", ""), "version": 1,
         "lead_id": lead_id,
@@ -6558,11 +7140,11 @@ async def start_project(lead_id: str, user: dict = Depends(get_current_user)):
         "id": new_id(), "created_at": now_iso(),
         "project_no": lc.next_project_no(existing_projects),
         "customer": lead.get("name", ""), "phone": lead.get("phone", ""),
-        "division": lead.get("division", "Furniture"), "value": 0, "paid": 0,
+        "division": (lead.get("division") or "Furniture"), "value": 0, "paid": 0,
         "stage": "Survey", "site_address": "", "assigned_engineer": "",
         "start_date": lc.today_iso(), "target_date": "", "remarks": "",
         "quote_ref": "", "sale_id": "", "lead_id": lead_id,
-        "milestones": lc.default_milestones(),
+        "milestones": ops.division_milestones(lead.get("division")),
     }
     stamp_fy(project, "projects")
     tenancy.stamp(project, "projects", user)
@@ -6645,12 +7227,18 @@ MAX_DOCUMENT_BYTES = 20 * 1024 * 1024  # 20MB
 DOCUMENT_ENTITY_COLLECTION = {
     "lead": "leads", "quote": "quotes", "project": "projects",
     "architect": "architects", "sale": "sales",
+    "customer": "customers", "service_ticket": "service_tickets",
+    "site_survey": "site_surveys", "dw_survey": "dw_surveys", "payment": "payments",
 }
+DOCUMENT_CATEGORIES = ["Quotation", "Invoice", "Drawing", "Measurement", "Site Photo",
+                       "Customer Reference", "PO", "Payment Proof", "Warranty",
+                       "Installation Photo", "Other"]
 
 
 @api.post("/documents")
 async def upload_document(entity_type: str = Form(...), entity_id: str = Form(...),
                            caption: str = Form(""), file: UploadFile = File(...),
+                           category: str = Form(""),
                            user: dict = Depends(get_current_user)):
     await _require_permission("documents", "create", user)
     collection = DOCUMENT_ENTITY_COLLECTION.get(entity_type)
@@ -6669,6 +7257,7 @@ async def upload_document(entity_type: str = Form(...), entity_id: str = Form(..
         "content_type": file.content_type or "application/octet-stream",
         "size_bytes": len(raw), "uploaded_by": user.get("name", ""),
         "uploaded_at": now_iso(), "caption": caption,
+        "category": category if category in DOCUMENT_CATEGORIES else "Other",
     }
     tenancy.stamp(doc, "documents", user)
     await db.documents.insert_one(dict(doc))
@@ -6681,6 +7270,31 @@ async def list_documents(entity_type: str, entity_id: str, user: dict = Depends(
     await _require_permission("documents", "view", user)
     q = tenancy.scope({"entity_type": entity_type, "entity_id": entity_id}, "documents", user)
     return await db.documents.find(q, {"_id": 0}).sort("uploaded_at", -1).to_list(500)
+
+
+@api.get("/documents/{doc_id}/file")
+async def download_document(doc_id: str, user: dict = Depends(get_current_user)):
+    """The only way to read an uploaded file: authenticated and tenant-scoped.
+    (The old public /uploads static mount served any file to anyone holding
+    its URL.)"""
+    await _require_permission("documents", "view", user)
+    d = await db.documents.find_one(tenancy.scope({"id": doc_id}, "documents", user), {"_id": 0})
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    url = str(d.get("file_url") or "")
+    if not url.startswith("/uploads/"):
+        raise HTTPException(status_code=404, detail="File is stored externally")
+    root = storage.UPLOAD_ROOT.resolve()
+    path = (root / url[len("/uploads/"):]).resolve()
+    # Resolved-path containment check: a crafted file_url can't walk out of
+    # the upload root (../), and a tenant can only reach its own rows anyway.
+    if root not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="File no longer available on the server")
+    safe_name = re.sub(r'[^A-Za-z0-9._ -]+', "_", d.get("file_name") or path.name)
+    return FileResponse(path, media_type=d.get("content_type") or "application/octet-stream",
+                        headers={"Content-Disposition": f'inline; filename="{safe_name}"',
+                                 "Cache-Control": "private, no-store",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 @api.delete("/documents/{doc_id}")
@@ -6856,7 +7470,9 @@ app.include_router(api_budget.router)
 # Local-disk uploads served back out at the same /uploads/... path storage.py
 # returns as file_url. check_dir=False: the directory may not exist yet on a
 # fresh checkout (nothing has been uploaded), which must not crash startup.
-app.mount("/uploads", StaticFiles(directory=str(storage.UPLOAD_ROOT), check_dir=False), name="uploads")
+# (Removed the public /uploads static mount — customer drawings, payment
+# proofs and site photos were readable by anyone with the URL. Files are now
+# served only through the authenticated GET /api/documents/{id}/file.)
 
 # CORS
 # Auth here is a Bearer token in the Authorization header, NOT a cookie, so we do
