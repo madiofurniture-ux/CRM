@@ -38,6 +38,7 @@ import quotation_templates
 import storage
 import tally
 import workflow_rules as wf
+import analytics as an
 from models import TallyConnectionUpdate
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
@@ -4073,6 +4074,79 @@ async def inventory_analytics(user: dict = Depends(get_current_user)):
 
 # ------- Executive Analytics: pipeline funnel, revenue, commissions -------
 
+# ── Analytics hub ────────────────────────────────────────────────────────
+# One endpoint per tab of the Analytics screen. Aggregation lives in
+# analytics.py (pure, unit-tested); this layer fetches through tenancy.scope
+# and applies visibility, reusing the rules the underlying lists already have:
+#   * sales / leads / calls follow the caller's role scope for "analytics"
+#     (own -> their records, team -> their team's, all -> everyone's);
+#   * attendance: admins see everyone, anyone else only themselves — the same
+#     rule as GET /attendance;
+#   * vendors & projects: admin only (vendor names are admin-only elsewhere).
+ANALYTICS_TABS = ("sales", "leads", "calls", "attendance", "vendors")
+_ATTENDANCE_ANALYTICS_FIELDS = {"_id": 0, "user_id": 1, "name": 1, "date": 1, "status": 1,
+                                "check_in_at": 1, "check_out_at": 1, "duration_min": 1,
+                                "check_in_within": 1}
+_ANALYTICS_OWNER_FIELD = {"sales": "by_user", "leads": "assigned_to", "calls": "by_user"}
+
+
+def _ist_today():
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+    return _dt.now(ZoneInfo("Asia/Kolkata")).date()
+
+
+@api.get("/analytics/hub/{tab}")
+async def analytics_hub(tab: str, start: str = "", end: str = "", division: str = "",
+                        user: dict = Depends(get_current_user)):
+    if tab not in ANALYTICS_TABS:
+        raise HTTPException(status_code=404, detail=f"Unknown analytics tab '{tab}'")
+    roles = await _require_permission("analytics", "view", user)
+    today = _ist_today()
+    try:
+        s, e = an.parse_range(start, end, today=today)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    if division and division not in lc.DIVISIONS + ["Other"]:
+        raise HTTPException(status_code=400, detail=f"Unknown division '{division}'")
+    admin = user.get("role") == "admin"
+
+    async def fetch(coll: str, query: dict = None, projection: dict = None) -> list:
+        return await db[coll].find(tenancy.scope(query or {}, coll, user),
+                                   projection or {"_id": 0}).to_list(50000)
+
+    scope = "all"
+    if tab in _ANALYTICS_OWNER_FIELD:
+        owners = await _scope_owners(user, roles, "analytics")
+        query = None if owners is None else {_ANALYTICS_OWNER_FIELD[tab]: {"$in": owners}}
+        scope = "all" if owners is None else ("mine" if len(owners) == 1 else "team")
+        if tab == "sales":
+            out = an.sales_summary(await fetch("sales", query), s, e, division=division)
+        elif tab == "leads":
+            stages, _ = await workflow_for("lead", user)
+            out = an.leads_summary(await fetch("leads", query), stages, s, e)
+        else:
+            out = an.calls_summary(await fetch("calls", query), s, e, division=division)
+    elif tab == "attendance":
+        scope = "all" if admin else "mine"
+        records = await fetch("attendance", None if admin else {"user_id": user.get("id")},
+                              _ATTENDANCE_ANALYTICS_FIELDS)
+        staff = 0
+        if admin:
+            staff = await db.users.count_documents(
+                {"tenant_id": tenancy.tenant_of(user) or "__no_tenant__", "active": {"$ne": False}})
+        out = an.attendance_summary(records, s, e, staff_count=staff, today=today)
+    else:
+        if not admin:
+            raise HTTPException(status_code=403,
+                                detail="Only an administrator can see vendor and project analytics.")
+        out = an.vendors_summary(
+            await fetch("manufacturer_orders"), await fetch("projects"), s, e, division=division,
+            vendor_label=lambda o: o.get("vendor_name") or o.get("vendor_code") or "Unknown", today=today)
+    return {"tab": tab, "start": s.isoformat(), "end": e.isoformat(), "division": division,
+            "scope": scope, **out}
+
+
 @api.get("/analytics/pipeline")
 async def analytics_pipeline(user: dict = Depends(get_current_user)):
     """Stage-by-stage quote funnel. `conversion_rate` is each stage's share
@@ -4526,26 +4600,26 @@ DEFAULT_ROLES = [
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
                   "architects", "tasks", "invoice-gen", "meetplan", "petty", "calls",
-                  "commissions", "cashbook", "record-contacts")
+                  "commissions", "cashbook", "record-contacts", "analytics")
     ]},
     {"name": "Management", "permissions": [
         {"module": m, "view": True, "create": False, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
                   "architects", "tasks", "invoice-gen", "meetplan", "petty", "calls",
-                  "commissions", "cashbook", "record-contacts")
+                  "commissions", "cashbook", "record-contacts", "analytics")
     ]},
     {"name": "Sales Manager", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": True, "export": False, "scope": "team"}
         for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
-                  "tasks", "meetplan", "calls", "record-contacts")
+                  "tasks", "meetplan", "calls", "record-contacts", "analytics")
     ]},
     {"name": "Salesperson", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": False, "export": False, "scope": "own"}
         for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
-                  "tasks", "meetplan", "calls", "record-contacts")
+                  "tasks", "meetplan", "calls", "record-contacts", "analytics")
     ]},
     {"name": "Inventory", "permissions": [
         {"module": "inventory", "view": True, "create": True, "edit": True,

@@ -30,6 +30,7 @@ import {
 export const ALL_BASEPLATE_SUBNAV = {
   overview: [
     { code: "DA", label: "Dashboard", to: "/", page: "dashboard" },
+    { code: "AN", label: "Analytics", to: "/analytics", page: "analytics" },
     { code: "AL", label: "Alerts", to: "/alerts", page: "alerts" },
     { code: "RP", label: "Reports", to: "/reports", page: "reports" },
     { code: "EX", label: "Executive Analytics", to: "/executive", page: "executive" },

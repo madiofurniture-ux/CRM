@@ -31,6 +31,11 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   `frontend/src/pages/Workflows.jsx` (builder), `frontend/src/hooks/useWorkflow.js`
   and `frontend/src/components/StagePath.jsx` (record-level Path). See
   `docs/WORKFLOWS.md`.
+- Call Log (`calls` collection, `frontend/src/pages/Calls.jsx`) and the
+  Analytics hub (`backend/analytics.py`, `GET /api/analytics/hub/{tab}`,
+  `frontend/src/pages/Analytics.jsx`). See `docs/ANALYTICS_AND_CALLS.md`.
+- New module ids must also be handled by `effective_enabled_modules` in
+  `server.py` (tenants with a saved module list see new modules switched on).
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.

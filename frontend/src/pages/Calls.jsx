@@ -217,10 +217,10 @@ export default function Calls() {
         </div>
 
         <div className="flex flex-wrap gap-2 items-center">
-          <div role="group" aria-label="Date range" className="inline-flex rounded-[var(--radius-sm)] border border-[var(--color-border-strong,var(--color-border))] overflow-hidden">
+          <div role="group" aria-label="Date range" className="inline-flex max-w-full overflow-x-auto rounded-[var(--radius-sm)] border border-[var(--color-border-strong,var(--color-border))]">
             {RANGES.map(([k, label]) => (
               <button key={k} type="button" aria-pressed={range === k} onClick={() => setRange(k)}
-                      className={`px-3 py-1.5 text-sm ${range === k ? "bg-[var(--color-primary)] text-white" : "bg-[var(--color-surface)] hover:bg-[var(--color-surface-muted)]"}`}>
+                      className={`px-3 py-1.5 text-sm whitespace-nowrap ${range === k ? "bg-[var(--color-primary)] text-white" : "bg-[var(--color-surface)] hover:bg-[var(--color-surface-muted)]"}`}>
                 {label}
               </button>
             ))}
