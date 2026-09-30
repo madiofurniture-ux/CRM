@@ -119,7 +119,7 @@ def test_new_modules_appear_for_tenants_with_a_saved_module_list():
         "enabled_modules": [m for m in server.ALL_MODULE_IDS if m != "calls"],
         "seen_modules": list(server.ALL_MODULE_IDS)})
     assert "calls" not in eff2
-    assert server.effective_enabled_modules({})  == list(server.ALL_MODULE_IDS)
+    assert server.effective_enabled_modules({}) == list(server.ALL_MODULE_IDS)
 
 
 def test_saving_modules_drops_retired_ids_instead_of_failing():
