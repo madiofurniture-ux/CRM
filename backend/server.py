@@ -40,6 +40,7 @@ import tally
 import workflow_rules as wf
 import analytics as an
 import expenses as ex
+import finance_lineage as fl
 from models import TallyConnectionUpdate
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
@@ -3237,6 +3238,159 @@ async def transfer_money_request(request_id: str, payload: MoneyRequestTransfer,
             + (f" · {payload.payment_mode.replace('_', ' ').title()} {utr}" if utr else " · direct settlement"))]}})
     await record_activity("money_request", request_id, "transfer", user, after=transfer)
     return _with_actions(await db.money_requests.find_one(owned, {"_id": 0}), user, is_fin)
+
+
+# ══════════════════════════════════════════════════════════════════
+# MONEY LINEAGE & P&L — one deal from visitor to profit, a deal list with
+# margins, and the company P&L. Pure logic in finance_lineage.py. Gated like
+# Project P&L (cashbook:view) and privacy-masked the same way by default.
+# ══════════════════════════════════════════════════════════════════
+_LINEAGE_COLLECTIONS = ("visitors", "leads", "quotes", "sales", "projects", "purchase_orders",
+                        "manufacturer_orders", "cashbooks", "cashbook_entries", "petty_cash",
+                        "money_requests", "payments", "commission_payouts")
+
+
+async def _lineage_data(user: dict) -> dict:
+    data = {}
+    for coll in _LINEAGE_COLLECTIONS:
+        proj = {"_id": 0, "receipt_url": 0} if coll in ("cashbook_entries", "petty_cash", "money_requests") \
+            else {"_id": 0, "image_url": 0} if coll == "manufacturer_orders" else {"_id": 0}
+        data[coll] = await db[coll].find(tenancy.scope({}, coll, user), proj).to_list(50000)
+    data["book_project"] = {b["id"]: b.get("project_id") or "" for b in data["cashbooks"]}
+    return data
+
+
+def _narrow_deal(data: dict, *, project_id="", sale_id="", quote_id="", lead_id="") -> Optional[dict]:
+    by = {c: {d.get("id"): d for d in data[c] if d.get("id")} for c in ("projects", "sales", "quotes", "leads", "visitors")}
+    project = by["projects"].get(project_id) if project_id else None
+    sale = by["sales"].get(sale_id) if sale_id else None
+    quote = by["quotes"].get(quote_id) if quote_id else None
+    lead = by["leads"].get(lead_id) if lead_id else None
+    if not (project or sale or quote or lead):
+        return None
+    if project:
+        sale = sale or by["sales"].get(project.get("sale_id") or "")
+        quote = quote or by["quotes"].get(project.get("quote_id") or "")
+        lead = lead or by["leads"].get(project.get("lead_id") or "")
+    if sale:
+        quote = quote or by["quotes"].get(sale.get("quote_id") or "")
+        lead = lead or by["leads"].get(sale.get("lead_id") or "")
+        project = project or next((p for p in data["projects"] if p.get("sale_id") == sale["id"]), None)
+    if quote:
+        lead = lead or by["leads"].get(quote.get("lead_id") or "")
+        sale = sale or next((x for x in data["sales"] if x.get("quote_id") == quote["id"]), None)
+        project = project or next((p for p in data["projects"] if p.get("quote_id") == quote["id"]
+                                   or (sale and p.get("sale_id") == sale["id"])), None)
+    if lead and not (sale or quote or project):
+        quote = next((q for q in sorted(data["quotes"], key=lambda q: str(q.get("date") or ""), reverse=True)
+                      if q.get("lead_id") == lead["id"]), None)
+        if quote:
+            sale = next((x for x in data["sales"] if x.get("quote_id") == quote["id"]), None)
+            project = next((p for p in data["projects"] if p.get("quote_id") == quote["id"]
+                            or (sale and p.get("sale_id") == sale["id"])), None)
+    quotes = [q for q in data["quotes"] if (quote and q.get("id") == quote["id"])
+              or (lead and q.get("lead_id") == lead["id"] and (not sale or q.get("id") == sale.get("quote_id")))]
+    if quote and not any(q.get("id") == quote["id"] for q in quotes):
+        quotes.append(quote)
+    sales = [sale] if sale else []
+    sale_ids = {x["id"] for x in sales}
+    quote_ids = {q["id"] for q in quotes if q.get("id")}
+    pid = (project or {}).get("id") or ""
+    visitor = None
+    if lead:
+        visitor = by["visitors"].get(lead.get("visitor_id") or "")
+        if not visitor and lead.get("phone"):
+            key = lc.phone_key(lead["phone"])
+            visitor = next((v for v in data["visitors"] if key and lc.phone_key(v.get("phone")) == key), None)
+    bp = data["book_project"]
+
+    def spend_hit(e):
+        epid = e.get("project_id") or bp.get(e.get("cashbook_id"), "")
+        return (pid and epid == pid) or (e.get("sale_id") and e.get("sale_id") in sale_ids) \
+            or (e.get("quote_id") and e.get("quote_id") in quote_ids)
+    return {
+        "visitor": visitor, "lead": lead, "quotes": quotes, "sales": sales, "project": project,
+        "pos": [x for x in data["purchase_orders"] if pid and x.get("project_id") == pid],
+        "mos": [x for x in data["manufacturer_orders"] if pid and x.get("project_id") == pid],
+        "entries": [e for e in data["cashbook_entries"] if spend_hit(e)],
+        "petty": [v for v in data["petty_cash"] if pid and v.get("project_id") == pid],
+        "requests": [r for r in data["money_requests"] if (pid and r.get("project_id") == pid)
+                     or (r.get("sale_id") and r.get("sale_id") in sale_ids)
+                     or (r.get("quote_id") and r.get("quote_id") in quote_ids)],
+        "payments": [x for x in data["payments"] if x.get("against_sale_id") and x.get("against_sale_id") in sale_ids],
+        "payouts": [x for x in data["commission_payouts"] if (pid and x.get("project_id") == pid)
+                    or (x.get("quote_id") and x.get("quote_id") in quote_ids)],
+    }
+
+
+@api.get("/finance/deal-pnl")
+async def deal_pnl(project_id: str = "", sale_id: str = "", quote_id: str = "", lead_id: str = "",
+                   mask_other: bool = True, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    data = await _lineage_data(user)
+    ctx = _narrow_deal(data, project_id=project_id, sale_id=sale_id, quote_id=quote_id, lead_id=lead_id)
+    if not ctx:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    out = fl.deal_lineage(**ctx)
+    out["anchor"] = {"project_id": (ctx["project"] or {}).get("id", ""),
+                     "sale_id": (ctx["sales"][0] if ctx["sales"] else {}).get("id", ""),
+                     "quote_id": (ctx["quotes"][-1] if ctx["quotes"] else {}).get("id", ""),
+                     "lead_id": (ctx["lead"] or {}).get("id", "")}
+    return fl.mask_deal(out) if mask_other else out
+
+
+@api.get("/finance/deals")
+async def deal_list(mask_other: bool = True, user: dict = Depends(get_current_user)):
+    """Every sales order (and every project not yet tied to one) with its
+    margin, for the P&L deal picker and ranking."""
+    await _require_permission("cashbook", "view", user)
+    data = await _lineage_data(user)
+    rows, seen_projects = [], set()
+    anchors = [("sale", s) for s in data["sales"]] + [("project", p) for p in data["projects"]]
+    for kind, rec in anchors:
+        if kind == "project" and rec["id"] in seen_projects:
+            continue
+        ctx = _narrow_deal(data, **({"sale_id": rec["id"]} if kind == "sale" else {"project_id": rec["id"]}))
+        if kind == "project" and ctx["sales"]:
+            continue
+        if ctx["project"]:
+            seen_projects.add(ctx["project"]["id"])
+        out = fl.deal_lineage(**ctx)
+        if mask_other:
+            out = fl.mask_deal(out)
+        p = out["pnl"]
+        rows.append({
+            "kind": kind, "id": rec["id"], "customer": out["customer"],
+            "ref": rec.get("sale_no") or rec.get("project_no") or "",
+            "project_no": (ctx["project"] or {}).get("project_no", ""),
+            "date": rec.get("date") or rec.get("start_date") or "", "division": rec.get("division", ""),
+            "revenue": p["revenue"], "revenue_basis": p["revenue_basis"], "vendor_cost": p["vendor_cost"],
+            "gross_margin": p["gross_margin"], "gross_margin_pct": p["gross_margin_pct"],
+            "expenses": p["expenses"], "net_margin": p["net_margin"], "net_margin_pct": p["net_margin_pct"],
+            "collected": p["collected"], "receivable": p["receivable"],
+        })
+    rows.sort(key=lambda r: str(r["date"] or ""), reverse=True)
+    return rows
+
+
+@api.get("/finance/pnl")
+async def company_pnl(start: str = "", end: str = "", division: str = "", mask_other: bool = True,
+                      user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    try:
+        s_, e_ = an.parse_range(start, end, today=_ist_today())
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    if division and division not in lc.DIVISIONS + ["Other"]:
+        raise HTTPException(status_code=400, detail=f"Unknown division '{division}'")
+    data = await _lineage_data(user)
+    out = fl.company_pnl(
+        sales=data["sales"], pos=data["purchase_orders"], mos=data["manufacturer_orders"],
+        entries=data["cashbook_entries"], petty=data["petty_cash"], payouts=data["commission_payouts"],
+        book_project=data["book_project"], projects={p["id"]: p for p in data["projects"] if p.get("id")},
+        start=s_, end=e_, division=division)
+    out.update(start=s_.isoformat(), end=e_.isoformat(), division=division)
+    return fl.mask_company(out) if mask_other else out
 
 
 @api.get("/projects/{project_id}/petty-cash/summary")

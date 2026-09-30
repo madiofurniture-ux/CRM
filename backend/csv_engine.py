@@ -246,16 +246,29 @@ async def compute_project_pnl(db, user: dict) -> dict:
             material_by_project.get(pid, 0.0) + (mo.get("final_total") or 0), 2)
 
     book_ids = [b["id"] for b in books if b.get("project_id")]
-    entries = []
-    if book_ids:
-        # Both CASH_IN and CASH_OUT — the ledger view needs full history,
-        # even though only CASH_OUT feeds the margin/category math below.
-        entries = await db.cashbook_entries.find(
-            tenancy.scope({"cashbook_id": {"$in": book_ids}}, "cashbook_entries", user),
-            {"_id": 0}).to_list(20000)
-    entries_by_book: dict[str, list[dict]] = {}
+    book_project = {b["id"]: b.get("project_id") or "" for b in books}
+    # Both CASH_IN and CASH_OUT — the ledger view needs full history, even
+    # though only CASH_OUT feeds the margin/category math below. An entry
+    # belongs to a project when it is tagged with one itself (a money-request
+    # payout from any wallet carries its project_id), else when its wallet is
+    # linked to that project.
+    entries = await db.cashbook_entries.find(
+        tenancy.scope({"$or": [{"cashbook_id": {"$in": book_ids}}, {"project_id": {"$nin": ["", None]}}]},
+                      "cashbook_entries", user),
+        {"_id": 0}).to_list(50000)
+    entries_by_project: dict[str, list[dict]] = {}
     for e in entries:
-        entries_by_book.setdefault(e["cashbook_id"], []).append(e)
+        pid = e.get("project_id") or book_project.get(e.get("cashbook_id"), "")
+        if pid:
+            entries_by_project.setdefault(pid, []).append(e)
+    # Flat Petty Cash vouchers tagged to a project (the older ledger, kept
+    # read-only) are project spend too; they never reached this P&L before.
+    petty = await db.petty_cash.find(
+        tenancy.scope({"project_id": {"$nin": ["", None]}, "kind": "Out"}, "petty_cash", user),
+        {"_id": 0}).to_list(50000)
+    petty_by_project: dict[str, list[dict]] = {}
+    for v in petty:
+        petty_by_project.setdefault(v["project_id"], []).append(v)
 
     out = []
     total_revenue = total_approved = total_pending = 0.0
@@ -263,7 +276,7 @@ async def compute_project_pnl(db, user: dict) -> dict:
     for p in projects:
         pid = p["id"]
         pbooks = books_by_project.get(pid, [])
-        pentries = [e for b in pbooks for e in entries_by_book.get(b["id"], [])]
+        pentries = entries_by_project.get(pid, [])
         # A manufacturer disbursement paid out of a site wallet debits that
         # wallet for real (the money left, so float_balance below must move),
         # but it is NOT a second cost: the order it settles is already in
@@ -271,8 +284,11 @@ async def compute_project_pnl(db, user: dict) -> dict:
         # rupee to the project twice and understate margin by the amount paid.
         pouts = [e for e in pentries
                  if e.get("type") == "CASH_OUT" and not e.get("manufacturer_order_id")]
-        approved = sum(e["amount"] for e in pouts if e.get("status") == "Approved")
-        pending = sum(e["amount"] for e in pouts if e.get("status") == "Pending")
+        ppetty = petty_by_project.get(pid, [])
+        approved = sum(e["amount"] for e in pouts if e.get("status") == "Approved") \
+            + sum(lc.money(v.get("amount")) for v in ppetty if v.get("status", "Approved") == "Approved")
+        pending = sum(e["amount"] for e in pouts if e.get("status") == "Pending") \
+            + sum(lc.money(v.get("amount")) for v in ppetty if v.get("status") == "Pending")
         float_balance = sum(b.get("current_balance", 0) for b in pbooks)
         imprest_limit_total = sum(b.get("imprest_limit", 0) or 0 for b in pbooks)
         revenue = p.get("value", 0) or 0
@@ -285,6 +301,10 @@ async def compute_project_pnl(db, user: dict) -> dict:
                 continue
             cat = e.get("category") or "Other"
             by_category[cat] = by_category.get(cat, 0) + e["amount"]
+        for v in ppetty:
+            if v.get("status", "Approved") == "Approved":
+                cat = v.get("category") or "Other"
+                by_category[cat] = by_category.get(cat, 0) + lc.money(v.get("amount"))
 
         recent_entries = sorted(pentries, key=lambda e: e.get("created_at", ""), reverse=True)[:10]
 
