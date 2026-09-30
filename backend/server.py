@@ -4917,10 +4917,18 @@ async def _check_project_integrity(doc: dict, existing: dict | None, user: dict)
         if "customer" in doc:
             doc["customer"] = doc_customer
     if existing is None or "division" in doc:
+        raw_div = merged.get("division") or "Furniture"
         try:
-            doc["division"] = ops.validate_division(merged.get("division") or "Furniture")
+            doc["division"] = ops.validate_division(raw_div)
         except ValueError as e:
-            raise HTTPException(400, str(e))
+            # A tenant may have renamed/added divisions in Business Settings —
+            # its own configured slugs are valid too (they run the Furniture
+            # checklist until a workflow is defined for them).
+            profile = await _get_business_profile(user)
+            slugs = {str(d.get("slug") or "") for d in profile.get("divisions") or []}
+            if str(raw_div) not in slugs:
+                raise HTTPException(400, str(e))
+            doc["division"] = str(raw_div)
     if doc.get("customer_id"):
         if not await db.customers.find_one(tenancy.scope({"id": doc["customer_id"]}, "customers", user), {"_id": 1}):
             raise HTTPException(400, "customer_id does not match a customer")
