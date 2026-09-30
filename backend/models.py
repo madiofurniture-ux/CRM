@@ -54,6 +54,9 @@ class UserBase(BaseModel):
     # geofence in OfficeSettings, which is how attendance worked before sites
     # existed. String ids (new_id()), consistent with every other link here.
     assigned_site_ids: List[str] = Field(default_factory=list)
+    # Reporting manager (a users.id in the same tenant) — first approver of
+    # this person's money requests. "" = none; finance approves directly.
+    reports_to: Optional[str] = ""
 
 
 class UserCreate(UserBase):
@@ -78,6 +81,7 @@ class UserUpdate(BaseModel):
     overtime_eligible: Optional[bool] = None
     overtime_rate_multiplier: Optional[float] = None
     assigned_site_ids: Optional[List[str]] = None
+    reports_to: Optional[str] = None
 
 
 class UserPublic(UserBase):
@@ -875,6 +879,14 @@ class CashbookEntryBase(BaseModel):
     status: str = "Approved"             # Pending / Approved / Rejected
     approved_by: Optional[str] = ""
     approved_at: Optional[str] = ""
+    # Lineage — set when the entry is a money-request payout (server-side
+    # only), so project P&L can attribute spend paid from any wallet, not just
+    # a project-linked one.
+    money_request_id: Optional[str] = ""
+    project_id: Optional[str] = ""
+    sale_id: Optional[str] = ""
+    quote_id: Optional[str] = ""
+    lead_id: Optional[str] = ""
 
 
 class CashbookEntryCreate(CashbookEntryBase):
@@ -1717,6 +1729,52 @@ class CallCreate(CallBase):
 class Call(CallBase):
     id: str
     created_at: str
+
+
+# ------- Money requests (expense claims / advances) -------
+# See expenses.py for the flow. The client sends only these fields; status,
+# approvals, request_no, raiser, links derived from the linked record, and
+# the payout are all server-side.
+class MoneyRequestCreate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    title: str
+    amount: float
+    category: str = "Other"
+    date: str = ""                       # spend date; defaults to today
+    description: Optional[str] = ""
+    receipt_url: Optional[str] = ""      # shrunk JPEG/PNG data URL
+    payee_name: Optional[str] = ""       # who gets paid (defaults to the raiser)
+    payee_upi: Optional[str] = ""
+    project_id: Optional[str] = ""
+    sale_id: Optional[str] = ""
+    quote_id: Optional[str] = ""
+    lead_id: Optional[str] = ""
+    division: Optional[str] = ""
+
+    @field_validator("title")
+    @classmethod
+    def _title_required(cls, v):
+        v = str(v or "").strip()
+        if not v:
+            raise ValueError("Give the request a title")
+        return v[:120]
+
+    @field_validator("amount")
+    @classmethod
+    def _positive(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("Amount must be more than zero")
+        if v > 1e8:
+            raise ValueError("Amount is too large")
+        return round(float(v), 2)
+
+
+class MoneyRequestTransfer(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    cashbook_id: str                     # the wallet the money leaves
+    payment_mode: Literal["UPI", "BANK_TRANSFER", "OTHER"] = "UPI"
+    utr: Optional[str] = ""              # UTR / UPI reference; required unless OTHER
+    date: Optional[str] = ""
 
 
 # ------- Customers (post-sale lifecycle record) -------

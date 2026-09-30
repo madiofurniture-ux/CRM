@@ -39,6 +39,7 @@ import storage
 import tally
 import workflow_rules as wf
 import analytics as an
+import expenses as ex
 from models import TallyConnectionUpdate
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
@@ -61,6 +62,7 @@ from models import (
     PettyCashCreate, PettyCash,
     CashbookCreate, Cashbook, CashbookEntryCreate, CashbookEntry,
     CashbookEntryApproval, CashbookTopUp, CashbookExpense,
+    MoneyRequestCreate, MoneyRequestTransfer,
     RecordContactCreate, RecordContact,
     AttendanceCheckIn, AttendanceRegularize, OfficeSettings,
     SiteCreate, Site, PayrollRequest,
@@ -284,7 +286,8 @@ async def users_directory(user: dict = Depends(get_current_user)):
     /auth/users admin listing (roles, page grants, pin hashes) to everyone."""
     tid = tenancy.tenant_of(user) or "__no_tenant__"
     return await db.users.find(
-        {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1, "team_id": 1, "icon": 1, "color": 1}).to_list(200)
+        {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1, "team_id": 1, "icon": 1, "color": 1,
+                             "reports_to": 1}).to_list(200)
 
 
 @api.post("/auth/users")
@@ -293,6 +296,9 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="Username already exists")
     if not payload.pin or len(payload.pin) < 4:
         raise HTTPException(status_code=400, detail="PIN must be at least 4 digits")
+    if payload.reports_to and not await db.users.find_one(
+            {"id": payload.reports_to, "tenant_id": tenancy.tenant_of(user) or "__no_tenant__"}):
+        raise HTTPException(status_code=400, detail="That manager isn't a user in your company.")
     doc = {
         "id": new_id(),
         "username": payload.username.lower().strip(),
@@ -302,6 +308,7 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
         "icon": payload.icon,
         "color": payload.color,
         "pages": payload.pages,
+        "reports_to": payload.reports_to or "",
         "created_at": now_iso(),
     }
     # New colleagues join the tenant of the admin creating them. Without this the
@@ -310,6 +317,24 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
     doc["tenant_id"] = tenancy.tenant_of(user) or DEFAULT_TENANT
     await db.users.insert_one(doc)
     return {k: v for k, v in doc.items() if k not in ("pin_hash", "_id")}
+
+
+async def _check_reports_to(user_id: str, manager_id: str, tid: str) -> None:
+    """A reporting manager must be another user in the same tenant, and the
+    chain must not loop back (A -> B -> A would leave a request unapprovable)."""
+    if manager_id == user_id:
+        raise HTTPException(status_code=400, detail="Someone can't report to themselves.")
+    seen, cur = {user_id}, manager_id
+    for _ in range(50):
+        mgr = await db.users.find_one({"id": cur, "tenant_id": tid}, {"_id": 0, "id": 1, "reports_to": 1})
+        if not mgr:
+            raise HTTPException(status_code=400, detail="That manager isn't a user in your company.")
+        if mgr["id"] in seen:
+            raise HTTPException(status_code=400, detail="That would make a reporting loop.")
+        seen.add(mgr["id"])
+        cur = mgr.get("reports_to") or ""
+        if not cur:
+            return
 
 
 @api.put("/auth/users/{user_id}")
@@ -321,6 +346,8 @@ async def update_user(user_id: str, payload: UserUpdate, user: dict = Depends(re
     update = {k: v for k, v in payload.model_dump(exclude_none=True).items() if k != "pin"}
     if payload.pin:
         update["pin_hash"] = hash_pin(payload.pin)
+    if update.get("reports_to"):
+        await _check_reports_to(user_id, update["reports_to"], tid)
     demoting = "role" in update and update["role"] != "admin" and existing.get("role") == "admin"
     deactivating = update.get("active") is False and existing.get("role") == "admin"
     if demoting or deactivating:
@@ -838,7 +865,7 @@ ALL_MODULE_IDS = [
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
     "finance-payments", "purchase-orders", "master-data", "manufacturer-orders",
-    "payroll", "calls", "analytics",
+    "payroll", "calls", "analytics", "expenses", "pnl",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -856,7 +883,9 @@ RETIRED_MODULE_IDS = {"requirements", "configurator"}
 # they had seen (`seen_modules`). A tenant that saved enabled_modules before
 # then is treated as having seen exactly these, so modules added later show up
 # switched ON for it rather than silently hidden (the payroll-menu defect).
-MODULES_BEFORE_SEEN_TRACKING = [m for m in ALL_MODULE_IDS if m not in ("calls", "analytics")]
+# Every module id added after seen_modules tracking began goes in this tuple.
+MODULES_ADDED_AFTER_TRACKING = ("calls", "analytics", "expenses", "pnl")
+MODULES_BEFORE_SEEN_TRACKING = [m for m in ALL_MODULE_IDS if m not in MODULES_ADDED_AFTER_TRACKING]
 
 
 def effective_enabled_modules(tenant: dict) -> list:
@@ -2788,6 +2817,7 @@ async def create_cashbook_entry(cashbook_id: str, payload: CashbookEntryCreate, 
     doc = payload.model_dump()
     doc["id"] = new_id()
     doc["created_at"] = now_iso()
+    doc["money_request_id"] = ""          # only a money-request transfer sets this
     doc["entry_person"] = doc.get("entry_person") or user.get("name", "")
     tenancy.stamp(doc, "cashbook_entries", user)
     await db.cashbook_entries.insert_one(dict(doc))
@@ -2891,6 +2921,322 @@ async def cashbook_entry_approve(entry_id: str, payload: CashbookEntryApproval, 
         await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": -entry["amount"]}})
     await db.cashbook_entries.update_one(owned, {"$set": updates})
     return await db.cashbook_entries.find_one(owned, {"_id": 0})
+
+
+# ══════════════════════════════════════════════════════════════════
+# MONEY REQUESTS — expense claims and advances, approved and paid out of a
+# Cashbook wallet. Pure flow logic lives in expenses.py; see its docstring.
+# Visibility: finance (cashbook:approve) and admins see every request; anyone
+# else sees what they raised and what was routed to them as manager.
+# ══════════════════════════════════════════════════════════════════
+async def _is_finance(user: dict) -> bool:
+    if user.get("role") == "admin":
+        return True
+    return perm.can(user, await _roles_for(user), "cashbook", "approve")
+
+
+async def _expense_policy(user: dict) -> dict:
+    doc = await db.settings.find_one(tenancy.scope({"key": "expense_policy"}, "settings", user), {"_id": 0})
+    return ex.policy_from(doc)
+
+
+@api.get("/finance/expense-policy")
+async def get_expense_policy(user: dict = Depends(get_current_user)):
+    return await _expense_policy(user)
+
+
+@api.put("/finance/expense-policy")
+async def set_expense_policy(payload: dict, user: dict = Depends(require_admin)):
+    try:
+        policy = ex.validate_policy(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await db.settings.update_one(
+        tenancy.scope({"key": "expense_policy"}, "settings", user),
+        {"$set": tenancy.stamp({"key": "expense_policy", **policy, "updated_at": now_iso(),
+                                "updated_by": user.get("name", "")}, "settings", user)},
+        upsert=True)
+    await _audit("expense_policy_changed", user, f"finance above {policy['finance_threshold']}")
+    return policy
+
+
+async def _find_scoped(collection: str, query: dict, user: dict) -> Optional[dict]:
+    return await db[collection].find_one(tenancy.scope(query, collection, user), {"_id": 0})
+
+
+async def resolve_money_links(doc: dict, user: dict) -> dict:
+    """Fill a money record's lineage from whichever link the user picked, so
+    an expense tagged to a sale also lands on that sale's quotation, lead and
+    project (and vice versa). Every link is checked to exist in this tenant.
+    Returns the linked records for labelling."""
+    found: dict = {}
+    for field, coll, label in (("project_id", "projects", "project"), ("sale_id", "sales", "sale"),
+                               ("quote_id", "quotes", "quotation"), ("lead_id", "leads", "lead")):
+        if doc.get(field):
+            rec = await _find_scoped(coll, {"id": doc[field]}, user)
+            if not rec:
+                raise HTTPException(status_code=400, detail=f"The linked {label} wasn't found.")
+            found[field] = rec
+    sale, quote, project = found.get("sale_id"), found.get("quote_id"), found.get("project_id")
+    if project:
+        doc["sale_id"] = doc.get("sale_id") or project.get("sale_id", "")
+        doc["quote_id"] = doc.get("quote_id") or project.get("quote_id", "")
+        doc["lead_id"] = doc.get("lead_id") or project.get("lead_id", "")
+    if sale:
+        doc["quote_id"] = doc.get("quote_id") or sale.get("quote_id", "")
+        doc["lead_id"] = doc.get("lead_id") or sale.get("lead_id", "")
+        if not doc.get("project_id"):
+            p = await _find_scoped("projects", {"sale_id": sale["id"]}, user)
+            doc["project_id"] = (p or {}).get("id", "")
+            project = project or p
+    if quote:
+        doc["lead_id"] = doc.get("lead_id") or quote.get("lead_id", "")
+        if not doc.get("sale_id"):
+            sl = await _find_scoped("sales", {"quote_id": quote["id"]}, user)
+            doc["sale_id"] = (sl or {}).get("id", "")
+            sale = sale or sl
+        if not doc.get("project_id"):
+            p = await _find_scoped("projects", {"quote_id": quote["id"]}, user)
+            doc["project_id"] = (p or {}).get("id", "")
+            project = project or p
+    for f in ("project_id", "sale_id", "quote_id", "lead_id"):
+        doc[f] = doc.get(f) or ""
+    anchor_rec = project or sale or quote or found.get("lead_id")
+    if anchor_rec:
+        doc["division"] = doc.get("division") or next(
+            (r.get("division") for r in (project, sale, quote, found.get("lead_id")) if r and r.get("division")), "")
+        bits = [anchor_rec.get("customer") or anchor_rec.get("name") or "",
+                (project or {}).get("project_no") or (sale or {}).get("sale_no") or (quote or {}).get("quote_no") or ""]
+        doc["link_label"] = " · ".join(b for b in bits if b)
+    else:
+        doc["link_label"] = ""
+    doc["cost_type"] = "project" if (doc["project_id"] or doc["sale_id"] or doc["quote_id"]) else "overhead"
+    return found
+
+
+async def _money_request_or_404(request_id: str, user: dict, *, is_finance: bool) -> tuple[dict, dict]:
+    owned = tenancy.scope({"id": request_id, **ex.visible_query(user, is_finance=is_finance)},
+                          "money_requests", user)
+    req = await db.money_requests.find_one(owned, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Not found")
+    return req, tenancy.scope({"id": request_id}, "money_requests", user)
+
+
+def _with_actions(req: dict, user: dict, is_finance: bool) -> dict:
+    step = ex.pending_step(req)
+    return {**req, "waiting_on": step,
+            "can_decide": ex.can_decide(step, user, is_finance=is_finance),
+            "can_transfer": req.get("status") == "Pending transfer" and is_finance,
+            "can_cancel": req.get("status") == "Pending review" and req.get("raised_by_id") == user.get("id")}
+
+
+@api.get("/money-requests")
+async def list_money_requests(status: str = "", category: str = "", raised_by_id: str = "",
+                              assigned: bool = False, start: str = "", end: str = "",
+                              project_id: str = "", user: dict = Depends(get_current_user)):
+    is_fin = await _is_finance(user)
+    q = ex.visible_query(user, is_finance=is_fin)
+    if status:
+        if status not in ex.STATUSES:
+            raise HTTPException(status_code=400, detail="Unknown status")
+        q["status"] = status
+    if category:
+        q["category"] = category
+    if raised_by_id:
+        q["raised_by_id"] = raised_by_id
+    if project_id:
+        q["project_id"] = project_id
+    rows = await db.money_requests.find(tenancy.scope(q, "money_requests", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(5000)
+    if start or end:
+        s_, e_ = lc.parse_date(start) if start else None, lc.parse_date(end) if end else None
+        rows = [r for r in rows if (d := lc.parse_date(r.get("date") or r.get("created_at")))
+                and (not s_ or d >= s_) and (not e_ or d <= e_)]
+    out = [_with_actions(r, user, is_fin) for r in rows]
+    if assigned:
+        out = [r for r in out if r["can_decide"] or r["can_transfer"]]
+    return out
+
+
+@api.get("/money-requests/summary")
+async def money_requests_summary(user: dict = Depends(get_current_user)):
+    is_fin = await _is_finance(user)
+    rows = await db.money_requests.find(
+        tenancy.scope(ex.visible_query(user, is_finance=is_fin), "money_requests", user),
+        {"_id": 0, "status": 1, "amount": 1, "approvals": 1}).to_list(20000)
+    return {**ex.summarize(rows, user, is_finance=is_fin), "is_finance": is_fin}
+
+
+@api.post("/money-requests")
+async def create_money_request(payload: MoneyRequestCreate, user: dict = Depends(get_current_user)):
+    policy = await _expense_policy(user)
+    doc = payload.model_dump()
+    if doc["category"] not in policy["categories"]:
+        raise HTTPException(status_code=400, detail=f"Pick a category from the list ({', '.join(policy['categories'][:6])}…).")
+    try:
+        ex.validate_receipt(doc.get("receipt_url"), doc["amount"], policy)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await resolve_money_links(doc, user)
+    raiser = await db.users.find_one({"id": user.get("id"), "tenant_id": tenancy.tenant_of(user)}, {"_id": 0}) or user
+    manager = None
+    if raiser.get("reports_to"):
+        manager = await db.users.find_one({"id": raiser["reports_to"], "tenant_id": tenancy.tenant_of(user)},
+                                          {"_id": 0, "id": 1, "name": 1, "active": 1})
+    at = now_iso()
+    existing = await db.money_requests.find(tenancy.scope({}, "money_requests", user),
+                                            {"_id": 0, "request_no": 1}).to_list(20000)
+    doc.update(
+        id=new_id(), created_at=at, updated_at=at, request_no=ex.next_request_no(existing),
+        date=doc.get("date") or _today(), status="Pending review",
+        raised_by=user.get("name", ""), raised_by_id=user.get("id", ""),
+        payee_name=doc.get("payee_name") or user.get("name", ""),
+        approvals=ex.build_approval_chain(raiser, doc["amount"], manager, policy),
+        log=[ex.log_entry(at, user, "raised", f"Request raised by {user.get('name', '')}")],
+        transfer={}, cashbook_entry_id="",
+    )
+    stamp_fy(doc, "money_requests")
+    tenancy.stamp(doc, "money_requests", user)
+    await db.money_requests.insert_one(dict(doc))
+    doc.pop("_id", None)
+    await record_activity("money_request", doc["id"], "create", user, after={"amount": doc["amount"], "title": doc["title"]})
+    return _with_actions(doc, user, await _is_finance(user))
+
+
+@api.put("/money-requests/{request_id}")
+async def update_money_request(request_id: str, payload: MoneyRequestCreate,
+                               user: dict = Depends(get_current_user)):
+    """The raiser may correct a request until anyone has acted on it."""
+    is_fin = await _is_finance(user)
+    req, owned = await _money_request_or_404(request_id, user, is_finance=is_fin)
+    if req.get("raised_by_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="Only the person who raised this request can edit it.")
+    if req.get("status") != "Pending review" or any(s.get("status") != "pending" for s in req.get("approvals") or []):
+        raise HTTPException(status_code=400, detail="This request is already being approved and can't be edited.")
+    policy = await _expense_policy(user)
+    doc = payload.model_dump()
+    if doc["category"] not in policy["categories"]:
+        raise HTTPException(status_code=400, detail="Pick a category from the list.")
+    try:
+        ex.validate_receipt(doc.get("receipt_url"), doc["amount"], policy)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await resolve_money_links(doc, user)
+    raiser = await db.users.find_one({"id": user.get("id"), "tenant_id": tenancy.tenant_of(user)}, {"_id": 0}) or user
+    manager = None
+    if raiser.get("reports_to"):
+        manager = await db.users.find_one({"id": raiser["reports_to"], "tenant_id": tenancy.tenant_of(user)},
+                                          {"_id": 0, "id": 1, "name": 1, "active": 1})
+    doc["date"] = doc.get("date") or req.get("date")
+    doc["payee_name"] = doc.get("payee_name") or user.get("name", "")
+    doc["approvals"] = ex.build_approval_chain(raiser, doc["amount"], manager, policy)
+    doc["updated_at"] = now_iso()
+    doc["log"] = list(req.get("log") or []) + [ex.log_entry(doc["updated_at"], user, "edited", "Request edited")]
+    stamp_fy(doc, "money_requests")
+    await db.money_requests.update_one(owned, {"$set": doc})
+    return _with_actions(await db.money_requests.find_one(owned, {"_id": 0}), user, is_fin)
+
+
+async def _decide_money_request(request_id: str, payload: dict, user: dict, approve: bool):
+    is_fin = await _is_finance(user)
+    req, owned = await _money_request_or_404(request_id, user, is_finance=is_fin)
+    step = ex.pending_step(req)
+    if not step:
+        raise HTTPException(status_code=400, detail="This request isn't waiting for approval.")
+    if not ex.can_decide(step, user, is_finance=is_fin):
+        who = step.get("approver_name") if step["level"] == "manager" else "the finance team"
+        raise HTTPException(status_code=403, detail=f"This request is waiting on {who}.")
+    note = str((payload or {}).get("note") or "").strip()
+    if not approve and not note:
+        raise HTTPException(status_code=400, detail="Say why you're rejecting it, so the requester can fix it.")
+    upd = ex.decide(req, user, approve=approve, note=note, at=now_iso())
+    # Optimistic concurrency: only apply if the request is still where we read it.
+    res = await db.money_requests.update_one({**owned, "updated_at": req.get("updated_at")}, {"$set": upd})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=409, detail="Someone else just acted on this request. Refresh and try again.")
+    await record_activity("money_request", request_id, "approve" if approve else "reject", user,
+                          before={"status": req.get("status")}, after={"status": upd["status"]})
+    return _with_actions(await db.money_requests.find_one(owned, {"_id": 0}), user, is_fin)
+
+
+@api.post("/money-requests/{request_id}/approve")
+async def approve_money_request(request_id: str, payload: dict = None, user: dict = Depends(get_current_user)):
+    return await _decide_money_request(request_id, payload or {}, user, True)
+
+
+@api.post("/money-requests/{request_id}/reject")
+async def reject_money_request(request_id: str, payload: dict = None, user: dict = Depends(get_current_user)):
+    return await _decide_money_request(request_id, payload or {}, user, False)
+
+
+@api.post("/money-requests/{request_id}/cancel")
+async def cancel_money_request(request_id: str, user: dict = Depends(get_current_user)):
+    is_fin = await _is_finance(user)
+    req, owned = await _money_request_or_404(request_id, user, is_finance=is_fin)
+    if req.get("raised_by_id") != user.get("id") or req.get("status") != "Pending review":
+        raise HTTPException(status_code=400, detail="Only the requester can cancel, and only before approval is complete.")
+    at = now_iso()
+    await db.money_requests.update_one(owned, {"$set": {
+        "status": "Cancelled", "updated_at": at,
+        "log": list(req.get("log") or []) + [ex.log_entry(at, user, "cancelled", "Cancelled by requester")]}})
+    return _with_actions(await db.money_requests.find_one(owned, {"_id": 0}), user, is_fin)
+
+
+@api.post("/money-requests/{request_id}/transfer")
+async def transfer_money_request(request_id: str, payload: MoneyRequestTransfer,
+                                 user: dict = Depends(get_current_user)):
+    """Record the payout: an Approved CASH_OUT on the chosen wallet carrying
+    the request's category, receipt and project/sale/quotation links. This
+    does not move money through a bank — finance pays, then records the UTR."""
+    is_fin = await _is_finance(user)
+    if not is_fin:
+        raise HTTPException(status_code=403, detail="Only the finance team can record a transfer.")
+    req, owned = await _money_request_or_404(request_id, user, is_finance=is_fin)
+    if req.get("status") != "Pending transfer":
+        raise HTTPException(status_code=400, detail="Only a fully approved request can be transferred.")
+    utr = str(payload.utr or "").strip()
+    if payload.payment_mode != "OTHER" and not utr:
+        raise HTTPException(status_code=400, detail="Enter the UTR / UPI reference for this transfer.")
+    book_owned = tenancy.scope({"id": payload.cashbook_id}, "cashbooks", user)
+    book = await db.cashbooks.find_one(book_owned, {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    if book.get("status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="That wallet is archived.")
+    amount = lc.money(req.get("amount"))
+    if book.get("strict_overdraft") and (book.get("current_balance") or 0) < amount:
+        raise HTTPException(status_code=400, detail=f"{book.get('book_name')} doesn't have enough balance for this transfer.")
+    at = now_iso()
+    # Claim the request first so two clicks can't pay it twice.
+    claim = await db.money_requests.update_one({**owned, "status": "Pending transfer"},
+                                               {"$set": {"status": "Transferred", "updated_at": at}})
+    if claim.modified_count == 0:
+        raise HTTPException(status_code=409, detail="This request was just transferred by someone else.")
+    mode = {"UPI": "UPI", "BANK_TRANSFER": "ONLINE", "OTHER": "OTHER"}[payload.payment_mode]
+    entry = {
+        "id": new_id(), "created_at": at, "cashbook_id": book["id"], "type": "CASH_OUT",
+        "amount": amount, "category": req.get("category", ""), "payment_mode": mode,
+        "remark": f"{req.get('request_no', '')} · {req.get('title', '')}", "receipt_url": req.get("receipt_url", ""),
+        "entry_person": req.get("raised_by", ""), "custodian_upi_id": req.get("payee_upi", ""),
+        "payout_utr": utr, "status": "Approved", "approved_by": user.get("name", ""), "approved_at": at,
+        "money_request_id": req["id"], "project_id": req.get("project_id", ""),
+        "sale_id": req.get("sale_id", ""), "quote_id": req.get("quote_id", ""), "lead_id": req.get("lead_id", ""),
+    }
+    tenancy.stamp(entry, "cashbook_entries", user)
+    await db.cashbook_entries.insert_one(dict(entry))
+    await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": -amount}})
+    transfer = {"cashbook_id": book["id"], "cashbook_name": book.get("book_name", ""),
+                "payment_mode": payload.payment_mode, "utr": utr,
+                "date": payload.date or _today(), "by": user.get("name", ""), "at": at}
+    await db.money_requests.update_one(owned, {"$set": {
+        "transfer": transfer, "cashbook_entry_id": entry["id"],
+        "log": list(req.get("log") or []) + [ex.log_entry(
+            at, user, "transferred",
+            f"₹{amount:,.0f} paid from {book.get('book_name', '')}"
+            + (f" · {payload.payment_mode.replace('_', ' ').title()} {utr}" if utr else " · direct settlement"))]}})
+    await record_activity("money_request", request_id, "transfer", user, after=transfer)
+    return _with_actions(await db.money_requests.find_one(owned, {"_id": 0}), user, is_fin)
 
 
 @api.get("/projects/{project_id}/petty-cash/summary")
