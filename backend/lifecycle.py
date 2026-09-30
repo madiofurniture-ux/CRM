@@ -869,22 +869,20 @@ def build_journey(phone: Any, *, visitors, leads, quotes, sales, payments, activ
     }
 
 
-# ---------------------------------------------------- 11-stage pipeline bar
-PIPELINE_STAGES = ["lead", "project", "requirement", "configurator", "quote",
-                    "follow_up", "order", "production", "installation",
-                    "payment", "customer"]
+# ------------------------------------------------------ 9-stage pipeline bar
+PIPELINE_STAGES = ["lead", "project", "quote", "follow_up", "order", "production",
+                   "installation", "payment", "customer"]
 PIPELINE_LABELS = {
-    "lead": "Lead", "project": "Project", "requirement": "Requirement",
-    "configurator": "Configurator", "quote": "Quote", "follow_up": "Follow-up",
+    "lead": "Lead", "project": "Project", "quote": "Quote", "follow_up": "Follow-up",
     "order": "Order", "production": "Production", "installation": "Installation",
     "payment": "Payment", "customer": "Customer",
 }
 
 
-def build_pipeline(phone: Any, *, leads, requirements, product_configs, quotes,
-                    tasks, sales, projects, payments, customers) -> list:
+def build_pipeline(phone: Any, *, leads, quotes, tasks, sales, projects, payments,
+                   customers) -> list:
     """
-    Where the deal for `phone` sits across the 11 operational stages, for the
+    Where the deal for `phone` sits across the 9 operational stages, for the
     progress bar on Quote/Journey detail views. Read-only — derived from
     records that already exist (same phone/lead_id/quote_id/sale_id lineage
     the rest of lifecycle.py uses), never written back.
@@ -906,19 +904,8 @@ def build_pipeline(phone: Any, *, leads, requirements, product_configs, quotes,
     for l in linked_leads:
         at["lead"] = earliest(at["lead"], l.get("date"))
 
-    linked_reqs = [r for r in requirements
-                   if phone_key(r.get("phone")) == key or r.get("lead_id") in lead_ids]
-    req_ids = {r.get("id") for r in linked_reqs}
-    for r in linked_reqs:
-        at["requirement"] = earliest(at["requirement"], r.get("created_at"))
-
-    linked_configs = [c for c in product_configs if c.get("requirement_id") in req_ids]
-    config_ids = {c.get("id") for c in linked_configs}
-    for c in linked_configs:
-        at["configurator"] = earliest(at["configurator"], c.get("created_at"))
-
     linked_quotes = [q for q in quotes if phone_key(q.get("phone")) == key
-                      or q.get("lead_id") in lead_ids or q.get("config_id") in config_ids]
+                     or q.get("lead_id") in lead_ids]
     quote_ids = {q.get("id") for q in linked_quotes}
     quote_nos = {q.get("quote_no") for q in linked_quotes}
     for q in linked_quotes:

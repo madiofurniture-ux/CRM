@@ -344,3 +344,20 @@ def test_geofence_preview_does_not_leak_another_tenants_site():
             lat=NEAR_LAT, lng=NEAR_LNG, user=_staff_at(["s1"]))
         assert fence["site_id"] == ""        # scoped out, so it fell back to the office
     asyncio.run(run())
+
+
+# -------------------------------------------------------- check-out duration
+def test_check_out_records_the_minutes_worked():
+    """Regression: check_out referenced an unimported `timezone`, the NameError
+    was swallowed, and every check-out stored duration_min = 0."""
+    async def run():
+        await _site()
+        staff = _staff_at(["s1"])
+        await server.check_in(AttendanceCheckIn(lat=NEAR_LAT, lng=NEAR_LNG), user=staff)
+        # Pretend the check-in happened 2h30m ago.
+        from datetime import datetime, timedelta, timezone
+        earlier = (datetime.now(timezone.utc) - timedelta(minutes=150)).isoformat()
+        await server.db.attendance.update_one({"user_id": staff["id"]}, {"$set": {"check_in_at": earlier}})
+        rec = await server.check_out(AttendanceCheckIn(lat=NEAR_LAT, lng=NEAR_LNG), user=staff)
+        assert 149 <= rec["duration_min"] <= 151
+    asyncio.run(run())

@@ -11,7 +11,7 @@ import {
 // the same way it gates the routes themselves. `adminOnly` mirrors the same
 // flag on the equivalent entry in the old Sidebar.jsx.
 //
-// TODO(v1-scope): Requirements/Configurator/Visitors/Sales register (sales),
+// TODO(v1-scope): Visitors/Sales register (sales),
 // Architects/Meet Planner (clients), Tasks/Daily Planner/Team & Access
 // (people), every admin-settings item under "control" (Data Centre/Data
 // Health/Financial Year/Workflows/Business Settings/Custom Fields/Roles &
@@ -37,8 +37,6 @@ export const ALL_BASEPLATE_SUBNAV = {
   sales: [
     { code: "PI", label: "Pipeline", to: "/pipeline", page: "pipeline" },
     { code: "LD", label: "Leads", to: "/leads", page: "leads" },
-    { code: "RQ", label: "Requirements", to: "/requirements", page: "requirements" },
-    { code: "CF", label: "Configurator", to: "/configurator", page: "configurator" },
     { code: "QT", label: "Quotations", to: "/quotes", page: "quotes", isNew: true },
     { code: "QB", label: "Quote Builder", to: "/quotes/builder", page: "quote-builder" },
     { code: "FU", label: "Follow-ups", to: "/quotes/followups", page: "quote-followups" },

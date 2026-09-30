@@ -82,7 +82,7 @@ TENANT_COLLECTIONS = {
     "projects", "payments", "stock_movements", "customers", "activities",
     "settings", "workflows", "attendance", "vendors", "floors",
     "commission_rules", "commission_payouts",
-    "requirements", "product_configs", "teams", "roles", "audit_log", "notification_logs",
+    "teams", "roles", "audit_log", "notification_logs",
     "cashbooks", "cashbook_entries", "agent_tasks", "agent_conversations",
     "record_contacts", "saved_views", "custom_field_defs", "finance_payments",
     "project_daily_logs", "business_profiles", "purchase_orders",

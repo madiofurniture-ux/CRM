@@ -16,7 +16,6 @@ import { UI_THEME } from "@/lib/featureFlags";
 // shipping all ~27 pages in one bundle regardless of which one you landed
 // on, which is most of what made the very first load feel slow.
 import Login from "@/pages/Login";
-const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const CommandCentre = lazy(() => import("@/pages/CommandCentre"));
 const Pipeline = lazy(() => import("@/pages/Pipeline"));
 const Quotes = lazy(() => import("@/pages/Quotes"));
@@ -62,9 +61,7 @@ const CustomFields = lazy(() => import("@/pages/CustomFields"));
 const Teams = lazy(() => import("@/pages/Teams"));
 const RolesPermissions = lazy(() => import("@/pages/RolesPermissions"));
 
-// 11-stage operational flow: Requirement + Configurator + Customer
-const Requirements = lazy(() => import("@/pages/Requirements"));
-const Configurator = lazy(() => import("@/pages/Configurator"));
+// Operational flow: Customer
 const Customers = lazy(() => import("@/pages/Customers"));
 const QuoteFollowups = lazy(() => import("@/pages/QuoteFollowups"));
 const ProjectPnL = lazy(() => import("@/pages/ProjectPnL"));
@@ -165,8 +162,6 @@ function App() {
           <Route path="/admin/custom-fields" element={<ProtectedRoute page="custom-fields"><Layout><CustomFields /></Layout></ProtectedRoute>} />
           <Route path="/admin/teams" element={<ProtectedRoute page="teams"><Layout><Teams /></Layout></ProtectedRoute>} />
           <Route path="/admin/roles-permissions" element={<ProtectedRoute page="roles-permissions"><Layout><RolesPermissions /></Layout></ProtectedRoute>} />
-          <Route path="/requirements" element={<ProtectedRoute page="requirements"><Layout><Requirements /></Layout></ProtectedRoute>} />
-          <Route path="/configurator" element={<ProtectedRoute page="configurator"><Layout><Configurator /></Layout></ProtectedRoute>} />
           <Route path="/customers" element={<ProtectedRoute page="customers"><Layout><Customers /></Layout></ProtectedRoute>} />
           <Route path="/quotes/followups" element={<ProtectedRoute page="quote-followups"><Layout><QuoteFollowups /></Layout></ProtectedRoute>} />
           <Route path="/reports/project-pnl" element={<ProtectedRoute page="project-pnl"><Layout><ProjectPnL /></Layout></ProtectedRoute>} />

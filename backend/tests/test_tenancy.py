@@ -55,7 +55,6 @@ def test_every_business_collection_is_scoped():
     for coll in ("leads", "quotes", "sales", "inventory", "customers",
                  "projects", "invoices", "workflows", "settings",
                  "visitors", "payments", "commission_rules",
-                 "requirements", "product_configs",
                  "teams", "roles", "audit_log"):
         assert scope({}, coll, ACME).get("tenant_id") == "acme", coll
 

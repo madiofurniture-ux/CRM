@@ -85,7 +85,7 @@ def test_is_last_active_admin():
 def test_p3_gated_modules_are_registered():
     """Every module a DEFAULT_ROLES entry grants must be a real ALL_MODULE_IDS
     page id, and the P3 modules (visitors/architects/tasks/invoice-gen/
-    meetplan/petty/requirements) must actually be enforced somewhere — a typo
+    meetplan/petty) must actually be enforced somewhere — a typo
     in server.py's make_crud(module=...) wiring silently disables enforcement
     rather than erroring, so this is the only thing that would catch it."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -94,7 +94,7 @@ def test_p3_gated_modules_are_registered():
     granted_modules = {p["module"] for role in server.DEFAULT_ROLES for p in role["permissions"]}
     assert granted_modules <= set(server.ALL_MODULE_IDS)
 
-    p3_modules = {"visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements"}
+    p3_modules = {"visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty"}
     assert p3_modules <= granted_modules
     admin_perms = next(r for r in server.DEFAULT_ROLES if r["name"] == "Administrator")["permissions"]
     assert p3_modules <= {p["module"] for p in admin_perms}

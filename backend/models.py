@@ -20,7 +20,7 @@ def new_id() -> str:
 # default rather than 0.
 GST_DEFAULT = 18.0
 
-# Documents (quotes, invoices, PO lines, configurator output) default to 0%
+# Documents (quotes, invoices, PO lines) default to 0%
 # instead: a pre-filled 18% silently taxed drafts that were never meant to
 # carry GST, and it is far safer for a rate to be visibly missing than
 # invisibly wrong. The UI offers these slabs as one-click choices.
@@ -283,8 +283,6 @@ class QuoteBase(BaseModel):
     by_user: Optional[str] = ""
     stage: str = "Quoted"
     lead_id: Optional[str] = ""           # lineage back to the originating lead
-    requirement_id: Optional[str] = ""    # set when generated from a Requirement
-    config_id: Optional[str] = ""         # set when generated from a Configurator run
     value: float = 0
     # Settlement split on the quote. `other` was called `cash` before the
     # Other / Direct Settlement rename — the alias keeps pre-rename quote
@@ -1315,7 +1313,6 @@ class ProjectBase(BaseModel):
     quote_id: Optional[str] = ""          # the deal this project was won from (lineage)
     sale_id: Optional[str] = ""           # links back to the sales order it was generated from
     lead_id: Optional[str] = ""           # lineage back to the originating lead
-    requirement_id: Optional[str] = ""    # set when started from a Requirement, before any quote exists
     milestones: List[dict] = Field(default_factory=list)  # [{name, status, completed_at}]
     log: List[dict] = Field(default_factory=list)  # [{at, by, by_id, text, confidence_level, kind}]
     # Incentive-pipeline lineage, set once at deal-won provisioning time —
@@ -1661,61 +1658,6 @@ class CommissionPayoutCreate(CommissionPayoutBase):
 
 
 class CommissionPayout(CommissionPayoutBase):
-    id: str
-    created_at: str
-
-
-# ------- Requirements (structured need captured before a quote) -------
-class RequirementBase(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    lead_id: str
-    project_id: Optional[str] = ""
-    customer: str
-    phone: Optional[str] = ""
-    division: str = "Furniture"
-    title: str = ""
-    items: List[dict] = []   # [{space, item, qty, w, h, notes, budget}]
-    budget: float = 0
-    priority: str = "Medium"  # Low / Medium / High
-    status: str = "Open"      # Open / Configured / Quoted
-    site_address: Optional[str] = ""
-    by_user: Optional[str] = ""
-    notes: Optional[str] = ""
-
-
-class RequirementCreate(RequirementBase):
-    pass
-
-
-class Requirement(RequirementBase):
-    id: str
-    created_at: str
-
-
-# ------- Product Configurations (the "Configurator") -------
-class ProductConfigBase(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    requirement_id: str
-    quote_id: Optional[str] = ""
-    name: str = ""
-    division: str = "Furniture"
-    inputs: dict = {}              # raw configurator selections
-    line_items: List[dict] = []    # computed via lc.calc_line, same shape as quote lines
-    subtotal: float = 0
-    discount: float = 0
-    tax_pct: float = GST_DOC_DEFAULT
-    tax_total: float = 0
-    grand_total: float = 0
-    version: int = 1
-    status: str = "Draft"          # Draft / Quoted
-    by_user: Optional[str] = ""
-
-
-class ProductConfigCreate(ProductConfigBase):
-    pass
-
-
-class ProductConfig(ProductConfigBase):
     id: str
     created_at: str
 

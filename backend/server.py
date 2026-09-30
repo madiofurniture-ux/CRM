@@ -382,7 +382,7 @@ async def delete_user(user_id: str, current: dict = Depends(require_admin)):
 # ══════════════════════════════════════════════════════════════════
 FY_COLLECTIONS = {"quotes", "sales", "visitors", "leads", "invoices",
                   "petty_cash", "payments", "meets", "tasks",
-                  "projects", "dw_surveys", "stock_movements", "requirements"}
+                  "projects", "dw_surveys", "stock_movements"}
 FY_DATE_FIELD = {"tasks": "due", "projects": "start_date"}   # which field holds the record's date
 
 
@@ -830,7 +830,7 @@ DEFAULT_TENANT_NAME = os.environ.get("DEFAULT_TENANT_NAME", "MADIO Furniture")
 # exactly as before: every module on).
 ALL_MODULE_IDS = [
     "dashboard", "alerts", "reports", "pipeline", "quotes", "quote-followups",
-    "sales", "visitors", "leads", "requirements", "configurator", "architects",
+    "sales", "visitors", "leads", "architects",
     "inventory", "stock-ledger", "inv-analytics", "projects", "dwsurvey",
     "attendance", "tasks", "meetplan", "customers", "invoice-gen", "petty",
     "outstanding", "data-centre", "financial-year", "workflows", "business",
@@ -3742,10 +3742,12 @@ async def check_out(payload: AttendanceCheckIn, user: dict = Depends(get_current
         raise HTTPException(status_code=400, detail="Not checked in yet")
     if rec.get("check_out_at"):
         raise HTTPException(status_code=400, detail="Already checked out today")
-    from datetime import datetime as _dt
+    from datetime import datetime as _dt, timezone as _tz
     try:
         ci = _dt.fromisoformat(rec["check_in_at"].replace("Z", "+00:00"))
-        co = _dt.now(timezone.utc)
+        # `timezone` was never imported here, so this raised NameError and
+        # every check-out silently stored duration_min = 0.
+        co = _dt.now(_tz.utc)
         duration = int((co - ci).total_seconds() / 60)
     except Exception:
         duration = 0
@@ -4355,16 +4357,12 @@ from models import (
     QuoteLineCreate, QuoteLine, DWOpeningCreate, DWOpening,
     CommissionRuleCreate, CommissionRule,
     CommissionPayoutCreate, CommissionPayout,
-    RequirementCreate, Requirement, ProductConfigCreate, ProductConfig,
     CustomerCreate, Customer, GST_DOC_DEFAULT,
 )
 
 make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
 make_crud(api, "dw-openings", "dw_openings", DWOpeningCreate, DWOpening)
 make_crud(api, "commission-rules", "commission_rules", CommissionRuleCreate, CommissionRule)
-make_crud(api, "requirements", "requirements", RequirementCreate, Requirement,
-          module="requirements", owner_field="by_user")
-make_crud(api, "product-configs", "product_configs", ProductConfigCreate, ProductConfig)
 make_crud(api, "customers", "customers", CustomerCreate, Customer, module="customers")
 # No owner-name field exists on Customer (it's a post-sale lifecycle record,
 # not something one salesperson "owns") — "own"/"team" scope on the
@@ -4422,8 +4420,8 @@ async def list_audit_log(user: dict = Depends(require_admin)):
 
 
 # One entry per module named in the P2 spec's example matrix/role list, plus
-# the P3 modules (visitors/architects/tasks/invoice-gen/meetplan/petty/
-# requirements) that gained backend enforcement once their make_crud() calls
+# the P3 modules (visitors/architects/tasks/invoice-gen/meetplan/petty)
+# that gained backend enforcement once their make_crud() calls
 # were tagged with module=/owner_field=. HR/Marketing still get no backend
 # enforcement (those features don't exist yet, see ALL_MODULE_IDS / P1) and
 # keep an empty permissions list; they exist as role *names* now so an admin
@@ -4433,27 +4431,27 @@ DEFAULT_ROLES = [
         {"module": m, "view": True, "create": True, "edit": True, "delete": True,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
-                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty",
                   "commissions", "cashbook", "record-contacts")
     ]},
     {"name": "Management", "permissions": [
         {"module": m, "view": True, "create": False, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
-                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty",
                   "commissions", "cashbook", "record-contacts")
     ]},
     {"name": "Sales Manager", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": True, "export": False, "scope": "team"}
         for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
-                  "tasks", "meetplan", "requirements", "record-contacts")
+                  "tasks", "meetplan", "record-contacts")
     ]},
     {"name": "Salesperson", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": False, "export": False, "scope": "own"}
         for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
-                  "tasks", "meetplan", "requirements", "record-contacts")
+                  "tasks", "meetplan", "record-contacts")
     ]},
     {"name": "Inventory", "permissions": [
         {"module": "inventory", "view": True, "create": True, "edit": True,
@@ -4523,109 +4521,6 @@ async def customer_resolver(q: str = "", user: dict = Depends(get_current_user))
         quotes = await db.quotes.count_documents(tenancy.scope({"phone": phone}, "quotes", user)) if phone else 0
         out.append({**c, "project_count": projects, "quote_count": quotes})
     return out
-
-
-@api.post("/requirements/{requirement_id}/configure")
-async def requirement_to_configurator(requirement_id: str, user: dict = Depends(get_current_user)):
-    """
-    Requirement -> Configurator: seed a ProductConfiguration's line items from
-    the requirement's dynamic item list, priced through the same lc.calc_line
-    every other line-item screen uses. Idempotent by requirement_id.
-    """
-    req = await db.requirements.find_one(
-        tenancy.scope({"id": requirement_id}, "requirements", user), {"_id": 0})
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-    existing = await db.product_configs.find_one(
-        tenancy.scope({"requirement_id": requirement_id}, "product_configs", user), {"_id": 0})
-    if existing:
-        return existing
-
-    lines = [lc.calc_line(dict(item)) for item in (req.get("items") or [])]
-    subtotal = lc.lines_subtotal(lines)
-    config = {
-        "id": new_id(), "created_at": now_iso(),
-        "requirement_id": requirement_id, "quote_id": "",
-        "name": req.get("title") or f"Config for {req.get('customer', '')}",
-        "division": req.get("division", "Furniture"),
-        "inputs": {"items": req.get("items") or []}, "line_items": lines,
-        "subtotal": subtotal, "discount": 0, "tax_pct": GST_DOC_DEFAULT,
-        "tax_total": 0, "grand_total": subtotal, "version": 1, "status": "Draft",
-        "by_user": user.get("name", ""),
-    }
-    tenancy.stamp(config, "product_configs", user)
-    await db.product_configs.insert_one(dict(config))
-    config.pop("_id", None)
-    await db.requirements.update_one(
-        tenancy.scope({"id": requirement_id}, "requirements", user), {"$set": {"status": "Configured"}})
-    return config
-
-
-@api.post("/product-configs/{config_id}/to-quote")
-async def configurator_to_quote(config_id: str, user: dict = Depends(get_current_user)):
-    """
-    Configurator -> Quote: write the config's computed pricing into a real
-    Quote, as both the embedded snapshot fields AND real quote_lines rows —
-    _generate_sales_order_and_project reads lines via the quote_lines
-    collection (_quote_lines(), server.py), not the embedded array, so a
-    quote missing those rows would convert to an order with an empty line
-    snapshot. Idempotent by config_id. Runs the same discount-policy check
-    quote_save_total uses, so a heavily-discounted config still needs sign-off
-    before it can close.
-    """
-    config = await db.product_configs.find_one(
-        tenancy.scope({"id": config_id}, "product_configs", user), {"_id": 0})
-    if not config:
-        raise HTTPException(status_code=404, detail="Product configuration not found")
-    existing = await db.quotes.find_one(
-        tenancy.scope({"config_id": config_id}, "quotes", user), {"_id": 0})
-    if existing:
-        return existing
-
-    req = await db.requirements.find_one(
-        tenancy.scope({"id": config.get("requirement_id")}, "requirements", user), {"_id": 0}) or {}
-    subtotal = lc.money(config.get("subtotal"))
-    discount = lc.money(config.get("discount"))
-    tax_pct = lc.money(config.get("tax_pct"))
-    totals = lc.quote_total(subtotal, discount, tax_pct)
-    approval = "pending" if lc.needs_approval(subtotal, discount) else ""
-
-    existing_quotes = await db.quotes.find(
-        tenancy.scope({}, "quotes", user), {"quote_no": 1, "_id": 0}).to_list(5000)
-    quote_no = lc.next_quote_no(existing_quotes)
-    quote = {
-        "id": new_id(), "created_at": now_iso(),
-        "quote_no": quote_no, "date": lc.today_iso(),
-        "customer": req.get("customer", ""), "phone": req.get("phone", ""),
-        "division": config.get("division", "Furniture"), "by_user": user.get("name", ""),
-        "stage": "Quoted", "status": "Sent",
-        "lead_id": req.get("lead_id", ""), "requirement_id": req.get("id", ""),
-        "config_id": config_id, "version": 1,
-        "subtotal": totals["subtotal"], "discount": totals["discount"],
-        "tax_pct": tax_pct, "tax_total": totals["tax_total"],
-        "grand_total": totals["grand_total"], "value": totals["value"],
-        "approval": approval,
-        "line_items": config.get("line_items") or [],
-    }
-    stamp_fy(quote, "quotes")
-    tenancy.stamp(quote, "quotes", user)
-    await db.quotes.insert_one(dict(quote))
-    quote.pop("_id", None)
-
-    for line in (config.get("line_items") or []):
-        row = dict(line)
-        row.pop("_id", None)
-        row.update({"id": new_id(), "created_at": now_iso(), "quote_id": quote["id"], "version": 1})
-        tenancy.stamp(row, "quote_lines", user)
-        await db.quote_lines.insert_one(dict(row))
-
-    await db.product_configs.update_one(
-        tenancy.scope({"id": config_id}, "product_configs", user),
-        {"$set": {"status": "Quoted", "quote_id": quote["id"]}})
-    if req:
-        await db.requirements.update_one(
-            tenancy.scope({"id": req["id"]}, "requirements", user), {"$set": {"status": "Quoted"}})
-    return quote
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -5801,8 +5696,6 @@ async def journey(phone: str, user: dict = Depends(get_current_user)):
     )
     out["pipeline"] = lc.build_pipeline(
         phone, leads=leads, quotes=quotes, sales=sales, payments=payments,
-        requirements=await db.requirements.find(tenancy.scope({}, "requirements", user), {"_id": 0}).to_list(5000),
-        product_configs=await db.product_configs.find(tenancy.scope({}, "product_configs", user), {"_id": 0}).to_list(5000),
         tasks=await db.tasks.find(tenancy.scope({}, "tasks", user), {"_id": 0}).to_list(5000),
         projects=projects, customers=customers,
     )

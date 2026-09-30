@@ -292,12 +292,10 @@ def test_from_csv_skips_blank_lines():
     assert lc.from_csv("a,b\n1,2\n\n3,4\n") == [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
 
 
-# ---------------------------------------------------- 11-stage pipeline bar
+# ------------------------------------------------------ 9-stage pipeline bar
 def test_build_pipeline_marks_stages_done_along_the_chain():
     lead = {"id": "L1", "phone": "9990001111", "date": "2026-01-01"}
-    req = {"id": "R1", "lead_id": "L1", "phone": "9990001111", "created_at": "2026-01-02"}
-    config = {"id": "C1", "requirement_id": "R1", "created_at": "2026-01-03"}
-    quote = {"id": "Q1", "lead_id": "L1", "config_id": "C1", "quote_no": "AF-2601-001",
+    quote = {"id": "Q1", "lead_id": "L1", "quote_no": "AF-2601-001",
               "phone": "9990001111", "date": "2026-01-04"}
     followup_task = {"ref": "Q1", "ref_type": "quote", "category": "Follow-up",
                       "created_at": "2026-01-05"}
@@ -312,12 +310,12 @@ def test_build_pipeline_marks_stages_done_along_the_chain():
     customer = {"phone": "9990001111", "stage": "Active", "customer_since": "2026-01-10"}
 
     pipeline = lc.build_pipeline(
-        "9990001111", leads=[lead], requirements=[req], product_configs=[config],
-        quotes=[quote], tasks=[followup_task], sales=[sale], projects=[project],
+        "9990001111", leads=[lead], quotes=[quote], tasks=[followup_task], sales=[sale], projects=[project],
         payments=[payment], customers=[customer])
 
     done = {row["key"]: row["done"] for row in pipeline}
     assert all(done.values()), done
+    assert "requirement" not in done and "configurator" not in done
     # "Assembly" (the old milestone name) must still satisfy "Installation".
     installation = next(r for r in pipeline if r["key"] == "installation")
     assert installation["at"] == "2026-01-09"
@@ -326,7 +324,7 @@ def test_build_pipeline_marks_stages_done_along_the_chain():
 def test_build_pipeline_undone_stage_has_no_date():
     pipeline = lc.build_pipeline(
         "8880002222", leads=[{"id": "L2", "phone": "8880002222", "date": "2026-02-01"}],
-        requirements=[], product_configs=[], quotes=[], tasks=[], sales=[], projects=[],
+        quotes=[], tasks=[], sales=[], projects=[],
         payments=[], customers=[])
     by_key = {r["key"]: r for r in pipeline}
     assert by_key["lead"]["done"] is True

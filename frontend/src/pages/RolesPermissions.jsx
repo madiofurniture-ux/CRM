@@ -8,7 +8,7 @@ import { Save, Plus, Trash2 } from "lucide-react";
 // (server.py's make_crud module= calls) — matches AuthContext's GATED_MODULES.
 const MODULES = [
   "leads", "customers", "quotes", "sales", "inventory",
-  "visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty", "requirements",
+  "visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty",
   "commissions", "cashbook", "record-contacts", "documents", "discussions",
 ];
 const ACTIONS = ["view", "create", "edit", "delete", "approve", "export"];
