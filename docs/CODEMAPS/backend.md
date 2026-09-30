@@ -1,98 +1,101 @@
-<!-- Generated: 2026-08-26 | Files scanned: 6 | Token estimate: ~700 -->
-# Backend — MADIO CRM API
+<!-- Updated: 2026-09-30 | Scanned: backend/*.py, backend/tests/ -->
+# Backend: MADIO CRM API
 
-FastAPI app, single file `backend/server.py` (1735 lines), all routes under
-`api = APIRouter(prefix="/api")`. Async MongoDB via Motor. No service/repo
-layering — routes call `db[collection]` directly, scoped through `tenancy.py`.
+FastAPI + Motor (async MongoDB). Most routes live in `backend/server.py`
+(~6,900 lines) under `api = APIRouter(prefix="/api")`, with pure domain logic
+split into small modules that are unit-tested without Mongo. There's no
+service or repository layer: routes call `db[collection]` directly, always
+scoped through `tenancy.py`. Line numbers drift fast in `server.py`, so
+grep for the route string rather than trusting a line reference.
 
 ## Key files
-- `backend/server.py` — app, routes, generic CRUD factory, reports/analytics.
-- `backend/models.py` (549 lines) — Pydantic Base/Create/full models per entity.
-- `backend/auth.py` — PIN login, JWT issue/verify, `get_current_user`, `require_admin`.
-- `backend/tenancy.py` (183 lines) — tenant scoping (fail-closed) + per-tenant
-  configurable workflow stages.
-- `backend/lifecycle.py` (715 lines) — cross-entity stage transitions / rollups.
-- `backend/seed.py` — `seed_all()` demo data.
-- `backend/storage.py` — local/S3 file storage for the `documents` collection
-  (attachments/photos), `STORAGE_BACKEND=local|s3` env switch.
-- `backend/notifications.py` — customer notification dispatcher: `EVENTS`
-  template dict is the single source of copy for both automated `notify()`
-  sends and the manual WhatsApp click-to-chat button; `_send_whatsapp` calls
-  Meta's Cloud API when `WHATSAPP_TOKEN`/`WHATSAPP_PHONE_ID` are set, else
-  stays a log-only stub.
+| File | What it owns |
+|---|---|
+| `server.py` | App, routes, the `make_crud` factory, reports, integrations |
+| `models.py` | Pydantic Base/Create/full models per entity (~2,100 lines) |
+| `auth.py` | PIN login, JWT, `get_current_user`, `require_admin` |
+| `tenancy.py` | Tenant scoping (fail-closed), `TENANT_COLLECTIONS`, workflow stage schema, defaults, locked system stages, `ENTITY_COLLECTION`/`STAGE_FIELD` |
+| `permissions.py` | Role/permission matrix: `can()`, `scope_for()` (own/team/all) |
+| `workflow_rules.py` | Stage gates (required fields, allowed next stages), field catalog, automation rules (create task / set field / notify customer) |
+| `lifecycle.py` | Pure helpers: date/money/phone parsing, numbering, journey and 9-stage pipeline bar |
+| `analytics.py` | Analytics hub aggregations: sales, leads, calls, attendance, vendors & projects |
+| `expenses.py` | Money-request flow: approval chain, policy, decisions, visibility |
+| `finance_lineage.py` | Visitor-to-profit deal lineage, Deal P&L, Company P&L, privacy masking |
+| `csv_engine.py` | Project P&L (`compute_project_pnl`), masking, CSV import/export |
+| `notifications.py` | `EVENTS` templates (single copy source for automated and click-to-chat); WhatsApp Cloud API send when `WHATSAPP_TOKEN` + `WHATSAPP_PHONE_ID` are set, else a log-only stub |
+| `storage.py` | Local/S3 file storage for `documents` (`STORAGE_BACKEND=local\|s3`) |
+| `tally.py` | Tally voucher XML, sync of reviewed cashbook transactions |
+| `quotation_templates.py` | One quotation engine, per-division templates |
+| `api_hr.py`, `api_canonical.py`, `api_budget.py`, `api_wallets.py` | Satellite routers (HR/payroll, canonical CRM v1, budgets, legacy wallet mirror) mounted on the app |
+| `seed.py` | `seed_all()` sample data; PINs from `SEED_PINS` |
 
-## Generic CRUD (make_crud, server.py:368)
-One factory registers GET (list) / POST (create) / PUT (update) / DELETE per
-collection. Every op runs through `tenancy.scope()`; update/delete look up the
-record scoped to the caller's tenant first, so a foreign `id` reads as 404,
-never as someone else's record.
+## Generic CRUD (`make_crud`)
+One factory registers list/create/update/delete per collection. Every
+operation is tenant-scoped (a foreign `id` reads as 404). Optional hooks:
+`module`/`owner_field` (role permission + own/team scope), `normalize`,
+`after_write`, `on_create`, `redact`, `mask` (privacy mode), `personal`,
+`list_filters`, `entity` (audit trail). It also runs **workflow gates**
+(`validate_stage`) before writes and **stage history + automations**
+(`run_stage_automation`) after them, for any collection in
+`tenancy.COLLECTION_ENTITY`.
 
-```
-make_crud(api, "visitors",   "visitors",    VisitorCreate,   Visitor)    server.py:807
-make_crud(api, "leads",      "leads",       LeadCreate,      Lead)       server.py:808
-make_crud(api, "architects", "architects",  ArchitectCreate, Architect)  server.py:809
-make_crud(api, "quotes",     "quotes",      QuoteCreate,     Quote)      server.py:810
-make_crud(api, "sales",      "sales",       SaleCreate,      Sale)       server.py:811
-make_crud(api, "inventory",  "inventory",   InventoryCreate, InventoryItem) server.py:812
-make_crud(api, "tasks",      "tasks",       TaskCreate,      Task)       server.py:813
-make_crud(api, "invoices",   "invoices",    InvoiceCreate,   Invoice)    server.py:814
-make_crud(api, "meets",      "meets",       MeetCreate,      Meet)       server.py:815
-make_crud(api, "petty-cash", "petty_cash",  PettyCashCreate, PettyCash)  server.py:817
-make_crud(api, "quote-lines","quote_lines", QuoteLineCreate, QuoteLine)  server.py:1179
-make_crud(api, "dw-openings","dw_openings", DWOpeningCreate, DWOpening)  server.py:1180
-```
-NOTE (server.py:1373-1376): a manual `GET /leads` handler exists further down
-the file but is dead code — the `make_crud` registration above wins because
-FastAPI dispatches to the first matching route. Left in place with a comment;
-harmless but a trap if someone edits the wrong handler expecting it to run.
+Registered collections include: visitors, leads, calls, architects, quotes,
+sales, inventory, purchase-orders, manufacturer-orders, tasks, invoices,
+meets, petty-cash, cashbooks, customers, commission-rules, teams, roles,
+quote-lines, dw-openings, vendors, floors, sites.
 
-## Bespoke routes (non-CRUD)
+## Bespoke routes (by area)
 ```
-POST /api/auth/login                        auth.py: verify_pin + create_token
-GET  /api/auth/me | /auth/roles | /auth/users
-POST/PUT/DELETE /api/auth/users/{id}         admin user management
-GET  /api/tenants/me | /tenants  POST /tenants
-POST /api/workflows/{entity}/adopt|reset     tenancy.py stage config
-GET/PUT /api/workflows | /workflows/{entity}
-GET  /api/fy/options              PUT /api/fy/settings          financial-year filters
-GET/PUT /api/visibility/settings  PUT /api/records/{coll}/{id}/hidden
-GET  /api/outstanding                        balance-due rollup
-GET/PUT /api/settings/office
-GET  /api/attendance | /attendance/today   POST /attendance/check-in|check-out
-GET  /api/dashboard/stats
-GET  /api/analytics/inventory
-GET/POST/PUT/DELETE /api/projects            + PUT /projects/{id}/stage
-GET  /api/quotes/{id}/workspace   POST /quotes/{id}/save-total|approve|revise
-GET/POST/PUT/DELETE /api/dw-surveys
-GET/POST/DELETE /api/payments                create_payment: writes payment +
-                                              updates sale/invoice balance (see
-                                              recent fix for a race condition here)
-GET/POST/DELETE /api/stock-movements  GET /stock-movements/summary
-GET  /api/data-centre/collections  GET .../export/{name}  POST .../import/{name}
-GET  /api/reports    GET /api/alerts
-GET  /api/journey/{phone}                    cross-entity timeline by phone,
-                                              now includes whatsapp_messages
-POST /api/convert/lead-to-quote/{lead_id}
-POST /api/convert/quote-to-sale/{quote_id}
-POST /api/convert/survey-to-quote/{survey_id}
-POST/GET/DELETE /api/documents               attachments/photos, backend/storage.py
-GET  /api/notifications/templates            click-to-chat template copy (single
-                                              source of truth, backend/notifications.py
-                                              EVENTS + CLICK_TO_CHAT_EVENTS)
-POST /api/notifications/whatsapp-click       logs a manual click-to-chat send
-GET/POST /api/discussions   GET /discussions/channels   POST /discussions/{id}/reply
-                                              Team Board (general, not per-record)
-GET/POST /api/webhooks/whatsapp              Meta Cloud API verify + inbound receive,
-                                              credential-gated (see DEPLOY_NOW.md)
+Auth & tenants   POST /auth/login · /auth/users (admin; reports_to validated, no loops)
+                 GET /users/directory · GET /tenants/me (effective_enabled_modules)
+                 PUT /tenants/me/config (drops retired module ids)
+Workflows        GET /workflows[/{entity}] · PUT /workflows/{entity} {stages, rules, enforce}
+                 POST /workflows/{entity}/adopt|reset
+Projects         POST/PUT /projects · PUT /projects/{id}/stage (gates + automations)
+Quotes           /quotes/{id}/workspace · save-total · approve · revise
+Calls            POST /calls/{id}/convert (lead from a call; dedupes by phone)
+Analytics        GET /analytics/hub/{sales|leads|calls|attendance|vendors}?start&end&division
+                 (older: /analytics/pipeline|revenue|commissions|inventory, /reports)
+Money requests   GET/POST /money-requests · PUT /money-requests/{id} · GET /money-requests/summary
+                 POST /money-requests/{id}/approve|reject|cancel|transfer
+                 GET/PUT /finance/expense-policy
+P&L & lineage    GET /finance/deal-pnl?project_id|sale_id|quote_id|lead_id
+                 GET /finance/deals · GET /finance/pnl?start&end&division
+                 GET /reports/project-pnl (+ export.csv) — all privacy-masked by default
+Cashbook         /cashbooks/{id}/entries|top-up|expense · /cashbook-entries/{id}/approve
+                 /finance/cashbook + /finance/tally/* (Tally sync of reviewed transactions)
+Attendance       /attendance/check-in|check-out|today · /attendance/payroll · regularize
+Payments         GET/POST/DELETE /payments (updates sale/invoice balance)
+Journey          GET /journey/{phone} (timeline + pipeline bar + whatsapp_messages)
+Documents        POST/GET/DELETE /documents (attachments, storage.py)
+WhatsApp         GET /notifications/templates · POST /notifications/whatsapp-click
+                 GET/POST /webhooks/whatsapp (Meta verify + inbound)
+Discussions      GET/POST /discussions · /discussions/channels · /{id}/reply · /dm/{user}
+Data centre      /data-centre/collections · export · import · /convert/* helpers
 ```
+
+## Visibility rules worth knowing
+- **Tenant:** `tenancy.scope()`/`stamp()` everywhere. No tenant means match nothing.
+- **Role scope:** `_scope_owners(user, roles, module)` returns `None` (all) or
+  owner names (own/team). Used by `make_crud` and the sales/leads/calls analytics.
+- **Finance:** `_is_finance(user)` = admin or `cashbook:approve`. Finance sees
+  every money request and records transfers.
+- **Privacy mode:** `mask_other=true` (the default) hides field-settlement
+  spend and everything derived from it: P&L, deal P&L, wallet balances.
+- **Modules:** a tenant's saved `enabled_modules` is combined with
+  `MODULES_ADDED_AFTER_TRACKING`, so newly added modules appear switched on.
+  Add every new module id there.
 
 ## Auth chain
-`get_current_user` (auth.py) reads `Authorization: Bearer <jwt>`, decodes with
-`pyjwt`, loads the user; `require_admin` layers a role check on top. Almost
-every route depends on `get_current_user` — it is the injection point that
-carries `tenant_id` into `tenancy.scope()`.
+`get_current_user` (auth.py) decodes the bearer JWT and loads the user, which
+carries `tenant_id` into `tenancy.scope()`. `require_admin` adds a role check.
+`_require_permission(module, action, user)` enforces the role matrix.
 
 ## Tests
-`backend/tests/`: `backend_test.py`, `test_api_e2e.py`, `test_lifecycle.py`,
-`test_tenancy.py`, `test_tenant_isolation_api.py` — tenant isolation has a
-dedicated end-to-end test file, matching tenancy.py's fail-closed design intent.
+`backend/tests/` (~640 tests, run `python -m pytest tests -q` from `backend/`,
+with Mongo faked by `mongomock_motor`). Route handlers are called directly as
+functions. The newest suites to model new work on: `test_workflow_engine.py`,
+`test_calls.py`, `test_analytics.py`, `test_money_requests.py`,
+`test_finance_lineage.py`. Tenant isolation: `test_tenancy.py`,
+`test_tenant_isolation_api.py`. In-memory live server for browser checks:
+`tests/run_local_server.py`.
