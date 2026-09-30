@@ -1,0 +1,16 @@
+name: keep backend alive
+
+# Render's free plan spins the API down after ~15 min with no traffic, so the
+# next real request pays a 30-60s cold start. Pinging the health endpoint
+# often enough that it's never idle that long keeps it warm.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: curl -sf --max-time 25 https://madio-crm-api.onrender.com/api/ || true

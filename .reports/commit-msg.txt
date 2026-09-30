@@ -1,0 +1,160 @@
+feat(enterprise): cost-price security boundary, PO engine, 5-star confidence, personal task visibility
+
+A multi-phase sprint. Several briefed items turned out to already exist and
+were verified rather than rebuilt — those are listed at the bottom so the
+scope reduction is visible rather than silent.
+
+SECURITY — role-gated inventory cost price (Phase 3)
+- Landing/cost price is `InventoryBase.cost` (not "landing_price"). It is now
+  stripped server-side for anyone who is not admin/accountant, via make_crud's
+  existing redact= hook — the field is ABSENT from the response, not blanked
+  or zeroed, the same standard as the privacy-mask fix in c155c78.
+- `margin` is stripped with it. It is stored as ((mrp-cost)/cost)*100, so
+  cost = mrp / (1 + margin/100): dropping `cost` alone while leaving `margin`
+  and `mrp` in the same payload hands the figure straight back. This is the
+  same class of inversion mask_pnl()/mask_settlement() had to close, and
+  test_cost_price_security.py pins it specifically (a mutation that strips
+  only `cost` fails three of those tests).
+- Second leak closed at /analytics/inventory: `total_cost` now returns None
+  (not 0 — a zero reads as "this stock cost nothing") and `top_items`, which
+  are whole inventory rows, are run through the redactor. They previously
+  carried everything the list route strips.
+- Audited the other cost surfaces and left them alone: the price-tag PDF only
+  prints MRP, /search returns no money fields, inventory has no CSV export
+  route, and /data-centre/export is already require_admin.
+- Role pair is admin/accountant, matching the existing _can_see_vendor_names
+  precedent for the other purchase-side commercial field rather than
+  inventing a role this codebase's role system does not have.
+
+Purchase Order engine (Phase 4.1) — genuinely absent, built
+- No PO-adjacent code existed anywhere (no model, route, numbering or page).
+- New PurchaseOrder model reusing the existing LineItem shape, which already
+  carries sku/description/hsn/qty/rate/discount_pct/tax_pct — no PO-specific
+  line type was needed.
+- lc.po_totals taxes each line at its own slab rather than reusing
+  lc.quote_total's single document rate: one PO legitimately mixes HSN codes
+  and therefore GST slabs. Emits a per-slab tax_breakup for the PDF.
+- po_no (PO-YYMM-NNN via the existing _next_dated_id convention), vendor
+  name/code, and all totals are derived server-side. A PO authorises a vendor
+  payment, so a client-sent grand_total is never trusted; po_no is immutable
+  after create.
+- A4 PDF via the same ReportLab platypus approach as the price tag — no new
+  dependency and no outbound image fetch (SSRF).
+- "purchase_orders" added to tenancy.TENANT_COLLECTIONS. Without it the
+  collection would not have been tenant-scoped at all.
+- Gated on the existing "inventory" role module, not a new one: role
+  permissions are opt-in, so a new module id would 403 every role-governed
+  account until an admin edited every role.
+
+5-star confidence (Phase 1.3)
+- The real field is `confidence_level` (0-100) on Lead/Quote/Customer, not
+  "probability_pct". Storage is unchanged, so CSV export, the follow-up
+  dashboard and every existing row keep working.
+- lc.confidence_stars() maps any stored percentage to its nearest star on
+  read — legacy rows are NOT migrated, same on-read shim approach as
+  normalize_settlement(). lc.snap_confidence() snaps writes to
+  20/40/60/80/100 and now range-checks 0-100, which nothing did before: a
+  typo'd 1000 could previously be stored and would render as an ordinary
+  5-star rating with no way to tell it was junk.
+- Applied to the /log endpoint too, since a log entry's confidence is
+  denormalized onto the quote and would otherwise bypass the validator.
+- New StarRating component replaces the number inputs on Leads, Customers and
+  LogTimeline; QuoteFollowups filters and displays in stars.
+
+Personal task/meeting visibility (Phase 2.3) — real access-control gap
+- Two defects, both fixed at the shared make_crud layer via a `personal` flag
+  rather than per-route:
+  1. permissions.scope_for() returns "all" for any account without a role_id
+     — i.e. every legacy account, which is most of them — so in practice
+     everyone could list everyone's tasks and meetings.
+  2. Even under a restricted scope the filter was owner_field alone, so a task
+     you raised and delegated vanished from your own list.
+- Visibility is now creator OR assignee, admin exempt, and deliberately
+  applies to legacy accounts too. Enforced on list, update, delete, the
+  daily-planner list/rollover (which read the tasks collection directly and
+  were otherwise a way around the gate) and the planner toggle.
+- created_by/created_by_id are now stamped server-side and cannot be rewritten
+  by a PUT — they decide visibility, so a client-supplied value would let a
+  caller write itself into someone else's records. They were never stamped at
+  all before.
+- Meet gains project_id; Task could already link to a project via its
+  existing ref/ref_type pair.
+
+GST default (Phase 4.2)
+- Document tax default moves 18% -> 0% with quick-select slabs (0/5/12/18/28)
+  on invoice and PO lines. Split into GST_DOC_DEFAULT so that
+  BankTransferComponent.gst_rate, which is the tax on a received payment
+  rather than a document default, keeps a real rate.
+- Fixed `config.get("tax_pct") or GST_DEFAULT` in the configurator->quote
+  path: with 0 now a legitimate choice, `or` would have silently re-applied
+  18% to a line deliberately set to 0%.
+
+Project P&L (Phase 4.3) — partial gap
+- compute_project_pnl already netted approved float debits and accrued
+  incentives. Material/PO cost was the one missing term, because no PO engine
+  existed. Committed POs (Issued/Received, never Draft or Cancelled) now feed
+  net_margin = revenue - material - approved float - incentives.
+- material_cost is deliberately NOT masked: procurement is the official,
+  invoiceable leg (same reasoning as the bank-transfer component in
+  mask_settlement) and every quantity that could invert the masked
+  field-settlement figure is already masked alongside it. A regression test
+  pins that the c155c78 mask still holds with material_cost present.
+
+Attendance (Phase 4.5) — extended, not duplicated
+- Attendance already existed with GPS, geofence distance, selfie and
+  admin-only cross-user reads. Added /attendance/payroll only: effective
+  working days/hours per user per month.
+- Aggregates only. No GPS coordinate and no selfie URL appears in that
+  response, so a payroll consumer never needs the raw location/biometric
+  record. Cross-user access is admin-only.
+- Stops deliberately at days/hours: this codebase has no salary, wage or
+  pay-rate model anywhere to multiply them by. Day-rate vs monthly, overtime
+  treatment, and selfie/GPS retention and consent are business policy
+  decisions, not ones to infer here.
+
+Other
+- Inventory: location filter (driven by the real Floor records and actual
+  data — this app has no fixed warehouse list, floors are tenant-configurable
+  on Stock Ledger), dimension entry with an mm/inch toggle that always stores
+  canonical mm, material finish, and product-image capture reusing the
+  existing lib/image shrink-to-data-URL convention (the same one D&W survey
+  photos use — there is no blob store in this app to upload to).
+- Inline entity creation extended to the two pickers that lacked it and have
+  a real create endpoint: Inventory/PO vendor, and Visitors' architect (whose
+  empty state literally read "add one on the Architects page"). Same
+  onCreate sub-form pattern as 518d701. Visitors' staff picker is unchanged —
+  creating a user is admin-only account management, not inline entity
+  creation.
+- Projects: the customer name now opens the existing JourneyDrawer on the
+  project's phone. That is this app's real customer-detail view and how it
+  joins a customer's history — a Project stores `customer` as a plain display
+  string, with no customer_id.
+- D&W survey: added lintel and hardware_finish per opening, plus
+  customer_id/project_id/architect_id on the survey. Aperture W x H, glass
+  spec and photos already existed.
+- Filter state on Visitors/Leads/Customers/Quotes/Projects/Inventory now
+  survives a reload via a small localStorage-backed hook. This is distinct
+  from the existing SavedViews feature, which is an explicit named preset.
+
+Verified already correct, NOT rebuilt
+- Incentives: the Earned -> Approved -> Paid admin flow already exists at
+  PATCH /commission-payouts/{id}/approve and is permission-gated.
+- "Cash" -> "Other"/Direct Settlement terminology: the scrub is complete. The
+  only remaining matches are "Petty Cash"/Cashbook, a genuinely different
+  concept.
+- The c155c78 privacy-mask math-leak fix is intact and still passing.
+- Lead/Customer sync: re-confirmed there is no synced Customer record for a
+  Lead — Lead.name is a plain field. The same is true of Project.customer.
+  No fictional sync logic was added. This app's cross-entity linkage is
+  phone-keyed (/journey, /pipeline), which is what Projects now reuses.
+- Projects already had an append-only, timestamped, author-badged trail via
+  LogTimeline on `log`; the flat `remarks` field remains as survey notes.
+  RemarksTimeline was not duplicated onto it.
+- Data grids: sorting/filtering had no genuine defects; only reload
+  persistence was missing.
+
+Gates: pytest 375 passed (286 before this sprint, 89 added, none weakened or
+skipped); CI=false npm run build compiles clean with no warnings.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XqW3L7qBn1XqrT4xRsYRff

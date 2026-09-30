@@ -1,0 +1,13 @@
+-- Milestone 2 HR attendance enhancement migration contract
+-- Current runtime remains browser/localStorage based, so this file documents the
+-- data fields that must be created when the CRM receives a SQL backend.
+--
+-- attendance_records additions:
+--   lat decimal(10,7), lng decimal(10,7), accuracy_m numeric,
+--   geo_status varchar(20), address text, ts bigint
+-- attendance_pay_settings:
+--   staff varchar(80), rate_per_day numeric(12,2), office_lat decimal(10,7),
+--   office_lng decimal(10,7), allowed_radius_m numeric(8,2), effective_from date
+-- payroll_attendance_summary view:
+--   staff, month, present_days, late_arrivals, geo_ok_count,
+--   geo_exception_count, worked_hours, payable_days, estimated_pay

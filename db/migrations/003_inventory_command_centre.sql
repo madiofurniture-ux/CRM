@@ -1,0 +1,11 @@
+-- Milestone 3 inventory command-centre migration contract
+-- Current CRM runtime remains browser/localStorage based. When a SQL backend is
+-- introduced, create indexed inventory fields to preserve the new fast-search UI:
+--   sku, model, name, category, vendor, size, material, status, has_image
+--   stock_locations(item_sku, location_code, quantity, floor, bay, remarks)
+-- Recommended indexes:
+--   unique inventory_items(sku)
+--   index inventory_items(category, status)
+--   index inventory_items(vendor)
+--   full text / trigram index on sku, model, name, vendor, material, size
+--   index stock_locations(location_code)

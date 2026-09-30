@@ -1,0 +1,9 @@
+-- Milestone 1 repository audit migration
+-- No database schema exists in this repository yet; the current CRM persists data
+-- in browser localStorage and optional Google Sheets via the embedded Apps Script
+-- bridge in MADIO_CRM_v16.html.
+--
+-- This no-op migration reserves the migration sequence for the Doors & Windows
+-- ERP rollout. Milestone 2 should add concrete master-table contracts for
+-- customers, projects, product masters, rate cards, BOM rules, media, and audit
+-- history while preserving existing browser data keys.

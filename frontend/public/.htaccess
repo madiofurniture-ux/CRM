@@ -1,0 +1,11 @@
+# SPA fallback for Hostinger (Apache / LiteSpeed): serve real files as-is, and
+# route every other path to index.html so React Router deep links (e.g.
+# /quotes/ws/<id>) don't 404 on refresh.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>

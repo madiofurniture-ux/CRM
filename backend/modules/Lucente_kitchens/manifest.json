@@ -1,0 +1,37 @@
+{
+  "name": "Lucente_kitchens",
+  "version": "1.0.0",
+  "depends": ["core_crm"],
+  "custom_fields": {
+    "opportunity": [
+      { "key": "kitchen_type", "label": "Kitchen Type", "type": "text" },
+      { "key": "layout_type", "label": "Layout Type", "type": "select",
+        "options": ["Straight", "L-Shape", "U-Shape", "Parallel", "Island"] },
+      { "key": "site_measurement_date", "label": "Site Measurement Date", "type": "date" },
+      { "key": "installation_window_start", "label": "Installation Window Start", "type": "date" },
+      { "key": "installation_window_end", "label": "Installation Window End", "type": "date" }
+    ],
+    "lead": [
+      { "key": "source_channel", "label": "Source Channel", "type": "text" },
+      { "key": "referral_code", "label": "Referral Code", "type": "text" }
+    ]
+  },
+  "pipelines": {
+    "opportunity": [
+      { "key": "new", "label": "New", "terminal": false, "won": false },
+      { "key": "design_consultation", "label": "Design Consultation", "terminal": false, "won": false },
+      { "key": "measurement_done", "label": "Measurement Done", "terminal": false, "won": false },
+      { "key": "quotation_sent", "label": "Quotation Sent", "terminal": false, "won": false },
+      { "key": "negotiation", "label": "Negotiation", "terminal": false, "won": false },
+      { "key": "won", "label": "Won", "terminal": true, "won": true },
+      { "key": "lost", "label": "Lost", "terminal": true, "won": false }
+    ]
+  },
+  "quotations": {
+    "templates": ["kitchen_standard_v1"]
+  },
+  "permissions": {
+    "roles": ["admin", "sales", "viewer"],
+    "rules": {}
+  }
+}

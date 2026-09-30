@@ -1,0 +1,52 @@
+name: backend tests
+
+on:
+  push:
+    paths: ["backend/**"]
+  pull_request:
+    paths: ["backend/**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+          # Used only by tests/run_local_server.py to back the FastAPI app with
+          # an in-memory Mongo for HTTP-level test scripts; not a runtime dependency.
+          pip install mongomock_motor
+
+      # A query built as db.<collection>.find({}) with no tenancy.scope() call
+      # returns every tenant's rows. This regressed twice before it was scoped
+      # (list_dw_surveys, list_payments and others), so it is now a hard CI gate.
+      # One line is excluded: /tenants reads the platform's own tenant registry,
+      # not per-tenant business data, and is already gated to the platform-owner
+      # admin — it is marked "tenant-safe:" in server.py for exactly this reason.
+      - name: Guard against unscoped tenant queries
+        working-directory: backend
+        run: |
+          grep -nE 'db\.[a-z_]+\.find\(\{\}' server.py | grep -v 'tenant-safe:' \
+            && { echo "unscoped query — use scope()"; exit 1; } || true
+
+      - name: Unit tests
+        working-directory: backend
+        run: pytest tests/test_lifecycle.py tests/test_tenancy.py -v
+
+      - name: HTTP / tenant-isolation tests
+        working-directory: backend
+        run: |
+          python tests/run_local_server.py --port 8899 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8899/ >/dev/null 2>&1 && break
+            sleep 1
+          done
+          python tests/test_api_e2e.py --base http://127.0.0.1:8899
+          python tests/test_tenant_isolation_api.py --base http://127.0.0.1:8899

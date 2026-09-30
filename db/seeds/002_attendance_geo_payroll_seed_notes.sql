@@ -1,0 +1,9 @@
+-- Milestone 2 HR attendance seed notes
+-- The single-file CRM seeds staff names from the TEAM array in
+-- MADIO_CRM_v16.html. Payroll rates and office geofence settings are stored in
+-- localStorage key `madio_att_pay_settings` until a backend is added.
+--
+-- Recommended initial seed rows for a future SQL backend should include one
+-- active pay-setting row per TEAM member with rate_per_day = 0, blank office
+-- coordinates, and allowed_radius_m = 200 so finance can configure real rates
+-- without changing attendance history.

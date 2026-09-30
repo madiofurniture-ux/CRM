@@ -1,0 +1,9 @@
+-- Milestone 1 repository audit seed notes
+-- No seed rows are inserted because there is no SQL database runtime in the
+-- current single-file CRM. Existing seed data is embedded in MADIO_CRM_v16.html
+-- under the `_D` object and related localStorage-backed collections.
+--
+-- Milestone 2 should introduce seed data for Doors & Windows masters including
+-- product families, typologies, profile series, glass, mesh, hardware,
+-- accessories, handles, locks, finishes, colours, taxes, warranty, and rate
+-- cards.
