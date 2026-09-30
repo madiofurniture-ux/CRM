@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
+import WhatsAppButton from "@/components/WhatsAppButton";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { useTenantConfig } from "@/context/TenantConfigContext";
@@ -11,7 +12,24 @@ export default function Sales() {
   const [fDiv, setFDiv] = useState("All");
   const { divisions } = useTenantConfig();
 
+  // A sales order stores no phone of its own; the customer's number lives on
+  // the quotation it came from (same lookup the backend uses for the
+  // order-confirmed notification). Without quote access the button hides.
+  const [phoneByQuote, setPhoneByQuote] = useState({});
+
   useEffect(() => { api.get("/sales").then((r) => setRows(r.data)); }, []);
+  useEffect(() => {
+    api.get("/quotes").then(({ data }) => {
+      const m = {};
+      data.forEach((q) => {
+        if (!q.phone) return;
+        if (q.id) m[`id:${q.id}`] = q.phone;
+        if (q.quote_no) m[`no:${q.quote_no}`] = q.phone;
+      });
+      setPhoneByQuote(m);
+    }).catch(() => setPhoneByQuote({}));
+  }, []);
+  const phoneOf = (s) => s.phone || phoneByQuote[`id:${s.quote_id}`] || phoneByQuote[`no:${s.quote_ref}`] || "";
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -52,6 +70,7 @@ export default function Sales() {
                   <th className="text-right font-semibold px-4 py-2.5">Value</th>
                   <th className="text-right font-semibold px-4 py-2.5">Paid</th>
                   <th className="text-right font-semibold px-4 py-2.5">Balance</th>
+                  <th className="px-2 py-2.5"><span className="sr-only">WhatsApp</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -66,9 +85,14 @@ export default function Sales() {
                     <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(s.value)}</td>
                     <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{inrFull(s.paid)}</td>
                     <td className={`px-4 py-3 text-right font-mono ${s.balance > 0 ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-3)]"}`}>{inrFull(s.balance)}</td>
+                    <td className="px-2 py-3">
+                      <WhatsAppButton phone={phoneOf(s)} context={s.balance > 0 ? "payment-reminder" : "follow-up"}
+                                      customerName={s.customer} ref={s.sale_no} refType="sale" refId={s.id}
+                                      testId={`sale-wa-${s.id}`} />
+                    </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && <tr><td colSpan="9" className="text-center py-10 text-[var(--ink-3)]">No sales</td></tr>}
+                {filtered.length === 0 && <tr><td colSpan="10" className="text-center py-10 text-[var(--ink-3)]">No sales</td></tr>}
               </tbody>
             </table>
           </div>
