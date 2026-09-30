@@ -170,12 +170,16 @@ def days_until(value: Any) -> Optional[int]:
 
 
 def money(value: Any) -> float:
-    """Coerce to a float, treating timestamp corruption as zero."""
+    """Coerce to a float, treating timestamp corruption as zero.
+
+    NaN and infinity (spreadsheet imports store "nan"; float("nan") accepts
+    it) also become zero: NaN passes every comparison, poisons every sum, and
+    a response containing one can't be encoded as JSON at all."""
     try:
         n = float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-    if abs(n) > MONEY_SANITY_LIMIT:
+    if n != n or n in (float("inf"), float("-inf")) or abs(n) > MONEY_SANITY_LIMIT:
         return 0.0
     return n
 
@@ -1147,8 +1151,8 @@ TERMINAL_PROJECT_STAGES = {"Closure"}
 
 
 def _quote_discount_pct(q: dict) -> float:
-    subtotal = q.get("subtotal") or 0
-    discount = q.get("discount") or 0
+    subtotal = money(q.get("subtotal"))
+    discount = money(q.get("discount"))
     return round((discount / subtotal) * 100, 1) if subtotal else 0.0
 
 
@@ -1163,38 +1167,46 @@ def command_centre_overview(*, quotes: Iterable[dict], sales: Iterable[dict],
     it (Task.ref/ref_type) is overdue — both derived from real fields, not
     invented ones.
     """
+    # Every field goes through money()/parse_date(): imported rows carry
+    # numbers where strings are expected, "nan" dates and text amounts, and
+    # one bad row used to take the whole overview (the app's home screen)
+    # down with a 500.
     quotes, sales, projects, tasks = list(quotes), list(sales), list(projects), list(tasks)
-    month_prefix = today[:7]
+    today_d = parse_date(today) or date.today()
+
+    def before_today(value) -> bool:
+        d = parse_date(value)
+        return bool(d) and d < today_d
 
     open_quotes = [q for q in quotes if q.get("stage") in OPEN_QUOTE_STAGES]
-    open_pipeline = sum(q.get("value") or 0 for q in open_quotes)
+    open_pipeline = sum(money(q.get("value")) for q in open_quotes)
 
-    month_sales = [s for s in sales if (s.get("date") or "")[:7] == month_prefix]
-    won_this_month = sum(s.get("value") or 0 for s in month_sales)
+    month_sales = [s for s in sales
+                   if (d := parse_date(s.get("date"))) and (d.year, d.month) == (today_d.year, today_d.month)]
+    won_this_month = sum(money(s.get("value")) for s in month_sales)
 
-    receivables = sum(s.get("balance") or 0 for s in sales)
+    receivables = sum(money(s.get("balance")) for s in sales)
 
     live_projects = [p for p in projects if p.get("stage") not in TERMINAL_PROJECT_STAGES]
     overdue_task_project_ids = {
         t.get("ref") for t in tasks
-        if t.get("ref_type") == "project" and not t.get("done")
-        and t.get("due_date") and t["due_date"] < today
+        if t.get("ref_type") == "project" and not t.get("done") and before_today(t.get("due_date"))
     }
     at_risk_projects = [
         p for p in live_projects
-        if (p.get("target_date") and p["target_date"] < today) or p.get("id") in overdue_task_project_ids
+        if before_today(p.get("target_date")) or p.get("id") in overdue_task_project_ids
     ]
 
-    sla_breaches = [t for t in tasks if not t.get("done") and t.get("due_date") and t["due_date"] < today]
+    sla_breaches = [t for t in tasks if not t.get("done") and before_today(t.get("due_date"))]
 
     division_split: dict = {}
     for q in open_quotes:
-        div = q.get("division") or "Other"
-        division_split[div] = division_split.get(div, 0) + (q.get("value") or 0)
+        div = str(q.get("division") or "Other")
+        division_split[div] = division_split.get(div, 0) + money(q.get("value"))
 
     pending = sorted(
         (q for q in quotes if q.get("approval") == "pending"),
-        key=lambda q: q.get("date") or "", reverse=True,
+        key=lambda q: str(parse_date(q.get("date")) or ""), reverse=True,
     )
 
     return {

@@ -15,7 +15,7 @@ import asyncio
 from typing import List, Optional
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError as PydanticValidationError
 from pymongo.errors import DuplicateKeyError
@@ -106,7 +106,30 @@ if APP_ENV == "staging" and "staging" not in db_name.lower():
 client = AsyncIOMotorClient(mongo_url)
 db = client[db_name]
 
-app = FastAPI(title="MADIO CRM")
+def _json_safe(value):
+    """NaN/±inf -> None, recursively. Imported rows can carry NaN floats, and
+    one such value anywhere in a payload makes json.dumps(allow_nan=False)
+    raise, turning the whole response into a 500."""
+    if isinstance(value, float):
+        return None if value != value or value in (float("inf"), float("-inf")) else value
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+class SafeJSONResponse(JSONResponse):
+    """JSONResponse that never fails on NaN. The fast path is the stock
+    encoder; the recursive clean-up only runs when that raises."""
+    def render(self, content) -> bytes:
+        try:
+            return super().render(content)
+        except ValueError:
+            return super().render(_json_safe(content))
+
+
+app = FastAPI(title="MADIO CRM", default_response_class=SafeJSONResponse)
 app.state.db = db
 
 # kind -> async def handler(db, task) -> str (outcome text). Defined here,
@@ -5370,6 +5393,30 @@ async def _provision_project_wallet_and_incentives(project: dict, quote: dict, u
     return project
 
 
+async def _mark_won(collection: str, record_id: str, user: dict):
+    """
+    Move a record to its workflow's first won stage once the deal closes, so
+    Leads and Pipeline stop showing a sold deal as open. A record already at
+    a terminal stage (won, lost, or a tenant's own closing stage such as
+    "Adv Received") is left alone.
+    """
+    entity = tenancy.COLLECTION_ENTITY.get(collection)
+    if not entity or not record_id:
+        return
+    owned = tenancy.scope({"id": record_id}, collection, user)
+    record = await db[collection].find_one(owned, {"_id": 0})
+    if not record:
+        return
+    stages, _enforced = await workflow_for(entity, user)
+    field = tenancy.stage_field(entity)
+    current = tenancy.resolve_stage(stages, str(record.get(field) or ""))
+    won = next((s for s in stages if s.get("won")), None)
+    if not won or (current and current.get("terminal")):
+        return
+    await db[collection].update_one(owned, {"$set": {field: won["label"]}})
+    await run_stage_automation(collection, record.get(field), {**record, field: won["label"]}, user)
+
+
 async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[dict, dict]:
     """
     Auto-conversion on quote approval: snapshot the quote into a sales order
@@ -5411,6 +5458,9 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
     tenancy.stamp(sale, "sales", user)
     await db.sales.insert_one(dict(sale))
     sale.pop("_id", None)
+    await run_stage_automation("sales", None, sale, user, created=True)
+    await _mark_won("quotes", quote_id, user)
+    await _mark_won("leads", quote.get("lead_id", ""), user)
 
     # Adopt an early-started project (POST /leads/{id}/start-project) rather
     # than minting a second one for the same lead: fill in what only exists
@@ -5421,7 +5471,8 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         tenancy.scope({"lead_id": lead_id}, "projects", user), {"_id": 0}) if lead_id else None
     if adopted:
         owned = tenancy.scope({"id": adopted["id"]}, "projects", user)
-        patch = {"sale_id": sale["id"], "quote_ref": quote.get("quote_no", ""), "value": value}
+        patch = {"sale_id": sale["id"], "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id,
+                 "value": value}
         if not adopted.get("milestones"):
             patch["milestones"] = lc.default_milestones()
         await db.projects.update_one(owned, {"$set": patch})
@@ -5439,13 +5490,15 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         "division": quote.get("division", "Furniture"), "value": value, "paid": 0,
         "stage": "Survey", "site_address": "", "assigned_engineer": "",
         "start_date": lc.today_iso(), "target_date": "", "remarks": "",
-        "quote_ref": quote.get("quote_no", ""), "sale_id": sale["id"], "lead_id": lead_id,
+        "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id, "sale_id": sale["id"],
+        "lead_id": lead_id,
         "milestones": lc.default_milestones(),
     }
     stamp_fy(project, "projects")
     tenancy.stamp(project, "projects", user)
     await db.projects.insert_one(dict(project))
     project.pop("_id", None)
+    await run_stage_automation("projects", None, project, user, created=True)
     project = await _ensure_project_artifacts(project, user)
     project = await _provision_project_wallet_and_incentives(project, quote, user)
 
@@ -6439,6 +6492,10 @@ async def visitor_to_lead(visitor_id: str, user: dict = Depends(get_current_user
         {"$set": {"stage": "Qualified", "converted_lead_id": lead["id"]}})
     await record_activity("lead", lead["id"], "convert", user,
                           note=f"From visitor {visitor_id}")
+    # Converted records go through the same stage history and workflow
+    # automations as records created on their own screens.
+    await run_stage_automation("visitors", visitor.get("stage"), {**visitor, "stage": "Qualified"}, user)
+    await run_stage_automation("leads", None, lead, user, created=True)
     return lead
 
 
@@ -6461,9 +6518,12 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
     stamp_fy(quote, "quotes")
     tenancy.stamp(quote, "quotes", user)
     await db.quotes.insert_one(dict(quote))
+    quote.pop("_id", None)
     await db.leads.update_one(
         tenancy.scope({"id": lead_id}, "leads", user), {"$set": {"stage": "Quoted"}})
     await record_activity("quote", quote["id"], "convert", user, note=f"From lead {lead_id}")
+    await run_stage_automation("quotes", None, quote, user, created=True)
+    await run_stage_automation("leads", lead.get("stage"), {**lead, "stage": "Quoted"}, user)
     return quote
 
 
