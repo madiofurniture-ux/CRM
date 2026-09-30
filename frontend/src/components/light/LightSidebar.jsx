@@ -19,6 +19,7 @@ const ITEM_FLAG = {
   "inv-analytics": SHOW_INVENTORY,
   "invoice-gen": SHOW_FINANCE, petty: SHOW_FINANCE, cashbook: SHOW_FINANCE,
   "project-pnl": SHOW_FINANCE, "finance-payments": SHOW_FINANCE,
+  expenses: SHOW_FINANCE, pnl: SHOW_FINANCE,
   incentives: SHOW_INCENTIVES,
   reports: SHOW_REPORTS, executive: SHOW_REPORTS,
   "record-chain": SHOW_RECORD_CHAIN,
@@ -39,7 +40,7 @@ const SECTIONS = [
   { label: "Reports", ids: ["reports", "executive", "record-chain"] },
   { label: "Delivery", ids: ["projects", "dwsurvey", "outstanding"] },
   { label: "Inventory", ids: ["inventory", "stock-ledger", "purchase-orders", "manufacturer-orders", "inv-analytics"] },
-  { label: "Finance", ids: ["invoice-gen", "petty", "cashbook", "project-pnl", "incentives", "finance-payments"] },
+  { label: "Finance", ids: ["expenses", "cashbook", "pnl", "project-pnl", "finance-payments", "invoice-gen", "incentives", "petty"] },
   { label: "Admin", ids: ["data-centre", "discussions", "audit-trail"] },
 ];
 

@@ -3235,7 +3235,8 @@ async def transfer_money_request(request_id: str, payload: MoneyRequestTransfer,
         "log": list(req.get("log") or []) + [ex.log_entry(
             at, user, "transferred",
             f"₹{amount:,.0f} paid from {book.get('book_name', '')}"
-            + (f" · {payload.payment_mode.replace('_', ' ').title()} {utr}" if utr else " · direct settlement"))]}})
+            + f" · {({'UPI': 'UPI', 'BANK_TRANSFER': 'Bank transfer'}).get(payload.payment_mode, 'Direct settlement')}"
+            + (f" {utr}" if utr else ""))]}})
     await record_activity("money_request", request_id, "transfer", user, after=transfer)
     return _with_actions(await db.money_requests.find_one(owned, {"_id": 0}), user, is_fin)
 
@@ -3363,7 +3364,9 @@ async def deal_list(mask_other: bool = True, user: dict = Depends(get_current_us
             "kind": kind, "id": rec["id"], "customer": out["customer"],
             "ref": rec.get("sale_no") or rec.get("project_no") or "",
             "project_no": (ctx["project"] or {}).get("project_no", ""),
-            "date": rec.get("date") or rec.get("start_date") or "", "division": rec.get("division", ""),
+            # Legacy imports carry junk dates ("nan"); only a real date is sent.
+            "date": (lambda d: d.isoformat() if d else "")(lc.parse_date(rec.get("date") or rec.get("start_date"))),
+            "division": rec.get("division", ""),
             "revenue": p["revenue"], "revenue_basis": p["revenue_basis"], "vendor_cost": p["vendor_cost"],
             "gross_margin": p["gross_margin"], "gross_margin_pct": p["gross_margin_pct"],
             "expenses": p["expenses"], "net_margin": p["net_margin"], "net_margin_pct": p["net_margin_pct"],

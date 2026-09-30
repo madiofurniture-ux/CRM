@@ -63,9 +63,11 @@ export const ALL_BASEPLATE_SUBNAV = {
     { code: "MO", label: "Manufacturer Orders", to: "/manufacturer-orders", page: "manufacturer-orders" },
   ],
   finance: [
+    { code: "MR", label: "Money Requests", to: "/money-requests", page: "expenses" },
+    { code: "CB", label: "Wallets & Cashbooks", to: "/cashbook", page: "cashbook" },
+    { code: "PN", label: "Profit & Loss", to: "/finance/pnl", page: "pnl" },
     { code: "TI", label: "Tax Invoices", to: "/invoices", page: "invoice-gen" },
-    { code: "PC", label: "Petty Cash", to: "/petty-cash", page: "petty" },
-    { code: "CB", label: "Cashbooks", to: "/cashbook", page: "cashbook" },
+    { code: "PC", label: "Petty Cash (history)", to: "/petty-cash", page: "petty" },
     { code: "TS", label: "Cashbook & Tally Sync", to: "/finance/tally", page: "cashbook" },
     { code: "PL", label: "Project P&L", to: "/reports/project-pnl", page: "project-pnl" },
     { code: "IN", label: "Incentives", to: "/incentives", page: "incentives" },

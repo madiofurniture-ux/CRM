@@ -1,10 +1,11 @@
 import { useEffect, useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import KpiCard from "@/components/KpiCard";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, Wallet, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Wallet, X } from "lucide-react";
 
 const CATEGORIES = ["Opening", "Sale", "Refund", "Fuel", "Food", "Transport", "Repair", "Stationery", "Courier", "Utilities", "Misc"];
 const MODES = ["Cash", "UPI", "Bank"];
@@ -39,12 +40,18 @@ export default function PettyCash() {
     catch { toast.error("Save failed"); }
     finally { setSaving(false); }
   };
-  const remove = async (id) => { if (!window.confirm("Delete entry?")) return; await api.delete(`/petty-cash/${id}`); load(); };
 
   return (
     <>
-      <Topbar title="Petty Cash Ledger" subtitle={`Closing: ${inrFull(closing)}`} onAdd={() => { setForm(empty); setShow(true); }} addLabel="New Entry" />
+      <Topbar title="Petty Cash (history)" subtitle={`Closing: ${inrFull(closing)}`} />
       <div className="p-4 md:p-6 space-y-6" data-testid="petty-page">
+        {/* Read-only since the finance build: new spending is raised as a
+            Money Request and paid from a wallet, so it is approved once and
+            counted once. These vouchers still count in Project P&L. */}
+        <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-primary-soft)] px-4 py-3 text-sm">
+          This is the older petty cash ledger, kept for reference. To spend money now, raise a{" "}
+          <Link to="/money-requests" className="font-medium text-[var(--color-primary)] hover:underline">money request</Link>.
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <KpiCard label="Cash In" value={inrFull(totalIn)} accent="moss" icon={ArrowDown} />
           <KpiCard label="Cash Out" value={inrFull(totalOut)} accent="danger" icon={ArrowUp} />
@@ -89,7 +96,7 @@ export default function PettyCash() {
                     <td className="px-4 py-3 text-[var(--ink-2)] hidden md:table-cell">{r.mode}</td>
                     <td className={`px-4 py-3 text-right font-mono font-semibold ${r.kind === "In" ? "text-[var(--moss)]" : "text-[var(--danger)]"}`}>{inrFull(r.amount)}</td>
                     <td className="px-4 py-3 text-right font-mono">{inrFull(r.balance)}</td>
-                    <td className="px-2 py-3"><button onClick={() => remove(r.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button></td>
+                    <td className="px-2 py-3" />
                   </tr>
                 ))}
                 {view.length === 0 && <tr><td colSpan="9" className="text-center py-10 text-[var(--ink-3)]">No entries</td></tr>}

@@ -40,6 +40,8 @@ const RoleManager = lazy(() => import("@/pages/RoleManager"));
 const Outstanding = lazy(() => import("@/pages/Outstanding"));
 const Invoices = lazy(() => import("@/pages/Invoices"));
 const PettyCash = lazy(() => import("@/pages/PettyCash"));
+const MoneyRequests = lazy(() => import("@/pages/MoneyRequests"));
+const ProfitLoss = lazy(() => import("@/pages/ProfitLoss"));
 const Cashbook = lazy(() => import("@/pages/Cashbook"));
 const TallyLedger = lazy(() => import("@/pages/TallyLedger"));
 const Meets = lazy(() => import("@/pages/Meets"));
@@ -143,6 +145,9 @@ function App() {
           <Route path="/outstanding" element={<ProtectedRoute page="outstanding"><Layout><Outstanding /></Layout></ProtectedRoute>} />
           <Route path="/invoices" element={<ProtectedRoute page="invoice-gen"><Layout><Invoices /></Layout></ProtectedRoute>} />
           <Route path="/petty-cash" element={<ProtectedRoute page="petty"><Layout><PettyCash /></Layout></ProtectedRoute>} />
+          <Route path="/money-requests" element={<ProtectedRoute page="expenses"><Layout><MoneyRequests /></Layout></ProtectedRoute>} />
+          <Route path="/approvals" element={<ProtectedRoute page="expenses"><Layout><MoneyRequests /></Layout></ProtectedRoute>} />
+          <Route path="/finance/pnl" element={<ProtectedRoute page="pnl"><Layout><ProfitLoss /></Layout></ProtectedRoute>} />
           <Route path="/cashbook" element={<ProtectedRoute page="cashbook"><Layout><Cashbook /></Layout></ProtectedRoute>} />
           <Route path="/finance/tally" element={<ProtectedRoute page="cashbook"><Layout><TallyLedger /></Layout></ProtectedRoute>} />
           <Route path="/meets" element={<ProtectedRoute page="meetplan"><Layout><Meets /></Layout></ProtectedRoute>} />

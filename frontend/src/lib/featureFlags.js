@@ -43,9 +43,10 @@ export const SHOW_DELIVERY = moduleFlag("DELIVERY", false);
 // Inventory (Stock, Stock Ledger, Purchasing) — outside v1 scope.
 export const SHOW_INVENTORY = moduleFlag("INVENTORY", false);
 
-// Finance (Tax Invoices, Petty Cash, Cashbooks, Project P&L, Payments) —
-// outside v1 scope (distinct from HR Payroll, which stays visible).
-export const SHOW_FINANCE = moduleFlag("FINANCE", false);
+// Finance (Money Requests, Wallets & Cashbooks, Profit & Loss, Project P&L,
+// Tax Invoices, Payments, Petty Cash history). ON for go-live since the finance build (money requests, wallets, P&L):
+// set REACT_APP_SHOW_FINANCE=false to hide the whole Finance menu again.
+export const SHOW_FINANCE = moduleFlag("FINANCE", true);
 
 // Reports / Executive Analytics — "advanced analytics", outside v1 scope.
 export const SHOW_REPORTS = moduleFlag("REPORTS", false);

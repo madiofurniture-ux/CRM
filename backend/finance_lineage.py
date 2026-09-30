@@ -76,7 +76,8 @@ def _pct(part: float, whole: float) -> Optional[float]:
 
 def _node(key: str, label: str, *, done: bool, title: str = "", date_: str = "", amount=None,
           detail: str = "", ref: dict = None, items: list = None) -> dict:
-    return {"key": key, "label": label, "done": done, "title": title, "date": date_,
+    d = lc.parse_date(date_) if date_ else None      # legacy rows carry junk like "nan"
+    return {"key": key, "label": label, "done": done, "title": title, "date": d.isoformat() if d else "",
             "amount": amount, "detail": detail, "ref": ref or {}, "items": items or []}
 
 
@@ -150,7 +151,8 @@ def deal_lineage(*, visitor: Optional[dict], lead: Optional[dict], quotes: list,
         _node("quote", "Quotation", done=bool(quotes),
               title=", ".join(q.get("quote_no", "") for q in quotes[-3:]),
               date_=(quotes[-1] if quotes else {}).get("date", ""),
-              amount=_m((quotes[-1] if quotes else {}).get("grand_total") or (quotes[-1] if quotes else {}).get("value")) or None,
+              amount=_m((quotes[-1] if quotes else {}).get("grand_total")
+                        or (quotes[-1] if quotes else {}).get("value")) or None,
               detail=(quotes[-1] if quotes else {}).get("stage", ""),
               items=[{"id": q.get("id"), "no": q.get("quote_no"), "stage": q.get("stage"),
                       "amount": _m(q.get("grand_total") or q.get("value"))} for q in quotes]),

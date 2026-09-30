@@ -34,8 +34,13 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
 - Call Log (`calls` collection, `frontend/src/pages/Calls.jsx`) and the
   Analytics hub (`backend/analytics.py`, `GET /api/analytics/hub/{tab}`,
   `frontend/src/pages/Analytics.jsx`). See `docs/ANALYTICS_AND_CALLS.md`.
-- New module ids must also be handled by `effective_enabled_modules` in
-  `server.py` (tenants with a saved module list see new modules switched on).
+- Finance: money requests (`backend/expenses.py`,
+  `frontend/src/pages/MoneyRequests.jsx`) paid out of Cashbook wallets;
+  visitor-to-profit lineage, Deal P&L and Company P&L
+  (`backend/finance_lineage.py`, `frontend/src/pages/ProfitLoss.jsx`). Petty
+  Cash is read-only history. See `docs/FINANCE.md`.
+- New module ids must also go in `MODULES_ADDED_AFTER_TRACKING` in
+  `server.py` (tenants with a saved module list then see them switched on).
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.

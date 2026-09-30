@@ -17,7 +17,7 @@ export default function RoleManager() {
   const pages = tenant?.enabled_modules
     ? ALL_PAGES.filter((p) => tenant.enabled_modules.includes(p.id))
     : ALL_PAGES;
-  const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: pages.map((p) => p.id), team_id: "", role_id: "", active: true };
+  const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: pages.map((p) => p.id), team_id: "", role_id: "", reports_to: "", active: true };
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -39,7 +39,7 @@ export default function RoleManager() {
     setForm({
       username: u.username, name: u.name, pin: "", role: u.role, icon: u.icon, color: u.color,
       pages: u.pages ?? pages.map((p) => p.id), team_id: u.team_id || "", role_id: u.role_id || "",
-      active: u.active !== false,
+      reports_to: u.reports_to || "", active: u.active !== false,
     });
     setShow(true);
   };
@@ -56,7 +56,7 @@ export default function RoleManager() {
         const payload = {
           name: form.name, role: form.role, icon: form.icon, color: form.color,
           pages: form.role === "admin" ? null : form.pages,
-          team_id: form.team_id, role_id: form.role_id, active: form.active,
+          team_id: form.team_id, role_id: form.role_id, reports_to: form.reports_to, active: form.active,
         };
         if (form.pin) payload.pin = form.pin;
         await api.put(`/auth/users/${editing.id}`, payload);
@@ -173,6 +173,14 @@ export default function RoleManager() {
                   <option value="">— None —</option>
                   {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1" htmlFor="rm-reports-to">Reports to</label>
+                <select id="rm-reports-to" value={form.reports_to} onChange={(e) => setForm({ ...form, reports_to: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+                  <option value="">— No manager (finance approves) —</option>
+                  {users.filter((u) => u.id !== editing?.id && u.active !== false).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select>
+                <p className="text-[11px] text-[var(--ink-3)] mt-1">First approver of this person's money requests.</p>
               </div>
               {form.role !== "admin" && (
                 <div>

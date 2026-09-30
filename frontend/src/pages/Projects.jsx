@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
@@ -590,6 +591,9 @@ export default function Projects() {
               <button onClick={() => setLogProject(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
+              <Link to={`/finance/pnl?project_id=${logProject.id}`} className="inline-flex text-sm font-medium text-[var(--color-primary)] hover:underline">
+                View deal P&L: visitor to profit
+              </Link>
               <StagePath wf={pw} value={logProject.stage} record={logProject}
                          onChange={(stage) => advanceStage(logProject, stage)} />
               <StageProgressBar stages={projectLifecycleStages(logProject, pnlByProject[logProject.id])} />

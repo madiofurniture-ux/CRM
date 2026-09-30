@@ -39,10 +39,12 @@ export const NAV = [
   { app: "stock", id: "inv-analytics", to: "/inventory/analytics", label: "Inv. Analytics", icon: BarChart3 },
 
   // Money
-  { app: "money", id: "invoice-gen", to: "/invoices", label: "Tax Invoices", icon: FileSpreadsheet },
-  { app: "money", id: "petty", to: "/petty-cash", label: "Petty Cash", icon: IndianRupee },
-  { app: "money", id: "cashbook", to: "/cashbook", label: "Cashbooks", icon: Wallet },
+  { app: "money", id: "expenses", to: "/money-requests", label: "Money Requests", icon: HandCoins },
+  { app: "money", id: "cashbook", to: "/cashbook", label: "Wallets & Cashbooks", icon: Wallet },
+  { app: "money", id: "pnl", to: "/finance/pnl", label: "Profit & Loss", icon: TrendingUp },
   { app: "money", id: "project-pnl", to: "/reports/project-pnl", label: "Project P&L", icon: LineChart },
+  { app: "money", id: "invoice-gen", to: "/invoices", label: "Tax Invoices", icon: FileSpreadsheet },
+  { app: "money", id: "petty", to: "/petty-cash", label: "Petty Cash (history)", icon: IndianRupee },
   { app: "money", id: "incentives", to: "/incentives", label: "Incentives", icon: HandCoins },
   { app: "money", id: "finance-payments", to: "/payments", label: "Payments & Tax Invoices", icon: Landmark },
 
