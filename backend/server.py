@@ -37,6 +37,7 @@ import csv_engine
 import quotation_templates
 import storage
 import tally
+import workflow_rules as wf
 from models import TallyConnectionUpdate
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
@@ -745,6 +746,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
             await on_create(doc, user)
         if entity:
             await record_activity(entity, doc["id"], "create", user, after=doc)
+        await run_stage_automation(collection, None, doc, user, created=True)
         return redact(doc, user) if redact else doc
 
     @router.put(f"/{base}/{{item_id}}")
@@ -753,6 +755,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         payload.pop("_id", None)
         payload.pop("id", None)
         payload.pop("tenant_id", None)   # a caller may never move a record between tenants
+        payload.pop("stage_history", None)     # workflow-owned: appended server-side only
+        payload.pop("stage_entered_at", None)
         # Scoped lookup: an id from another tenant must read as "not found",
         # not as someone else's record.
         owned = tenancy.scope({"id": item_id}, collection, user)
@@ -774,7 +778,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         if normalize:
             await normalize(payload, existing, user)
         payload = validate_partial_update(create_model, existing, payload)
-        await validate_stage(collection, payload, user)
+        await validate_stage(collection, payload, user, existing)
         stamp_fy(payload, collection)
         stamp_closure(payload, collection, existing)
         try:
@@ -784,6 +788,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         out = await db[collection].find_one(owned, {"_id": 0})
         if after_write:
             await after_write(out, user)
+        stage_key_field = tenancy.stage_field(tenancy.COLLECTION_ENTITY.get(collection, ""))
+        await run_stage_automation(collection, existing.get(stage_key_field), out, user)
         if entity:
             changed = {k: existing.get(k) for k in payload}
             await record_activity(entity, item_id, "update", user, before=changed,
@@ -992,6 +998,11 @@ async def tenant_create(payload: dict, user: dict = Depends(require_admin)):
 # vocabulary. They are now data: a clinic, an agency and a retailer can each
 # describe their own pipeline without a code change.
 # ══════════════════════════════════════════════════════════════════
+async def workflow_doc(entity: str, user: dict) -> dict | None:
+    return await db.workflows.find_one(
+        tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
+
+
 async def workflow_for(entity: str, user: dict):
     """
     A tenant's stages for an entity, plus whether they are ENFORCED.
@@ -1002,36 +1013,163 @@ async def workflow_for(entity: str, user: dict):
     becomes binding once the tenant has deliberately defined one — until then
     the defaults are a suggestion for the UI.
     """
-    doc = await db.workflows.find_one(
-        tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
+    doc = await workflow_doc(entity, user)
     if doc and doc.get("stages"):
         return doc["stages"], bool(doc.get("enforced", True))
     return tenancy.default_workflow(entity), False
 
 
-async def validate_stage(collection: str, doc: dict, user: dict):
-    """
-    Keep `stage` inside the tenant's workflow, and normalise its spelling.
+def _stage_error(message: str, **extra):
+    return HTTPException(status_code=400, detail={"message": message, **extra})
 
-    Only runs for collections that map to a workflow entity, only when a stage
-    is actually supplied, and only when the tenant has opted in.
+
+async def validate_stage(collection: str, doc: dict, user: dict, existing: dict | None = None):
+    """
+    Keep a record's stage inside the tenant's workflow, normalise its
+    spelling, and — once the tenant has switched enforcement on — apply the
+    stage's gates: the allowed next stages (on a change from `existing`) and
+    the fields that must be filled before a record may sit at that stage.
+
+    Only runs for collections that map to a workflow entity and only when a
+    stage is actually supplied. An unchanged stage on an update passes
+    untouched, so editing an unrelated field never trips a gate.
     """
     entity = tenancy.COLLECTION_ENTITY.get(collection)
-    if not entity or "stage" not in doc:
+    if not entity:
         return
-    raw = str(doc.get("stage") or "").strip()
+    field = tenancy.stage_field(entity)
+    if field not in doc:
+        return
+    raw = str(doc.get(field) or "").strip()
     if not raw:
         return
     stages, enforced = await workflow_for(entity, user)
     match = tenancy.resolve_stage(stages, raw)
-    if match:
-        doc["stage"] = match["label"]        # canonical casing/spelling
+    if not match:
+        if enforced:
+            raise _stage_error(f"'{raw}' is not a valid {entity} stage for your workflow.",
+                               valid_stages=[s["label"] for s in stages])
         return
-    if enforced:
-        raise HTTPException(status_code=400, detail={
-            "message": f"'{raw}' is not a valid {entity} stage for your workflow.",
-            "valid_stages": [s["label"] for s in stages],
-        })
+    doc[field] = match["label"]        # canonical casing/spelling
+    if not enforced:
+        return
+    if existing is not None:
+        prev = tenancy.resolve_stage(stages, str(existing.get(field) or ""))
+        if prev and prev["key"] == match["key"]:
+            return
+        err = wf.transition_error(stages, existing.get(field), match)
+        if err:
+            raise _stage_error(err, code="transition_not_allowed", stage=match["label"],
+                               allowed=[s["label"] for s in stages
+                                        if prev and s["key"] in (prev.get("next") or [])])
+    missing = wf.missing_required(match, {**(existing or {}), **doc})
+    if missing:
+        labels = {f["key"]: f["label"] for f in wf.field_catalog(entity)}
+        names = ", ".join(labels.get(f, f) for f in missing)
+        raise _stage_error(f"Fill in {names} before moving to '{match['label']}'.",
+                           code="required_fields", stage=match["label"],
+                           missing_fields=missing)
+
+
+async def run_stage_automation(collection: str, before_stage, record: dict, user: dict,
+                               *, created: bool = False):
+    """
+    After a successful write: append to the record's stage history and fire
+    the tenant's automation rules for the stage it entered (or for creation).
+
+    Never raises — same guarantee as _audit()/notify(): the business write
+    already happened, and a failing automation must not turn it into an
+    error the user retries into a duplicate. Failures are logged.
+    `record` is updated in place so the caller's response reflects it.
+    """
+    entity = tenancy.COLLECTION_ENTITY.get(collection)
+    if not entity or not record or not record.get("id"):
+        return
+    field = tenancy.stage_field(entity)
+    new_value = str(record.get(field) or "").strip()
+    changed = bool(new_value) and (created or new_value.lower() != str(before_stage or "").strip().lower())
+    if not changed and not created:
+        return
+    try:
+        doc = await workflow_doc(entity, user)
+        stages = (doc or {}).get("stages") or tenancy.default_workflow(entity)
+        entered = tenancy.resolve_stage(stages, new_value) if changed else None
+        owned = tenancy.scope({"id": record["id"]}, collection, user)
+        if changed:
+            at = now_iso()
+            entry = wf.history_entry(None if created else before_stage, new_value, user, at)
+            await db[collection].update_one(owned, {
+                "$push": {"stage_history": {"$each": [entry], "$slice": -100}},
+                "$set": {"stage_entered_at": at}})
+            record["stage_history"] = (list(record.get("stage_history") or []) + [entry])[-100:]
+            record["stage_entered_at"] = at
+        label = entered["label"] if entered else new_value
+        for rule in wf.matching_rules((doc or {}).get("rules"), created=created, entered=entered):
+            await _run_rule(entity, collection, owned, rule, record, label, user)
+    except Exception as e:
+        logger.warning(f"Workflow automation failed ({collection}/{record.get('id')}): {e}")
+
+
+async def _run_rule(entity: str, collection: str, owned: dict, rule: dict, record: dict,
+                    stage_label: str, user: dict):
+    done = []
+    for action in rule.get("actions") or []:
+        try:
+            kind = action.get("type")
+            if kind == "create_task":
+                task = wf.task_for(action, entity, record, stage_label, user)
+                task["id"] = new_id()
+                task["created_at"] = now_iso()
+                stamp_fy(task, "tasks")
+                tenancy.stamp(task, "tasks", user)
+                await db.tasks.insert_one(dict(task))
+                done.append(f"task '{task['title']}' → {task['assigned_to'] or 'unassigned'}")
+            elif kind == "set_field":
+                await db[collection].update_one(owned, {"$set": {action["field"]: action["value"]}})
+                record[action["field"]] = action["value"]
+                done.append(f"set {action['field']}")
+            elif kind == "notify_customer":
+                phone = wf.record_phone(record)
+                if phone:
+                    await notif.notify(db, user, action["event"], to=phone,
+                                       customer_name=record.get("customer") or record.get("name", ""),
+                                       ref_type=entity, ref_id=wf.record_title(record))
+                    done.append(f"message '{action['event']}'")
+        except Exception as e:
+            logger.warning(f"Workflow action failed ({rule.get('name')}/{action.get('type')}): {e}")
+    await record_activity(entity, record["id"], "automation", user,
+                          after={"rule": rule.get("name"), "actions": done},
+                          note=f"Automation '{rule.get('name')}' ran")
+
+
+def _workflow_view(entity: str, doc: dict | None) -> dict:
+    return {
+        "entity": entity,
+        "label": tenancy.ENTITY_LABELS.get(entity, entity),
+        "stages": (doc or {}).get("stages") or tenancy.default_workflow(entity),
+        "rules": (doc or {}).get("rules") or [],
+        "customised": bool(doc),
+        "enforced": bool(doc and doc.get("enforced", True)),
+        "locked": entity in tenancy.LOCKED_STAGES,
+        "stage_field": tenancy.stage_field(entity),
+        "fields": wf.field_catalog(entity),
+    }
+
+
+def _require_workflow_entity(entity: str):
+    if entity not in tenancy.WORKFLOW_ENTITIES:
+        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
+
+
+async def _stages_in_use(entity: str, user: dict) -> list:
+    coll = tenancy.ENTITY_COLLECTION[entity]
+    field = tenancy.stage_field(entity)
+    seen = []
+    async for d in db[coll].find(tenancy.scope({}, coll, user), {"_id": 0, field: 1}):
+        s = str(d.get(field) or "").strip()
+        if s and s not in seen:
+            seen.append(s)
+    return seen
 
 
 @api.post("/workflows/{entity}/adopt")
@@ -1043,94 +1181,83 @@ async def workflow_adopt(entity: str, payload: dict = None,
     The safe way to switch enforcement on: nothing existing becomes invalid,
     and the business can then rename or reorder from a true starting point.
     """
-    if entity not in tenancy.WORKFLOW_ENTITIES:
-        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
-    coll = tenancy.ENTITY_COLLECTION.get(entity)
-    if not coll:
-        raise HTTPException(status_code=400, detail=f"'{entity}' has no records to learn from")
-
-    seen = []
-    async for d in db[coll].find(tenancy.scope({}, coll, user), {"_id": 0, "stage": 1}):
-        s = str(d.get("stage") or "").strip()
-        if s and s not in seen:
-            seen.append(s)
+    _require_workflow_entity(entity)
+    if entity in tenancy.LOCKED_STAGES:
+        raise HTTPException(status_code=400,
+                            detail=f"{tenancy.ENTITY_LABELS[entity]} use fixed system stages — "
+                                   f"nothing to learn from the data")
+    seen = await _stages_in_use(entity, user)
     if not seen:
         stages = tenancy.default_workflow(entity)
     else:
         # Anything that looks final is marked terminal; wins are flagged so
-        # reporting still works after adoption.
+        # reporting still works after adoption. Known stages keep their
+        # default settings (probability etc.) rather than starting blank.
         won_words = {"won", "converted", "completed", "delivered", "paid", "closed"}
         end_words = won_words | {"lost", "cancelled", "canceled", "dormant",
                                  "expired", "dead", "rejected"}
-        stages = [
-            tenancy.make_stage(
-                label,
-                terminal=label.strip().lower() in end_words,
-                won=label.strip().lower() in won_words,
-            ) for label in seen
-        ]
+        defaults = tenancy.default_workflow(entity)
+        stages = []
+        for label in seen:
+            known = tenancy.resolve_stage(defaults, label)
+            if known:
+                stages.append({**known, "label": label})
+            else:
+                stages.append(tenancy.make_stage(
+                    label, terminal=label.strip().lower() in end_words,
+                    won=label.strip().lower() in won_words))
+        stages = tenancy.validate_stages(stages, entity)
 
+    existing = await workflow_doc(entity, user)
+    try:
+        rules = wf.validate_rules((existing or {}).get("rules"), stages, entity)
+    except ValueError:
+        rules = []                     # a rule pointing at a stage the data never used
     await db.workflows.update_one(
         tenancy.scope({"entity": entity}, "workflows", user),
         {"$set": tenancy.stamp(
-            {"entity": entity, "stages": stages,
+            {"entity": entity, "stages": stages, "rules": rules,
              "enforced": bool((payload or {}).get("enforce", True)),
              "updated_at": now_iso()}, "workflows", user)},
         upsert=True)
-    return {"entity": entity, "stages": stages, "adopted_from_records": len(seen),
-            "enforced": bool((payload or {}).get("enforce", True))}
+    return {**_workflow_view(entity, await workflow_doc(entity, user)),
+            "adopted_from_records": len(seen)}
 
 
 @api.get("/workflows")
 async def workflows_list(user: dict = Depends(get_current_user)):
     """Every entity's workflow for this tenant, falling back to sane defaults."""
-    out = {}
-    for entity in tenancy.WORKFLOW_ENTITIES:
-        doc = await db.workflows.find_one(
-            tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
-        out[entity] = {
-            "entity": entity,
-            "stages": (doc or {}).get("stages") or tenancy.default_workflow(entity),
-            "customised": bool(doc),
-            "enforced": bool(doc and doc.get("enforced", True)),
-        }
-    return out
+    docs = {d["entity"]: d async for d in db.workflows.find(
+        tenancy.scope({}, "workflows", user), {"_id": 0})}
+    return {entity: _workflow_view(entity, docs.get(entity))
+            for entity in tenancy.WORKFLOW_ENTITIES}
 
 
 @api.get("/workflows/{entity}")
 async def workflow_get(entity: str, user: dict = Depends(get_current_user)):
-    if entity not in tenancy.WORKFLOW_ENTITIES:
-        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
-    doc = await db.workflows.find_one(
-        tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
-    return {"entity": entity,
-            "stages": (doc or {}).get("stages") or tenancy.default_workflow(entity),
-            "customised": bool(doc),
-            "enforced": bool(doc and doc.get("enforced", True))}
+    _require_workflow_entity(entity)
+    return _workflow_view(entity, await workflow_doc(entity, user))
 
 
 @api.put("/workflows/{entity}")
 async def workflow_set(entity: str, payload: dict, user: dict = Depends(require_admin)):
-    """Admin-only: redefine an entity's stages for this tenant."""
-    if entity not in tenancy.WORKFLOW_ENTITIES:
-        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
+    """Admin-only: redefine an entity's stages, gates and automations for this tenant.
+
+    `rules` is optional: a payload without it keeps the existing rules, so an
+    older client that only edits stages never wipes a tenant's automations.
+    """
+    _require_workflow_entity(entity)
+    existing = await workflow_doc(entity, user)
     try:
-        stages = tenancy.validate_stages(payload.get("stages"))
+        stages = tenancy.validate_stages(payload.get("stages"), entity, wf.field_keys(entity))
+        rules_in = payload["rules"] if "rules" in payload else (existing or {}).get("rules")
+        rules = wf.validate_rules(rules_in, stages, entity)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     # Refuse to strand live records on a stage that no longer exists.
-    coll = {"lead": "leads", "customer": "customers", "quote": "quotes",
-            "sale": "sales", "project": "projects", "product": "inventory",
-            "task": "tasks"}.get(entity)
-    orphaned = []
-    if coll:
-        seen = set()
-        async for d in db[coll].find(tenancy.scope({}, coll, user), {"_id": 0, "stage": 1}):
-            s = str(d.get("stage") or "").strip()
-            if s:
-                seen.add(s)
-        orphaned = sorted(s for s in seen if not tenancy.resolve_stage(stages, s))
+    orphaned = sorted(s for s in await _stages_in_use(entity, user)
+                      if not tenancy.resolve_stage(stages, s))
     if orphaned and not payload.get("force"):
         raise HTTPException(status_code=409, detail={
             "message": "Some records use stages that the new workflow drops.",
@@ -1141,21 +1268,22 @@ async def workflow_set(entity: str, payload: dict, user: dict = Depends(require_
     await db.workflows.update_one(
         tenancy.scope({"entity": entity}, "workflows", user),
         {"$set": tenancy.stamp(
-            {"entity": entity, "stages": stages,
+            {"entity": entity, "stages": stages, "rules": rules,
              "enforced": bool(payload.get("enforce", True)),
-             "updated_at": now_iso()},
+             "updated_at": now_iso(), "updated_by": user.get("name", "")},
             "workflows", user)},
         upsert=True)
-    return {"entity": entity, "stages": stages, "customised": True,
+    await _audit("workflow_changed", user, entity)
+    return {**_workflow_view(entity, await workflow_doc(entity, user)),
             "orphaned_stages": orphaned}
 
 
 @api.post("/workflows/{entity}/reset")
 async def workflow_reset(entity: str, user: dict = Depends(require_admin)):
-    if entity not in tenancy.WORKFLOW_ENTITIES:
-        raise HTTPException(status_code=404, detail=f"Unknown entity '{entity}'")
+    _require_workflow_entity(entity)
     await db.workflows.delete_one(tenancy.scope({"entity": entity}, "workflows", user))
-    return {"entity": entity, "stages": tenancy.default_workflow(entity), "customised": False}
+    await _audit("workflow_reset", user, entity)
+    return _workflow_view(entity, None)
 
 
 @api.get("/fy/options")
@@ -4006,11 +4134,13 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
     doc = data.dict()
     doc["id"] = new_id()
     doc["created_at"] = now_iso()
+    await validate_stage("projects", doc, user)
     stamp_fy(doc, "projects")
     tenancy.stamp(doc, "projects", user)
     await db.projects.insert_one(doc)
     doc.pop("_id", None)
     await record_activity("project", doc["id"], "create", user, after=doc)
+    await run_stage_automation("projects", None, doc, user, created=True)
     return doc
 
 
@@ -4021,11 +4151,16 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
         raise HTTPException(400, "No fields to update")
     stamp_fy(patch, "projects")
     owned = tenancy.scope({"id": project_id}, "projects", user)
+    existing = await db.projects.find_one(owned, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Project not found")
+    await validate_stage("projects", patch, user, existing)
     res = await db.projects.update_one(owned, {"$set": patch})
     if res.matched_count == 0:
         raise HTTPException(404, "Project not found")
     item = await db.projects.find_one(owned)
     item.pop("_id", None)
+    await run_stage_automation("projects", existing.get("stage"), item, user)
     return item
 
 
@@ -4035,9 +4170,10 @@ async def update_project_stage(project_id: str, data: ProjectStageUpdate, user=D
     if data.stage not in valid_stages:
         raise HTTPException(400, f"Invalid stage. Must be one of: {valid_stages}")
     owned = tenancy.scope({"id": project_id}, "projects", user)
-    before = await db.projects.find_one(owned, {"_id": 0, "stage": 1})
+    before = await db.projects.find_one(owned, {"_id": 0})
     if not before:
         raise HTTPException(404, "Project not found")
+    await validate_stage("projects", {"stage": data.stage}, user, before)
     res = await db.projects.update_one(owned, {"$set": {"stage": data.stage}})
     if res.matched_count == 0:
         raise HTTPException(404, "Project not found")
@@ -4045,6 +4181,7 @@ async def update_project_stage(project_id: str, data: ProjectStageUpdate, user=D
     item.pop("_id", None)
     await record_activity("project", project_id, "stage_change", user,
                           before={"stage": before.get("stage")}, after={"stage": data.stage})
+    await run_stage_automation("projects", before.get("stage"), item, user)
     # "Execution" is this project model's installation/fulfillment phase —
     # there's no separate "Installation Scheduling" stage, so entering
     # Execution is the trigger. Only on the transition INTO it, not every
