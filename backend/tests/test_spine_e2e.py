@@ -83,6 +83,7 @@ def test_every_record_on_the_spine_is_linked():
 
         follow_up = await db.tasks.find_one({"ref": lead["id"], "category": "Follow-up"})
         assert follow_up and follow_up["due_date"] == "2026-10-05"
+        assert follow_up["done"] is True  # the deal closed, so the follow-up is finished
 
         assert sale["quote_id"] == quote["id"] and sale["lead_id"] == lead["id"]
         # Closing the deal closes the lead and the quote on their workflows.
@@ -191,3 +192,13 @@ def test_nan_in_a_response_becomes_null_not_a_500():
     res = TestClient(app).get("/nan")
     assert res.status_code == 200
     assert res.json() == {"a": None, "b": [1.5, None], "c": "ok"}
+
+
+def test_today_counts_follow_ups_due_and_overdue():
+    tasks = [{"category": "Follow-up", "due_date": "2026-09-30", "done": False},
+             {"category": "Follow-up", "due_date": "2026-09-01", "done": False},
+             {"category": "Follow-up", "due_date": "2026-10-09", "done": False},
+             {"category": "Follow-up", "due_date": "2026-09-01", "done": True},
+             {"category": "Installation", "due_date": "2026-09-01", "done": False}]
+    out = lc.command_centre_overview(quotes=[], sales=[], projects=[], tasks=tasks, today="2026-09-30")
+    assert out["today"] == {"follow_ups_due": 2, "follow_ups_overdue": 1}

@@ -1198,6 +1198,8 @@ def command_centre_overview(*, quotes: Iterable[dict], sales: Iterable[dict],
     ]
 
     sla_breaches = [t for t in tasks if not t.get("done") and before_today(t.get("due_date"))]
+    follow_ups = [t for t in tasks if t.get("category") == "Follow-up" and not t.get("done")
+                  and (d := parse_date(t.get("due_date"))) and d <= today_d]
 
     division_split: dict = {}
     for q in open_quotes:
@@ -1221,8 +1223,12 @@ def command_centre_overview(*, quotes: Iterable[dict], sales: Iterable[dict],
             {"division": k, "value": v}
             for k, v in sorted(division_split.items(), key=lambda kv: -kv[1])
         ],
+        "today": {
+            "follow_ups_due": len(follow_ups),
+            "follow_ups_overdue": sum(1 for t in follow_ups if before_today(t.get("due_date"))),
+        },
         "pending_approvals": [
-            {"quote_no": q.get("quote_no", ""), "customer": q.get("customer", ""),
+            {"id": q.get("id", ""), "quote_no": q.get("quote_no", ""), "customer": q.get("customer", ""),
              "discount_pct": _quote_discount_pct(q)}
             for q in pending[:5]
         ],

@@ -1773,6 +1773,10 @@ async def _sync_lead_followup_task(lead: dict, user: dict):
     due = str(lead.get("follow_up_date") or "").strip()
     owned = tenancy.scope({"ref": lead_id, "ref_type": "lead", "category": "Follow-up"}, "tasks", user)
     existing = await db.tasks.find_one(owned)
+    if str(lead.get("stage") or "").strip().lower() in ("won", "lost"):
+        if existing and not existing.get("done"):
+            await db.tasks.update_one(owned, {"$set": {"done": True}})  # deal closed, nothing to chase
+        return
     if not due:
         if existing:
             await db.tasks.delete_one(owned)  # date cleared -> nothing left to follow up on
@@ -4437,7 +4441,7 @@ def _calc_stage_split(quotes: List[dict]) -> List[dict]:
         by_stage.append({
             "stage": stage,
             "count": len(stage_quotes),
-            "value": sum((q.get("value") or 0) for q in stage_quotes)
+            "value": sum(lc.money(q.get("value")) for q in stage_quotes)
         })
     return by_stage
 
@@ -4445,8 +4449,8 @@ def _calc_stage_split(quotes: List[dict]) -> List[dict]:
 def _calc_division_split(sales: List[dict]) -> List[dict]:
     divs = {}
     for sale in sales:
-        div = sale.get("division") or "Other"
-        divs[div] = divs.get(div, 0) + (sale.get("value") or 0)
+        div = str(sale.get("division") or "Other")
+        divs[div] = divs.get(div, 0) + lc.money(sale.get("value"))
     return [{"division": k, "value": v} for k, v in divs.items()]
 
 
@@ -4454,9 +4458,9 @@ def _calc_monthly_revenue(sales: List[dict]) -> List[dict]:
     from collections import defaultdict
     monthly = defaultdict(float)
     for sale in sales:
-        d = (sale.get("date") or "")[:7]
+        d = str(sale.get("date") or "")[:7]
         if d and len(d) == 7 and d[4] == "-" and d[:4].isdigit() and d[5:].isdigit():
-            monthly[d] += (sale.get("value") or 0)
+            monthly[d] += lc.money(sale.get("value"))
     return sorted(
         [{"month": k, "value": v} for k, v in monthly.items()],
         key=lambda x: x["month"]
@@ -4482,15 +4486,15 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
 
     today = now_iso()[:10]
     return {
-        "pipeline_value": sum((q.get("value") or 0) for q in quotes if q.get("stage") in ("New", "Qualified", "Quoted", "Negotiation")),
-        "total_sales": sum((s.get("value") or 0) for s in sales),
-        "total_paid": sum((s.get("paid") or 0) for s in sales),
-        "outstanding": sum((s.get("balance") or 0) for s in sales),
-        "stock_mrp": sum((item.get("mrp") or 0) * (item.get("qty") or 0) for item in inventory),
-        "stock_cost": sum((item.get("cost") or 0) * (item.get("qty") or 0) for item in inventory),
+        "pipeline_value": sum(lc.money(q.get("value")) for q in quotes if q.get("stage") in ("New", "Qualified", "Quoted", "Negotiation")),
+        "total_sales": sum(lc.money(s.get("value")) for s in sales),
+        "total_paid": sum(lc.money(s.get("paid")) for s in sales),
+        "outstanding": sum(lc.money(s.get("balance")) for s in sales),
+        "stock_mrp": sum(lc.money(item.get("mrp")) * lc.money(item.get("qty")) for item in inventory),
+        "stock_cost": sum(lc.money(item.get("cost")) * lc.money(item.get("qty")) for item in inventory),
         "active_leads": sum(1 for l in leads if l.get("stage") not in ("Won", "Lost")),
-        "todays_visitors": sum(1 for v in visitors if (v.get("date") or "")[:10] == today),
-        "overdue_followups": sum(1 for l in leads if l.get("follow_up_date") and l["follow_up_date"] < today and l.get("stage") not in ("Won", "Lost")),
+        "todays_visitors": sum(1 for v in visitors if str(v.get("date") or "")[:10] == today),
+        "overdue_followups": sum(1 for l in leads if l.get("follow_up_date") and str(l["follow_up_date"]) < today and l.get("stage") not in ("Won", "Lost")),
         "by_stage": _calc_stage_split(quotes),
         "division_split": _calc_division_split(sales),
         "monthly_revenue": _calc_monthly_revenue(sales),
@@ -4517,7 +4521,7 @@ async def data_health_report(user: dict = Depends(get_current_user)):
 async def command_centre_overview_route(user: dict = Depends(get_current_user)):
     quotes, sales, projects, tasks = await asyncio.gather(
         db.quotes.find(tenancy.scope({}, "quotes", user),
-                       {"_id": 0, "quote_no": 1, "customer": 1, "value": 1, "stage": 1,
+                       {"_id": 0, "id": 1, "quote_no": 1, "customer": 1, "value": 1, "stage": 1,
                         "division": 1, "subtotal": 1, "discount": 1, "approval": 1, "date": 1}
                        ).to_list(5000),
         db.sales.find(tenancy.scope({}, "sales", user),
@@ -4525,7 +4529,8 @@ async def command_centre_overview_route(user: dict = Depends(get_current_user)):
         db.projects.find(tenancy.scope({}, "projects", user),
                          {"_id": 0, "id": 1, "stage": 1, "target_date": 1}).to_list(5000),
         db.tasks.find(tenancy.scope({}, "tasks", user),
-                      {"_id": 0, "ref": 1, "ref_type": 1, "due_date": 1, "done": 1}).to_list(5000),
+                      {"_id": 0, "ref": 1, "ref_type": 1, "due_date": 1, "done": 1, "category": 1}
+                      ).to_list(5000),
     )
     return lc.command_centre_overview(quotes=quotes, sales=sales, projects=projects, tasks=tasks, today=_today())
 
@@ -5415,6 +5420,8 @@ async def _mark_won(collection: str, record_id: str, user: dict):
         return
     await db[collection].update_one(owned, {"$set": {field: won["label"]}})
     await run_stage_automation(collection, record.get(field), {**record, field: won["label"]}, user)
+    if collection == "leads":
+        await _sync_lead_followup_task({**record, field: won["label"]}, user)
 
 
 async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[dict, dict]:
