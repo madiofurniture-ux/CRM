@@ -2,15 +2,13 @@
 // set the matching REACT_APP_* env var at build time) to restore behavior —
 // nothing gated by a flag is ever deleted.
 
-// UI shell theme. "baseplate" = the existing dark-header pill nav
-// (components/Header.jsx) — the current production default, kept as the
-// safe rollback. "light" = the new spacious light-blue-gray SaaS shell
-// (components/light/LightAppShell.jsx) built from
-// docs/LIGHT_THEME_MIGRATION_PLAN.md. Any other/unset value falls back to
-// "baseplate" — changing the *production* default here would be a visible,
-// unreviewed UX change shipped by an env var, so it stays opt-in.
+// UI shell theme. "light" = the Salesforce Lightning-style shell
+// (components/light/LightAppShell.jsx + the [data-ui-theme="light"] tokens in
+// index.css) — the go-live default, chosen by the business for launch.
+// "baseplate" = the older dark-header pill nav (components/Header.jsx), kept
+// intact as the rollback: set REACT_APP_UI_THEME=baseplate and rebuild.
 const RAW_UI_THEME = (process.env.REACT_APP_UI_THEME || "").trim().toLowerCase();
-export const UI_THEME = RAW_UI_THEME === "light" ? "light" : "baseplate";
+export const UI_THEME = RAW_UI_THEME === "baseplate" ? "baseplate" : "light";
 export const IS_LIGHT_THEME = UI_THEME === "light";
 
 // Legacy/non-core nav — kept default-off as the umbrella override: set

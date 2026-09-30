@@ -17,18 +17,20 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
 ## Stack and repo state (read before starting any task)
 - **System of record:** Python (FastAPI) backend + MongoDB, React frontend.
   Multi-tenancy is built in `backend/tenancy.py`.
-- **Heads-up:** commit `bc0af67` ("initialize Android project structure")
-  removed `backend/`, `frontend/`, `db/`, `deploy/`, `netlify/` and
-  `.github/workflows/` from `main`. The last full web-stack tree is
-  `c04a55a`. Inspect it with `git show c04a55a:<path>` or
-  `git ls-tree -r c04a55a --name-only`.
-- **Current HEAD:** a Kotlin / Jetpack Compose Android scaffold in `app/`
-  (package `com.example.madiocrm`). `CrmRepository.kt` is an in-memory
-  singleton. It has no backend, no persistence and no tenancy yet.
-- If a task needs backend or frontend code, confirm with the user whether to
-  restore it from `c04a55a` before editing. Don't restore it silently.
-- `docs/` (PRD, module architecture, Mongo indexes, go-live checklist) survived
-  and describes the web stack.
+- Layout: `backend/` (FastAPI, deployed to Render via `render.yaml`),
+  `frontend/` (React/CRA + craco + Tailwind, deployed to Netlify via
+  `netlify.toml`), `docs/` (PRD, module architecture, Mongo indexes, go-live
+  checklist).
+- History: commit `bc0af67` accidentally deleted the web stack from `main`; it
+  was restored unchanged from `c04a55a` on `claude/madio-crm-context-q7nc4m`.
+- `app/` is a separate Kotlin / Jetpack Compose Android scaffold (package
+  `com.example.madiocrm`). Its `CrmRepository.kt` is in-memory only: no
+  backend, persistence or tenancy yet. Don't treat it as the product.
+- Configurable per-entity workflows: `backend/tenancy.py` (stage schema,
+  defaults), `backend/workflow_rules.py` (transition checks + automations),
+  `frontend/src/pages/Workflows.jsx` (builder), `frontend/src/hooks/useWorkflow.js`
+  and `frontend/src/components/StagePath.jsx` (record-level Path). See
+  `docs/WORKFLOWS.md`.
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.
@@ -65,4 +67,6 @@ Finance (customer receipts, vendor payments, ledger), Attendance.
 - One task per session. Plan first, then implement, then test, then commit.
 - Small commits with clear messages.
 - If a change touches more than one module, stop and list the impact before editing.
-- Backend tests: `pytest` from `backend/` (pre-approved in `.claude/settings.json`).
+- Backend tests: `python -m pytest tests -q` from `backend/` (Mongo is faked
+  with `mongomock_motor`; install it alongside `requirements.txt`).
+- Frontend check: `CI=true npm run build` from `frontend/`.

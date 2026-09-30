@@ -10,8 +10,11 @@ import StageBadge from "@/components/StageBadge";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
+import useWorkflow from "@/hooks/useWorkflow";
 
-const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
+// Fallback only: columns come from the tenant's quotation workflow
+// (Admin → Workflows), loaded by useWorkflow in the component.
+const DEFAULT_STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 const STAGE_TINTS = {
   New: "border-t-blue-400",
   Qualified: "border-t-blue-600",
@@ -20,14 +23,6 @@ const STAGE_TINTS = {
   Won: "border-t-[var(--color-success)]",
   Lost: "border-t-[var(--color-danger)]",
 };
-
-// Weighted-pipeline probability for a deal sitting at each stage — the
-// standard CRM read on how likely it is to close. A deal that carries its
-// own `probability` (set by the rep) overrides the stage default.
-const STAGE_PROBABILITY = { New: 10, Qualified: 30, Quoted: 50, Negotiation: 70, Won: 100, Lost: 0 };
-
-const dealProbability = (q) =>
-  Number.isFinite(q?.probability) ? q.probability : (STAGE_PROBABILITY[q?.stage] ?? 0);
 
 const probabilityTone = (pct) =>
   pct >= 70 ? "bg-[var(--moss-soft)] text-[var(--color-success)]"
@@ -48,6 +43,17 @@ const emptyForm = {
 
 export default function Pipeline() {
   const [quotes, setQuotes] = useState([]);
+  const qw = useWorkflow("quote", DEFAULT_STAGES);
+  const STAGES = qw.labels;
+  // Weighted-pipeline probability: a deal's own `probability` (set by the
+  // rep) overrides the stage default configured in the workflow.
+  const dealProbability = (q) =>
+    Number.isFinite(q?.probability) ? q.probability : (qw.probabilityOf(q?.stage) ?? 0);
+  const stageTint = (s) => {
+    const st = qw.stageOf(s);
+    if (st?.terminal) return st.won ? "border-t-[var(--color-success)]" : "border-t-[var(--color-danger)]";
+    return STAGE_TINTS[s] || "border-t-[var(--color-primary)]";
+  };
   const [dragId, setDragId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -211,7 +217,7 @@ export default function Pipeline() {
                       draggable={canEdit}
                       onDragStart={() => canEdit && setDragId(q.id)}
                       onDragEnd={() => setDragId(null)}
-                      className={`group relative bg-[var(--color-surface)] border border-[var(--color-border)] border-t-2 ${STAGE_TINTS[s]} rounded-[var(--radius-lg)] p-3 ${canEdit ? "cursor-grab active:cursor-grabbing" : ""} hover:shadow-md transition-shadow ${dragId === q.id ? "kanban-card-dragging" : ""}`}
+                      className={`group relative bg-[var(--color-surface)] border border-[var(--color-border)] border-t-2 ${stageTint(s)} rounded-[var(--radius-lg)] p-3 ${canEdit ? "cursor-grab active:cursor-grabbing" : ""} hover:shadow-md transition-shadow ${dragId === q.id ? "kanban-card-dragging" : ""}`}
                       data-testid={`kanban-card-${q.id}`}
                     >
                       <div className="absolute top-2 right-2 hidden group-hover:flex items-center gap-1 bg-[var(--color-surface)] rounded-md">

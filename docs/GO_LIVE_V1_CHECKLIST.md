@@ -404,3 +404,29 @@ process. All QA fixtures deleted afterward. Full checklist in
 `REACT_APP_UI_THEME` and rebuild. The `ALL_MODULE_IDS` fix and the
 `GATED_MODULES`/`canDo` permission work are correctness fixes that apply
 under both themes; nothing to roll back for those.
+
+## Go-live: Lightning theme default + configurable workflows
+
+**Theme.** The light shell is now the **default** (`lib/featureFlags.js`),
+with its tokens retuned to a Salesforce Lightning palette (brand `#0176D3`,
+canvas `#F3F3F3`, 4–8px radii). Legacy tokens (`--bg`, `--brand`, `--ink`, …)
+are remapped under `[data-ui-theme="light"]`, so pages that were never
+migrated pick up the same palette. **Rollback:** set
+`REACT_APP_UI_THEME=baseplate` and rebuild.
+
+**Workflows.** See `docs/WORKFLOWS.md`. Per-stage probability, guidance,
+required fields and allowed next stages; stage history; automation rules;
+the Path component on the Lead and Project drawers. Covers 11 record types,
+including vendor orders, POs and invoices.
+
+Before switching **Enforce** on for a live record type, use "Build from my
+records" (or check the stages records already use). Enforcement rejects any
+stage outside the list.
+
+**Verified:**
+- `cd backend && python -m pytest tests -q`: 638 passed (623 existing + 15 new)
+- `cd frontend && CI=true npm run build`: compiled successfully
+- Browser smoke test (in-memory API from `tests/run_local_server.py`, seeded
+  data, desktop 1440px and mobile 390px): workflow builder save, enforced
+  required-field gate blocking a lead move with the correct toast, Path
+  rendering, Pipeline probabilities from the workflow, zero page errors.

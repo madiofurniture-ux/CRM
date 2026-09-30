@@ -85,23 +85,57 @@
 /* Light SaaS dashboard theme (REACT_APP_UI_THEME=light) — see
    docs/DESIGN_TOKEN_MAP.md and docs/LIGHT_THEME_MIGRATION_PLAN.md.
    Verified contrast ratios documented in DESIGN_TOKEN_MAP.md. */
+/* Light theme = Salesforce Lightning-style finish (the go-live default, see
+   lib/featureFlags.js). Besides the --color-* design tokens, the legacy
+   Aura Blue tokens (--bg/--brand/--ink/...) are remapped too, so the ~40
+   pages that still use them pick up the same palette without per-page
+   edits. Contrast ratios are against #ffffff. */
 [data-ui-theme="light"] {
-  --color-bg: #eef3fb;           /* soft blue-gray app background */
-  --color-surface: #ffffff;      /* white cards */
-  --color-surface-muted: #f3f7fd; /* very light blue surface */
-  --color-text: #101a33;         /* dark navy text — ~15.8:1 on white */
-  --color-text-muted: #51607a;   /* slate blue-gray — ~5.3:1 on white */
-  --color-border: #dbe6f5;       /* soft blue border */
-  --color-primary: #1d5fd6;      /* accessible medium/deep blue — ~4.6:1 on white */
-  --color-primary-hover: #164ab0;
-  --color-primary-soft: #e8f0fd;
-  --color-success: #157a4a;      /* ~4.6:1 on white */
-  --color-warning: #a15c00;      /* ~4.6:1 on white — amber #d97706 alone was ~2.9:1, too low for text */
-  --color-danger: #c22a2a;       /* ~4.7:1 on white */
-  --color-shadow: rgba(29, 78, 216, 0.08);
-  --radius-sm: 0.625rem;
-  --radius-md: 0.875rem;
-  --radius-lg: 1.25rem;
+  --color-bg: #f3f3f3;           /* Lightning page canvas */
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8f8f8;
+  --color-text: #181818;         /* ~17.6:1 */
+  --color-text-muted: #5c5c5c;   /* ~6.6:1 */
+  --color-border: #e5e5e5;
+  --color-border-strong: #c9c9c9;
+  --color-primary: #0176d3;      /* Lightning brand blue, ~4.7:1 */
+  --color-primary-hover: #014486;
+  --color-primary-soft: #eef4ff;
+  --color-success: #2e844a;      /* ~4.6:1 */
+  --color-warning: #a96404;      /* ~4.6:1 — Lightning's #dd7a01 is too light for text */
+  --color-danger: #ba0517;       /* ~6.4:1 */
+  --color-shadow: rgba(24, 24, 24, 0.08);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.25rem;
+  --radius-lg: 0.5rem;
+
+  --bg: var(--color-bg);
+  --surface-2: var(--color-surface-muted);
+  --surface-hover: #f3f6fa;
+  --ink: var(--color-text);
+  --ink-2: #444444;
+  --ink-3: var(--color-text-muted);
+  --brand: var(--color-primary);
+  --brand-hover: var(--color-primary-hover);
+  --brand-soft: var(--color-primary-soft);
+  --moss: var(--color-success);
+  --moss-soft: #ebf7e6;
+  --warn: var(--color-warning);
+  --warn-soft: #fef1e6;
+  --danger: var(--color-danger);
+  --danger-soft: #fef1ee;
+  --border-light: #f3f3f3;
+
+  --primary: 207 99% 42%;
+  --ring: 207 99% 42%;
+  --secondary: 219 100% 97%;
+  --accent: 219 100% 97%;
+  --muted: 0 0% 97%;
+  --muted-foreground: 0 0% 36%;
+  --foreground: 0 0% 9%;
+  --card-foreground: 0 0% 9%;
+  --popover-foreground: 0 0% 9%;
+  --radius: 0.5rem;
 }
 
 [data-ui-theme="light"] body {
@@ -202,7 +236,6 @@ body {
 }
 .btn-primary:hover {
   background: var(--color-primary-hover);
-  transform: translateY(-1px);
 }
 .btn-ghost {
   background: transparent;
@@ -233,4 +266,70 @@ body {
     outline-offset: 2px;
     border-radius: 4px;
   }
+}
+
+/* ── Stage Path (components/StagePath.jsx) ─────────────────────────────
+   Lightning-style chevrons. Complete = green with a check, current = deep
+   blue, closed-won/lost = green/red, the rest neutral. Chevron shape is a
+   clip-path so the steps interlock without extra markup. */
+.stage-path__track {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+}
+.stage-path__item {
+  flex: 1 1 0;
+  min-width: 4.75rem;
+  margin-left: -0.35rem;
+}
+.stage-path__item:first-child { margin-left: 0; }
+.stage-path__step {
+  position: relative;
+  width: 100%;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding: 0 0.95rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--color-text);
+  background: var(--color-surface-muted);
+  clip-path: polygon(0 0, calc(100% - 0.7rem) 0, 100% 50%, calc(100% - 0.7rem) 100%, 0 100%, 0.7rem 50%);
+  transition: background-color 0.12s ease;
+}
+.stage-path__item:first-child .stage-path__step {
+  clip-path: polygon(0 0, calc(100% - 0.7rem) 0, 100% 50%, calc(100% - 0.7rem) 100%, 0 100%);
+  border-radius: 1rem 0 0 1rem;
+}
+.stage-path__item:last-child .stage-path__step {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0.7rem 50%);
+  border-radius: 0 1rem 1rem 0;
+}
+.stage-path__step.is-incomplete { background: #e5e5e5; }
+.stage-path__step.is-incomplete:hover { background: #d8d8d8; }
+.stage-path__step.is-complete { background: var(--color-success); color: #fff; }
+.stage-path__step.is-complete:hover { background: #22683a; }
+.stage-path__step.is-current { background: #014486; color: #fff; }
+.stage-path__step.is-won { background: var(--color-success); color: #fff; }
+.stage-path__step.is-lost { background: var(--color-danger); color: #fff; }
+.stage-path__step.is-selected:not(.is-current):not(.is-won):not(.is-lost) {
+  background: var(--color-primary);
+  color: #fff;
+}
+.stage-path__step:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: -4px;
+}
+.stage-path__check { flex-shrink: 0; }
+.stage-path__step > span:not(.sr-only) {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

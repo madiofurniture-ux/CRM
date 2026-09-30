@@ -7,6 +7,8 @@ import AttachmentPanel from "@/components/AttachmentPanel";
 import PettyCashBurnWidget from "@/components/PettyCashBurnWidget";
 import LinkedTasksPanel from "@/components/LinkedTasksPanel";
 import StageProgressBar from "@/components/StageProgressBar";
+import StagePath from "@/components/StagePath";
+import useWorkflow, { stageErrorMessage } from "@/hooks/useWorkflow";
 import StakeholdersCard from "@/components/StakeholdersCard";
 import ProjectTrackingTab from "@/components/ProjectTrackingTab";
 import JourneyDrawer from "@/components/JourneyDrawer";
@@ -41,6 +43,17 @@ export default function Projects() {
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [logProject, setLogProject] = useState(null);
+  const pw = useWorkflow("project", STAGES.map((s) => s.id));
+  // A workflow that restricts transitions decides the "Move to" button;
+  // otherwise the fixed build order below does.
+  const nextStageOf = (stage) => {
+    const st = pw.stageOf(stage);
+    if (st?.next?.length) {
+      const first = pw.stages.find((s) => st.next.includes(s.key));
+      if (first) return first.label;
+    }
+    return NEXT_STAGE_MAP[stage];
+  };
   // Customer-360 slide-over, keyed on phone — this app joins a customer's
   // history by phone number, not by a customer_id foreign key (a Project
   // stores `customer` as a plain display string). Same drawer Customers.jsx
@@ -112,11 +125,14 @@ export default function Projects() {
 
   const advanceStage = async (p, nextStage) => {
     try {
-      await api.put(`/projects/${p.id}/stage`, { stage: nextStage });
+      const { data } = await api.put(`/projects/${p.id}/stage`, { stage: nextStage });
       toast.success(`Project ${p.project_no} moved to ${nextStage}`);
+      setLogProject((cur) => (cur && cur.id === p.id ? { ...cur, ...data } : cur));
       load();
-    } catch {
-      toast.error("Failed to update project stage");
+    } catch (e) {
+      // Workflow gates (required fields / allowed next stages) explain themselves.
+      toast.error(stageErrorMessage(e));
+      throw e;
     }
   };
 
@@ -272,7 +288,7 @@ export default function Projects() {
         {/* Project Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filtered.map((p) => {
-            const nextStage = NEXT_STAGE_MAP[p.stage];
+            const nextStage = nextStageOf(p.stage);
             return (
               <div
                 key={p.id}
@@ -386,7 +402,7 @@ export default function Projects() {
 
                   {nextStage ? (
                     <button
-                      onClick={() => advanceStage(p, nextStage)}
+                      onClick={() => advanceStage(p, nextStage).catch(() => {})}
                       className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[var(--brand-light)] text-[var(--brand)] font-medium text-xs hover:bg-[var(--brand)] hover:text-white transition"
                     >
                       <span>Move to {nextStage}</span>
@@ -574,6 +590,8 @@ export default function Projects() {
               <button onClick={() => setLogProject(null)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
+              <StagePath wf={pw} value={logProject.stage} record={logProject}
+                         onChange={(stage) => advanceStage(logProject, stage)} />
               <StageProgressBar stages={projectLifecycleStages(logProject, pnlByProject[logProject.id])} />
               <StakeholdersCard
                 project={logProject}

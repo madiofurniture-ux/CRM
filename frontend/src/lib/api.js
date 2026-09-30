@@ -86,6 +86,9 @@ export function formatApiError(detail) {
   if (Array.isArray(detail))
     return detail.map((e) => (e?.msg ? e.msg : JSON.stringify(e))).join(" ");
   if (detail?.msg) return detail.msg;
+  // Structured 400/409s ({message, code, ...}) from the workflow gates and
+  // other validators — used to render as "[object Object]".
+  if (detail?.message) return detail.message;
   return String(detail);
 }
 

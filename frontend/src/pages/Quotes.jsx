@@ -3,6 +3,7 @@ import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
+import useWorkflow from "@/hooks/useWorkflow";
 import { inrFull, fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers } from "lucide-react";
@@ -13,9 +14,11 @@ import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 
-const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
+// Fallback only: the live list is the tenant's quotation workflow (Admin → Workflows).
+const DEFAULT_STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 
 export default function Quotes() {
+  const STAGES = useWorkflow("quote", DEFAULT_STAGES).labels;
   const [rows, setRows] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [search, setSearch] = useState("");

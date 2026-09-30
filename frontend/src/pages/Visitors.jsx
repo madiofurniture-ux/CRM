@@ -4,17 +4,21 @@ import Topbar from "@/components/Topbar";
 import SearchSelect from "@/components/SearchSelect";
 import RemarksEditor, { toRemarksArray } from "@/components/RemarksEditor";
 import api, { formatApiError } from "@/lib/api";
+import useWorkflow, { stageErrorMessage } from "@/hooks/useWorkflow";
 import { fmtDate, inrFull } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
 import { Trash2, X, Phone, Pencil, Sparkles, CheckCircle2 } from "lucide-react";
 import CustomerResolver from "@/components/CustomerResolver";
 
-const STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost", "Delivered"];
-const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
+// Fallback only: the live list is the tenant's visitor workflow (Admin → Workflows).
+const DEFAULT_STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost", "Delivered"];
 const CUSTOMER_TYPES = ["Male", "Female", "Company"];
 
 export default function Visitors() {
+  const vw = useWorkflow("visitor", DEFAULT_STAGES);
+  const STAGES = vw.labels;
+  const isKnownStage = vw.isKnownStage;
   const [rows, setRows] = useState([]);
   const [architects, setArchitects] = useState([]);
   const [staff, setStaff] = useState([]);
@@ -153,8 +157,12 @@ export default function Visitors() {
     }
   };
   const updateStage = async (v, stage) => {
-    await api.put(`/visitors/${v.id}`, { ...v, stage });
-    setRows((p) => p.map((x) => x.id === v.id ? { ...x, stage } : x));
+    try {
+      const { data } = await api.put(`/visitors/${v.id}`, { stage });
+      setRows((p) => p.map((x) => x.id === v.id ? { ...x, stage: data.stage, stage_history: data.stage_history } : x));
+    } catch (e) {
+      toast.error(stageErrorMessage(e));
+    }
   };
   const remove = async (id) => { if (!window.confirm("Delete?")) return; await api.delete(`/visitors/${id}`); load(); };
 

@@ -7,6 +7,8 @@ import LogTimeline from "@/components/LogTimeline";
 import AttachmentPanel from "@/components/AttachmentPanel";
 import LinkedTasksPanel from "@/components/LinkedTasksPanel";
 import StageProgressBar from "@/components/StageProgressBar";
+import StagePath from "@/components/StagePath";
+import useWorkflow, { stageErrorMessage } from "@/hooks/useWorkflow";
 import { leadLifecycleStages } from "@/lib/lifecycle";
 import CustomerResolver from "@/components/CustomerResolver";
 import SavedViewsBar from "@/components/SavedViewsBar";
@@ -26,8 +28,9 @@ import { toast } from "sonner";
 import { Phone, Calendar, X, Trash2, Pencil, MessageSquare, Sparkles, Download, Upload } from "lucide-react";
 import WhatsAppButton from "@/components/WhatsAppButton";
 
-const STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
-const isKnownStage = (s) => STAGES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
+// Fallback only: the live stage list is the tenant's lead workflow
+// (Admin → Workflows), loaded by useWorkflow below.
+const DEFAULT_STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 
 // "Architect Ref"/"WhatsApp"/etc are pre-existing source values seeded/used
 // before this became a dropdown — kept as real options rather than dropped,
@@ -53,6 +56,9 @@ export default function Leads() {
   const { user, canDo } = useAuth();
   const canCreate = canDo("leads", "create");
   const canEdit = canDo("leads", "edit");
+  const lw = useWorkflow("lead", DEFAULT_STAGES);
+  const STAGES = lw.labels;
+  const isKnownStage = lw.isKnownStage;
   const canDelete = canDo("leads", "delete");
   // null = the inline "new architect" sub-form is closed. It lives in its own
   // state so opening or cancelling it never touches `form` — the lead being
@@ -193,9 +199,18 @@ export default function Leads() {
   // is a partial update ($set on exactly the keys sent — see
   // validate_partial_update, which only validates fields the caller changed),
   // so one key is the correct payload for a one-field edit.
+  // The workflow's gates (required fields, allowed next stages) are enforced
+  // server-side; a refusal comes back as a 400 whose message says what to fix.
   const updateStage = async (l, stage) => {
-    await api.put(`/leads/${l.id}`, { stage });
-    setRows((p) => p.map((x) => x.id === l.id ? { ...x, stage } : x));
+    try {
+      const { data } = await api.put(`/leads/${l.id}`, { stage });
+      const patch = { stage: data.stage, stage_history: data.stage_history, stage_entered_at: data.stage_entered_at };
+      setRows((p) => p.map((x) => x.id === l.id ? { ...x, ...patch } : x));
+      setLogLead((p) => (p && p.id === l.id ? { ...p, ...patch } : p));
+    } catch (e) {
+      toast.error(stageErrorMessage(e));
+      throw e;
+    }
   };
   const remove = async (id) => { if (!window.confirm("Delete?")) return; await api.delete(`/leads/${id}`); load(); };
 
@@ -308,7 +323,7 @@ export default function Leads() {
                       <td className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)]">{l.source}</td>
                       <td className="hidden lg:table-cell px-4 py-3 text-[var(--color-text-muted)]">{l.reference}</td>
                       <td className="px-4 py-3">
-                        <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value)} disabled={!canEdit} className="px-2 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] text-xs disabled:opacity-60 disabled:cursor-not-allowed" title={!canEdit ? "You don't have permission to change a lead's stage" : !isKnownStage(l.stage) ? "Legacy/imported value — pick a stage to normalize it" : undefined}>
+                        <select value={l.stage || "New"} onChange={(e) => updateStage(l, e.target.value).catch(() => {})} disabled={!canEdit} className="px-2 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] text-xs disabled:opacity-60 disabled:cursor-not-allowed" title={!canEdit ? "You don't have permission to change a lead's stage" : !isKnownStage(l.stage) ? "Legacy/imported value — pick a stage to normalize it" : undefined}>
                           {l.stage && !isKnownStage(l.stage) && <option value={l.stage}>{l.stage} (unrecognized)</option>}
                           {STAGES.map((s) => <option key={s}>{s}</option>)}
                         </select>
@@ -502,6 +517,8 @@ export default function Leads() {
               <button onClick={() => setLogLead(null)} className="p-1.5 rounded-md hover:bg-[var(--color-surface-muted)]"><X size={16} /></button>
             </div>
             <div className="p-5 space-y-4">
+              <StagePath wf={lw} value={logLead.stage} record={logLead} canEdit={canEdit}
+                         onChange={(stage) => updateStage(logLead, stage)} />
               <StageProgressBar stages={leadLifecycleStages(logLead)} />
               <LogTimeline
                 entity="lead" itemId={logLead.id} entries={logLead.log || []}
