@@ -8,7 +8,7 @@ const AuthContext = createContext(null);
 // Every other page id keeps using the legacy `pages` grant, role_id or not.
 const GATED_MODULES = [
   "leads", "customers", "quotes", "sales", "inventory",
-  "visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty",
+  "visitors", "architects", "tasks", "invoice-gen", "meetplan", "petty", "calls",
   "commissions", "cashbook", "record-contacts",
   // api_hr.py's own permissions.py-backed modules (_can_hr/_require_hr) —
   // added so a role_id account's Payroll/Leave route+action access mirrors

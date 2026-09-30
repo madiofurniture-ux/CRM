@@ -83,6 +83,8 @@ TENANT_COLLECTIONS = {
     "settings", "workflows", "attendance", "vendors", "floors",
     "commission_rules", "commission_payouts",
     "teams", "roles", "audit_log", "notification_logs",
+    # Call log (cold calls etc.) — server.py "Call log" section.
+    "calls",
     "cashbooks", "cashbook_entries", "agent_tasks", "agent_conversations",
     "record_contacts", "saved_views", "custom_field_defs", "finance_payments",
     "project_daily_logs", "business_profiles", "purchase_orders",

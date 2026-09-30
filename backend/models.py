@@ -1662,6 +1662,63 @@ class CommissionPayout(CommissionPayoutBase):
     created_at: str
 
 
+# ------- Call log (cold calls and other sales calls) -------
+# One row per call a rep makes or takes. Deliberately its own collection, not
+# a Lead: most cold calls never become a lead, and the call record is what
+# call analytics (volume, connect rate, call -> lead conversion) count.
+CALL_OUTCOMES = ["Interested", "Callback", "Not interested", "No answer", "Busy", "Wrong number"]
+# The outcomes that mean someone actually picked up.
+CALL_CONNECTED = {"Interested", "Callback", "Not interested"}
+CALL_TYPES = ["Cold call", "Follow-up", "Inbound"]
+
+
+class CallBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    date: str = ""                        # YYYY-MM-DD; defaults to today server-side
+    phone: str = ""
+    name: Optional[str] = ""
+    company: Optional[str] = ""           # firm / builder / society, if any
+    location: Optional[str] = ""
+    division: Optional[str] = ""          # "Furniture" / "MAP" / "D&W"
+    call_type: str = "Cold call"
+    outcome: str = "No answer"
+    duration_min: Optional[float] = 0
+    notes: Optional[str] = ""
+    callback_date: Optional[str] = ""     # when outcome is Callback
+    by_user: Optional[str] = ""           # the caller; defaults to the signed-in user
+    lead_id: Optional[str] = ""           # set by POST /calls/{id}/convert, never by the client
+
+    @field_validator("outcome")
+    @classmethod
+    def _valid_outcome(cls, v):
+        v = str(v or "No answer")
+        if v not in CALL_OUTCOMES:
+            raise ValueError(f"outcome must be one of {CALL_OUTCOMES}")
+        return v
+
+    @field_validator("call_type")
+    @classmethod
+    def _valid_type(cls, v):
+        v = str(v or "Cold call")
+        if v not in CALL_TYPES:
+            raise ValueError(f"call_type must be one of {CALL_TYPES}")
+        return v
+
+
+class CallCreate(CallBase):
+    @field_validator("phone")
+    @classmethod
+    def _phone_required(cls, v):
+        if not str(v or "").strip():
+            raise ValueError("Phone number is required")
+        return v
+
+
+class Call(CallBase):
+    id: str
+    created_at: str
+
+
 # ------- Customers (post-sale lifecycle record) -------
 class CustomerBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

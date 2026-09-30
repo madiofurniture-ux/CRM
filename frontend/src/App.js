@@ -21,6 +21,7 @@ const Pipeline = lazy(() => import("@/pages/Pipeline"));
 const Quotes = lazy(() => import("@/pages/Quotes"));
 const Sales = lazy(() => import("@/pages/Sales"));
 const Visitors = lazy(() => import("@/pages/Visitors"));
+const Calls = lazy(() => import("@/pages/Calls"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const Architects = lazy(() => import("@/pages/Architects"));
 const Inventory = lazy(() => import("@/pages/Inventory"));
@@ -122,6 +123,7 @@ function App() {
           <Route path="/quotes" element={<ProtectedRoute page="quotes"><Layout><Quotes /></Layout></ProtectedRoute>} />
           <Route path="/sales" element={<ProtectedRoute page="sales"><Layout><Sales /></Layout></ProtectedRoute>} />
           <Route path="/visitors" element={<ProtectedRoute page="visitors"><Layout><Visitors /></Layout></ProtectedRoute>} />
+          <Route path="/calls" element={<ProtectedRoute page="calls"><Layout><Calls /></Layout></ProtectedRoute>} />
           <Route path="/leads" element={<ProtectedRoute page="leads"><Layout><Leads /></Layout></ProtectedRoute>} />
           <Route path="/architects" element={<ProtectedRoute page="architects"><Layout><Architects /></Layout></ProtectedRoute>} />
           <Route path="/inventory" element={<ProtectedRoute page="inventory"><Layout><Inventory /></Layout></ProtectedRoute>} />

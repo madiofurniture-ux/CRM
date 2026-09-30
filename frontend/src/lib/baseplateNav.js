@@ -37,6 +37,7 @@ export const ALL_BASEPLATE_SUBNAV = {
   sales: [
     { code: "PI", label: "Pipeline", to: "/pipeline", page: "pipeline" },
     { code: "LD", label: "Leads", to: "/leads", page: "leads" },
+    { code: "CL", label: "Call Log", to: "/calls", page: "calls" },
     { code: "QT", label: "Quotations", to: "/quotes", page: "quotes", isNew: true },
     { code: "QB", label: "Quote Builder", to: "/quotes/builder", page: "quote-builder" },
     { code: "FU", label: "Follow-ups", to: "/quotes/followups", page: "quote-followups" },

@@ -35,7 +35,7 @@ const DEFAULT_STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation"
 // "Architect Ref"/"WhatsApp"/etc are pre-existing source values seeded/used
 // before this became a dropdown — kept as real options rather than dropped,
 // same "unrecognized" fallback pattern as STAGES above covers anything else.
-const SOURCES = ["Walk-in", "Architect", "Referral", "Website", "Social Media", "WhatsApp", "Instagram", "Site Visit", "Other"];
+const SOURCES = ["Walk-in", "Architect", "Referral", "Website", "Social Media", "WhatsApp", "Instagram", "Site Visit", "Cold Call", "Other"];
 const isKnownSource = (s) => SOURCES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 
 export default function Leads() {

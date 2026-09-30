@@ -44,7 +44,7 @@ from models import (
     new_id, now_iso,
     LoginRequest, LoginResponse, UserCreate, UserUpdate, UserPublic,
     VisitorCreate, Visitor,
-    LeadCreate, Lead,
+    LeadCreate, Lead, CallCreate, Call,
     ArchitectCreate, Architect,
     QuoteCreate, Quote,
     SaleCreate, Sale,
@@ -382,7 +382,7 @@ async def delete_user(user_id: str, current: dict = Depends(require_admin)):
 # ══════════════════════════════════════════════════════════════════
 FY_COLLECTIONS = {"quotes", "sales", "visitors", "leads", "invoices",
                   "petty_cash", "payments", "meets", "tasks",
-                  "projects", "dw_surveys", "stock_movements"}
+                  "projects", "dw_surveys", "stock_movements", "calls"}
 FY_DATE_FIELD = {"tasks": "due", "projects": "start_date"}   # which field holds the record's date
 
 
@@ -837,7 +837,7 @@ ALL_MODULE_IDS = [
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
     "finance-payments", "purchase-orders", "master-data", "manufacturer-orders",
-    "payroll",
+    "payroll", "calls", "analytics",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -847,6 +847,24 @@ TENANT_CONFIG_DEFAULTS = {
     "display_name": "MADIO CRM", "short_name": "MADIO", "logo_url": "",
     "primary_color": "", "secondary_color": "", "enabled_modules": ALL_MODULE_IDS,
 }
+
+# Module ids that no longer exist. A tenant's saved enabled_modules may still
+# list them; they're dropped on read and on save instead of failing the save.
+RETIRED_MODULE_IDS = {"requirements", "configurator"}
+# The module ids that existed before tenants started recording which modules
+# they had seen (`seen_modules`). A tenant that saved enabled_modules before
+# then is treated as having seen exactly these, so modules added later show up
+# switched ON for it rather than silently hidden (the payroll-menu defect).
+MODULES_BEFORE_SEEN_TRACKING = [m for m in ALL_MODULE_IDS if m not in ("calls", "analytics")]
+
+
+def effective_enabled_modules(tenant: dict) -> list:
+    stored = tenant.get("enabled_modules")
+    if not isinstance(stored, list):
+        return list(ALL_MODULE_IDS)
+    seen = set(tenant.get("seen_modules") or MODULES_BEFORE_SEEN_TRACKING)
+    newer = [m for m in ALL_MODULE_IDS if m not in seen]
+    return [m for m in stored if m in ALL_MODULE_IDS] + [m for m in newer if m not in stored]
 
 
 async def backfill_tenant() -> int:
@@ -907,6 +925,8 @@ async def tenant_me(user: dict = Depends(get_current_user)):
     t = t or {"id": tid, "name": tid or "(no tenant)", "status": "unknown"}
     for k, v in TENANT_CONFIG_DEFAULTS.items():
         t.setdefault(k, v)
+    t["enabled_modules"] = effective_enabled_modules(t)
+    t.pop("seen_modules", None)
     return t
 
 
@@ -924,9 +944,12 @@ async def tenant_update_config(payload: dict, user: dict = Depends(require_admin
             update[k] = str(payload[k] or "")
     if "enabled_modules" in payload:
         mods = payload["enabled_modules"]
+        if isinstance(mods, list):
+            mods = [m for m in mods if m not in RETIRED_MODULE_IDS]
         if not isinstance(mods, list) or not all(m in ALL_MODULE_IDS for m in mods):
             raise HTTPException(status_code=400, detail="enabled_modules must be a subset of the known module ids")
         update["enabled_modules"] = mods
+        update["seen_modules"] = list(ALL_MODULE_IDS)
     if not update:
         raise HTTPException(status_code=400, detail="Nothing to update")
     await db.tenants.update_one({"id": tid}, {"$set": update})
@@ -1771,6 +1794,77 @@ make_crud(api, "visitors", "visitors", VisitorCreate, Visitor, module="visitors"
 make_crud(api, "leads", "leads", LeadCreate, Lead, after_write=_sync_lead_followup_task,
           module="leads", owner_field="assigned_to", on_create=_schedule_lead_followup_reminder,
           normalize=normalize_lead, redact=_lead_out, entity="lead")
+
+
+# ── Call log ──────────────────────────────────────────────────────────────
+# Cold calls (and follow-up / inbound calls) a rep logs one by one. A call is
+# not a lead: most cold calls never become one, and call analytics count the
+# calls themselves. "Convert to lead" creates the lead through the same
+# normalizer, stage check and automations as the Leads screen.
+async def normalize_call(doc: dict, existing: dict | None, user: dict) -> None:
+    if "phone" in doc and (existing is None or doc.get("phone") != existing.get("phone")):
+        doc["phone"] = _phone_or_400(doc.get("phone"))
+    if existing is None:
+        doc["date"] = str(doc.get("date") or "").strip() or _today()
+        doc["by_user"] = str(doc.get("by_user") or "").strip() or user.get("name", "")
+        doc["by_user_id"] = user.get("id", "")
+        doc["lead_id"] = ""
+    else:
+        doc.pop("lead_id", None)        # only /calls/{id}/convert links a lead
+        doc.pop("by_user_id", None)
+    if doc.get("outcome") and doc.get("outcome") != "Callback" and "callback_date" not in doc:
+        doc["callback_date"] = ""
+
+
+make_crud(api, "calls", "calls", CallCreate, Call, module="calls", owner_field="by_user",
+          normalize=normalize_call, list_filters=("division", "outcome", "by_user", "call_type"))
+
+
+@api.post("/calls/{call_id}/convert")
+async def convert_call_to_lead(call_id: str, user: dict = Depends(get_current_user)):
+    """Turn a call into a lead (idempotent). If a lead with this phone already
+    exists, the call is linked to it instead of creating a duplicate."""
+    await _require_permission("calls", "edit", user)
+    await _require_permission("leads", "create", user)
+    owned = tenancy.scope({"id": call_id}, "calls", user)
+    call = await db.calls.find_one(owned, {"_id": 0})
+    if not call:
+        raise HTTPException(status_code=404, detail="Not found")
+    if call.get("lead_id"):
+        lead = await db.leads.find_one(tenancy.scope({"id": call["lead_id"]}, "leads", user), {"_id": 0})
+        if lead:
+            return {"lead_id": lead["id"], "created": False, "lead": _lead_out(lead, user)}
+    existing = await db.leads.find_one(tenancy.scope({"phone": call.get("phone")}, "leads", user), {"_id": 0})
+    if existing:
+        await db.calls.update_one(owned, {"$set": {"lead_id": existing["id"]}})
+        return {"lead_id": existing["id"], "created": False, "lead": _lead_out(existing, user)}
+    name = str(call.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Add the person's name to the call before converting it to a lead.")
+    try:
+        doc = LeadCreate(
+            date=call.get("date") or _today(), name=name, phone=call.get("phone", ""),
+            source="Cold Call", reference=call.get("by_user") or user.get("name", "") or "Call log",
+            assigned_to=call.get("by_user", ""), remarks=call.get("notes", ""),
+            follow_up_date=call.get("callback_date", ""),
+        ).model_dump()
+    except PydanticValidationError as e:
+        raise HTTPException(status_code=422, detail="; ".join(err["msg"] for err in e.errors()))
+    doc["id"] = new_id()
+    doc["created_at"] = now_iso()
+    await normalize_lead(doc, None, user)
+    await validate_stage("leads", doc, user)
+    stamp_fy(doc, "leads")
+    stamp_closure(doc, "leads")
+    tenancy.stamp(doc, "leads", user)
+    await db.leads.insert_one(doc)
+    doc.pop("_id", None)
+    await _sync_lead_followup_task(doc, user)
+    await _schedule_lead_followup_reminder(doc, user)
+    await record_activity("lead", doc["id"], "create", user, after=doc, note="Converted from call log")
+    await run_stage_automation("leads", None, doc, user, created=True)
+    await db.calls.update_one(owned, {"$set": {"lead_id": doc["id"]}})
+    return {"lead_id": doc["id"], "created": True, "lead": _lead_out(doc, user)}
 make_crud(api, "architects", "architects", ArchitectCreate, Architect, module="architects", normalize=normalize_architect)
 
 
@@ -4431,27 +4525,27 @@ DEFAULT_ROLES = [
         {"module": m, "view": True, "create": True, "edit": True, "delete": True,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
-                  "architects", "tasks", "invoice-gen", "meetplan", "petty",
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "calls",
                   "commissions", "cashbook", "record-contacts")
     ]},
     {"name": "Management", "permissions": [
         {"module": m, "view": True, "create": False, "edit": True, "delete": False,
          "approve": True, "export": True, "scope": "all"}
         for m in ("leads", "customers", "quotes", "sales", "inventory", "visitors",
-                  "architects", "tasks", "invoice-gen", "meetplan", "petty",
+                  "architects", "tasks", "invoice-gen", "meetplan", "petty", "calls",
                   "commissions", "cashbook", "record-contacts")
     ]},
     {"name": "Sales Manager", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": True, "export": False, "scope": "team"}
         for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
-                  "tasks", "meetplan", "record-contacts")
+                  "tasks", "meetplan", "calls", "record-contacts")
     ]},
     {"name": "Salesperson", "permissions": [
         {"module": m, "view": True, "create": True, "edit": True, "delete": False,
          "approve": False, "export": False, "scope": "own"}
         for m in ("leads", "customers", "quotes", "sales", "visitors", "architects",
-                  "tasks", "meetplan", "record-contacts")
+                  "tasks", "meetplan", "calls", "record-contacts")
     ]},
     {"name": "Inventory", "permissions": [
         {"module": "inventory", "view": True, "create": True, "edit": True,

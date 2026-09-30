@@ -6,7 +6,7 @@ import {
   Building2, CalendarDays, Hammer, DoorOpen, Package, BarChart3, ListTodo,
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
-  LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare,
+  LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare, PhoneOutgoing,
 } from "lucide-react";
 
 // app: the switcher group · id: permission key · to: route · label/icon: display
@@ -17,6 +17,7 @@ export const NAV = [
 
   // Sell
   { app: "sell", id: "leads", to: "/leads", label: "Leads", icon: Sparkles },
+  { app: "sell", id: "calls", to: "/calls", label: "Call Log", icon: PhoneOutgoing },
   { app: "sell", id: "pipeline", to: "/pipeline", label: "Pipeline", icon: Columns3 },
   { app: "sell", id: "quotes", to: "/quotes", label: "Deals / Quotes", icon: FileText },
   { app: "sell", id: "quote-builder", to: "/quotes/builder", label: "Quote Builder", icon: LayoutTemplate },

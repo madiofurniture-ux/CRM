@@ -26,7 +26,7 @@ DATA_DIR = Path(__file__).parent / "data"
 # Anything not supplied gets a random 4-digit PIN, printed ONCE to the server log
 # at first startup so an admin can hand it out and then change it in Role Manager.
 
-_SALES_PAGES = ["dashboard", "alerts", "pipeline", "quotes", "sales", "visitors",
+_SALES_PAGES = ["dashboard", "alerts", "pipeline", "quotes", "sales", "visitors", "calls",
                 "leads", "architects", "inventory", "inv-analytics", "projects",
                 "meetplan", "tasks", "attendance", "reports"]
 
