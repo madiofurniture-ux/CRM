@@ -41,6 +41,18 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   Cash is read-only history. See `docs/FINANCE.md`.
 - New module ids must also go in `MODULES_ADDED_AFTER_TRACKING` in
   `server.py` (tenants with a saved module list then see them switched on).
+- Delivery go-live (`backend/operations.py`, routes in server.py's "Delivery
+  go-live" block, tests in `tests/test_delivery_golive.py`):
+  division-specific project checklists stored in `projects.milestones`
+  (Furniture / D&W / MAP each have their own stage list; "Production" and
+  "Installation"/"Application" names feed the customer journey), project
+  costing + payment status (`PUT /projects/{id}/costing`), service & warranty
+  tickets (`service_tickets`), Furniture/MAP site surveys (`site_surveys`; D&W
+  keeps `dw_surveys`), the follow-up engine (`GET /followups/summary`) and
+  project / customer 360 (`/projects/{id}/summary`, `/customers/{id}/overview`).
+  These ride the existing `projects`/`leads`/`customers` permissions — nav items
+  use `perm:` in `frontend/src/lib/nav.js` — so no account needs re-granting.
+  Uploaded files are private: served only by `GET /api/documents/{id}/file`.
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.
