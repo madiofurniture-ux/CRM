@@ -118,9 +118,11 @@ def test_normalize_recomputes_on_update_using_existing_line_items():
     asyncio.run(run())
 
 
-def test_normalize_is_a_noop_when_neither_line_items_nor_existing_present():
+def test_new_invoice_without_lines_still_gets_server_totals_and_a_number():
+    """Every new invoice's money is server-derived, even an empty one."""
     async def run():
-        doc = {"customer": "Just renaming, no line items in payload"}
+        doc = {"customer": "No line items yet", "date": "2026-10-01", "paid": 5000}
         await server.normalize_invoice(doc, None, ADMIN)
-        assert "subtotal" not in doc
+        assert doc["total"] == 0.0 and doc["paid"] == 0.0 and doc["balance"] == 0.0
+        assert doc["invoice_no"].endswith("/26-27/0001")
     asyncio.run(run())

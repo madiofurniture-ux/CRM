@@ -2658,22 +2658,145 @@ async def record_manufacturer_payment(order_id: str, payload: ManufacturerPaymen
     return redact_manufacturer_name(out, user)
 
 
+async def _next_invoice_no(date_str: str, user: dict) -> str:
+    office = await _get_settings()
+    existing = await db.invoices.find(
+        tenancy.scope({}, "invoices", user), {"_id": 0, "invoice_no": 1}).to_list(20000)
+    return lc.next_invoice_no(existing, office.get("invoice_prefix") or "INV",
+                              fy_of(date_str or lc.today_iso()))
+
+
 async def normalize_invoice(doc: dict, existing: dict | None, user: dict) -> None:
-    """subtotal/discount_total/cgst/sgst/igst/total are always recomputed from
-    line_items server-side — same precedent as po_totals()/PDF rendering for
-    purchase orders: an invoice is money handed to a customer, so its totals
-    can never be a client-supplied number."""
-    if "line_items" not in doc and existing is None:
+    """
+    An invoice is money handed to a customer, so nothing about its money is
+    taken from the client:
+    - subtotal/discount_total/GST/total are recomputed from line_items;
+    - IGST vs CGST+SGST follows the place of supply against the home state;
+    - paid/balance come from recorded payments (or, for a sale-linked
+      invoice, from the sale), never from the form; Paid follows the balance;
+    - the number is assigned server-side (PREFIX/FY/NNNN) and is unique.
+    """
+    prev = existing or {}
+    no = str(doc.get("invoice_no") or "").strip()
+    if existing is None and not no:
+        doc["invoice_no"] = await _next_invoice_no(doc.get("date"), user)
+    elif "invoice_no" in doc:
+        if not no:
+            doc.pop("invoice_no")  # a blank on edit keeps the existing number
+        else:
+            clash = await db.invoices.find_one(
+                tenancy.scope({"invoice_no": no, "id": {"$ne": prev.get("id", "")}}, "invoices", user))
+            if clash:
+                raise HTTPException(status_code=409, detail=f"Invoice number {no} is already used.")
+            doc["invoice_no"] = no
+    if "place_of_supply" in doc:
+        office = await _get_settings()
+        doc["is_igst"] = lc.is_interstate(doc.get("place_of_supply"), office.get("home_state") or "Telangana")
+    if "line_items" in doc or "is_igst" in doc or existing is None:
+        lines = doc.get("line_items", prev.get("line_items") or [])
+        is_igst = doc.get("is_igst", prev.get("is_igst", False))
+        doc.update(lc.invoice_totals(lines, bool(is_igst)))
+    doc.pop("paid", None)
+    doc.pop("balance", None)
+    total = doc.get("total", prev.get("total"))
+    doc.update(lc.invoice_payment_state(total, prev.get("paid", 0), doc.get("status", prev.get("status"))))
+
+
+async def _sync_invoices(user: dict, *, invoice_id: str = "", sale_id: str = "",
+                         keep_manual: bool = False) -> None:
+    """Re-derive paid/balance/status for one invoice (from its payments) or
+    for every invoice on a sale (mirroring the sale's paid amount)."""
+    if sale_id:
+        sale = await db.sales.find_one(tenancy.scope({"id": sale_id}, "sales", user), {"_id": 0})
+        invs = await db.invoices.find(tenancy.scope({"sale_id": sale_id}, "invoices", user),
+                                      {"_id": 0}).to_list(100)
+        remaining = lc.money((sale or {}).get("paid"))
+        for inv in sorted(invs, key=lambda i: str(i.get("date") or "")):
+            if inv.get("status") == "Cancelled":
+                continue
+            state = lc.invoice_payment_state(inv.get("total"), remaining, inv.get("status"))
+            remaining = max(0.0, remaining - state["paid"])
+            await db.invoices.update_one(tenancy.scope({"id": inv["id"]}, "invoices", user), {"$set": state})
         return
-    lines = doc.get("line_items", existing.get("line_items") if existing else [])
-    is_igst = doc.get("is_igst", existing.get("is_igst") if existing else False)
-    doc.update(lc.invoice_totals(lines, bool(is_igst)))
+    if not invoice_id:
+        return
+    owned = tenancy.scope({"id": invoice_id}, "invoices", user)
+    inv = await db.invoices.find_one(owned, {"_id": 0})
+    if not inv:
+        return
+    if inv.get("sale_id"):
+        await _sync_invoices(user, sale_id=inv["sale_id"])
+        return
+    pays = await db.payments.find(tenancy.scope({"against_invoice_id": invoice_id}, "payments", user),
+                                  {"_id": 0, "amount": 1, "direction": 1}).to_list(1000)
+    if not pays and keep_manual:
+        return  # older invoice with a typed-in paid amount and no payment records: leave it
+    paid = sum(lc.money(p.get("amount")) * (-1 if p.get("direction") == "Refund" else 1) for p in pays)
+    await db.invoices.update_one(owned, {"$set": lc.invoice_payment_state(inv.get("total"), paid, inv.get("status"))})
+
+
+async def _invoice_after_write(doc: dict, user: dict):
+    if doc.get("sale_id") or doc.get("id"):
+        await _sync_invoices(user, invoice_id=doc.get("id", ""), keep_manual=True)
+
+
+@api.post("/invoices/from-sale/{sale_id}")
+async def invoice_from_sale(sale_id: str, user: dict = Depends(get_current_user)):
+    """
+    Raise the tax invoice for a sale in one click: customer, lines, GST and
+    links come from the sale and its quotation. Idempotent: a sale already
+    invoiced (and not cancelled) returns that invoice.
+    """
+    await _require_permission("invoice-gen", "create", user)
+    sale = await db.sales.find_one(tenancy.scope({"id": sale_id}, "sales", user), {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    existing = await db.invoices.find_one(
+        tenancy.scope({"sale_id": sale_id, "status": {"$ne": "Cancelled"}}, "invoices", user), {"_id": 0})
+    if existing:
+        return existing
+    quote = await db.quotes.find_one(tenancy.scope({"id": sale.get("quote_id", "")}, "quotes", user),
+                                     {"_id": 0}) if sale.get("quote_id") else None
+    quote = quote or {}
+    tax_pct = quote.get("tax_pct") if quote.get("tax_pct") not in (None, "") else 18.0
+    sale_lines = sale.get("line_items") or []
+    if not sale_lines and quote.get("id"):
+        version = int(quote.get("version") or 1)
+        sale_lines = [l for l in await _quote_lines(quote["id"], user) if int(l.get("version") or 1) == version]
+    lines = lc.invoice_lines_from_sale(
+        sale_lines, quote.get("discount") if sale_lines else 0, tax_pct,
+        sale.get("value"), f"As per {sale.get('sale_no') or 'order'} {sale.get('quote_ref') or ''}".strip())
+    project = await db.projects.find_one(tenancy.scope({"sale_id": sale_id}, "projects", user),
+                                         {"_id": 0, "id": 1, "site_address": 1})
+    customer = await db.customers.find_one(
+        tenancy.scope({"phone": sale.get("phone") or quote.get("phone") or "__none__"}, "customers", user),
+        {"_id": 0}) if (sale.get("phone") or quote.get("phone")) else None
+    office = await _get_settings()
+    doc = InvoiceCreate(
+        date=lc.today_iso(), customer=sale.get("customer") or quote.get("customer") or "",
+        phone=sale.get("phone") or quote.get("phone") or "",
+        billing_address=(customer or {}).get("address") or (project or {}).get("site_address") or "",
+        gstin=(customer or {}).get("gstin") or "", place_of_supply=office.get("home_state") or "Telangana",
+        line_items=lines, by_user=user.get("name", ""), status="Draft",
+        sale_id=sale_id, project_id=(project or {}).get("id", ""), quote_id=sale.get("quote_id", ""),
+        customer_id=(customer or {}).get("id", ""),
+        notes="Thank you for your business.",
+    ).model_dump()
+    await normalize_invoice(doc, None, user)
+    doc.update(id=new_id(), created_at=now_iso())
+    stamp_fy(doc, "invoices")
+    tenancy.stamp(doc, "invoices", user)
+    await db.invoices.insert_one(dict(doc))
+    doc.pop("_id", None)
+    await _sync_invoices(user, sale_id=sale_id)
+    await record_activity("invoice", doc["id"], "create", user, note=f"From sale {sale.get('sale_no', sale_id)}")
+    return await db.invoices.find_one(tenancy.scope({"id": doc["id"]}, "invoices", user), {"_id": 0})
 
 
 make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="assigned_to",
           normalize=normalize_task, personal=True)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user",
-          normalize=normalize_invoice)
+          normalize=normalize_invoice, after_write=_invoice_after_write)
 make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by",
           personal=True)
 
@@ -3868,7 +3991,8 @@ async def outstanding_report(user: dict = Depends(get_current_user)):
     quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
 
     outstanding_sales = [s for s in sales if (s.get("balance") or 0) > 0]
-    outstanding_invoices = [i for i in invoices if (i.get("balance") or 0) > 0]
+    # A sale-linked invoice's balance is the sale's balance; count it once.
+    outstanding_invoices = [i for i in invoices if lc.money(i.get("balance")) > 0 and not i.get("sale_id")]
     hot_quotes = [q for q in quotes if q.get("stage") in ("Negotiation", "Quoted") and (q.get("value") or 0) >= 100000]
 
     total_sales_out = sum((s.get("balance") or 0) for s in outstanding_sales)
@@ -4732,8 +4856,9 @@ async def analytics_revenue(user: dict = Depends(get_current_user)):
         db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000),
         db.invoices.find(tenancy.scope({}, "invoices", user), {"_id": 0}).to_list(5000),
     )
-    collected = sum((s.get("paid") or 0) for s in sales) + sum((i.get("paid") or 0) for i in invoices)
-    pending = sum((s.get("balance") or 0) for s in sales) + sum((i.get("balance") or 0) for i in invoices)
+    invoices = [i for i in invoices if not i.get("sale_id")]  # sale-linked: already in the sale
+    collected = sum(lc.money(s.get("paid")) for s in sales) + sum(lc.money(i.get("paid")) for i in invoices)
+    pending = sum(lc.money(s.get("balance")) for s in sales) + sum(lc.money(i.get("balance")) for i in invoices)
     total = collected + pending
     return {
         "collected": collected, "pending": pending, "total": total,
@@ -5780,21 +5905,10 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
         )
         if sale:
             await _settle_sale_balance(sale, user)
-    if doc.get("against_invoice_id") and doc.get("direction") != "Refund":
-        invoice = await db.invoices.find_one_and_update(
-            tenancy.scope({"id": doc["against_invoice_id"]}, "invoices", user),
-            {"$inc": {"paid": lc.money(doc.get("amount"))}},
-            return_document=ReturnDocument.AFTER,
-        )
-        if invoice:
-            paid = lc.money(invoice.get("paid"))
-            total = lc.money(invoice.get("total"))
-            balance = max(0.0, total - paid)
-            update = {"balance": balance}
-            if balance == 0:
-                update["status"] = "Paid"
-            await db.invoices.update_one(
-                tenancy.scope({"id": invoice["id"]}, "invoices", user), {"$set": update})
+    if doc.get("against_invoice_id"):
+        await _sync_invoices(user, invoice_id=doc["against_invoice_id"])
+    if doc.get("against_sale_id"):
+        await _sync_invoices(user, sale_id=doc["against_sale_id"])
     return doc
 
 
@@ -5829,6 +5943,10 @@ async def delete_payment(item_id: str, user: dict = Depends(get_current_user)):
             await db.sales.update_one(
                 tenancy.scope({"id": sale["id"]}, "sales", user),
                 {"$set": {"balance": max(0.0, value - paid), "status": status}})
+    if payment.get("against_invoice_id"):
+        await _sync_invoices(user, invoice_id=payment["against_invoice_id"])
+    if payment.get("against_sale_id"):
+        await _sync_invoices(user, sale_id=payment["against_sale_id"])
     return {"ok": True}
 
 

@@ -739,9 +739,16 @@ def mask_manufacturer_order(doc: dict) -> dict:
 # ------- Invoice -------
 class InvoiceBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    invoice_no: str
+    invoice_no: Optional[str] = ""   # blank -> assigned server-side, PREFIX/FY/NNNN
     date: str
+    due_date: Optional[str] = ""
     customer: str
+    # Lineage. A sale-linked invoice is a tax document for money tracked on
+    # the sale: its paid/balance mirror the sale's (see _sync_invoices).
+    sale_id: Optional[str] = ""
+    project_id: Optional[str] = ""
+    quote_id: Optional[str] = ""
+    customer_id: Optional[str] = ""
     billing_address: Optional[str] = ""
     phone: Optional[str] = ""
     gstin: Optional[str] = ""
@@ -1259,6 +1266,8 @@ class OfficeSettings(BaseModel):
     address: Optional[str] = "Hyderabad, Telangana"
     gstin: Optional[str] = ""
     invoice_prefix: Optional[str] = "MAD"
+    # GST registration state: a place of supply outside it is interstate (IGST).
+    home_state: Optional[str] = "Telangana"
 
 
 # ------- Tenant business profile: per-tenant division roster, so a sister

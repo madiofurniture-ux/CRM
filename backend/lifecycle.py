@@ -574,6 +574,69 @@ def invoice_totals(lines: Iterable[dict], is_igst: bool) -> dict:
     }
 
 
+def next_invoice_no(existing: Iterable[dict], prefix: str, fy: str) -> str:
+    """PREFIX/26-27/0001: one running series per financial year."""
+    fy_short = fy[2:] if len(fy) == 7 else fy          # '2026-27' -> '26-27'
+    stem = f"{prefix or 'INV'}/{fy_short}/"
+    top = 0
+    for inv in existing:
+        no = str(inv.get("invoice_no") or "")
+        if no.startswith(stem):
+            m = re.search(r"(\d+)\s*$", no)
+            if m:
+                top = max(top, int(m.group(1)))
+    return f"{stem}{top + 1:04d}"
+
+
+def is_interstate(place_of_supply: Any, home_state: Any) -> bool:
+    pos = str(place_of_supply or "").strip().lower()
+    home = str(home_state or "").strip().lower()
+    return bool(pos and home and pos != home)
+
+
+def invoice_payment_state(total: Any, paid: Any, status: Any) -> dict:
+    """paid/balance/status from the money actually received. Paid is never a
+    typed-in status: it follows the balance, and a cancelled invoice stays so."""
+    t, p = money(total), max(0.0, money(paid))
+    p = min(p, t) if t > 0 else p
+    balance = round(max(0.0, t - p), 2)
+    st = str(status or "Draft")
+    if st != "Cancelled":
+        if t > 0 and balance == 0:
+            st = "Paid"
+        elif st == "Paid":
+            st = "Sent"
+    return {"paid": round(p, 2), "balance": balance, "status": st}
+
+
+def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: Any,
+                            fallback_value: Any, fallback_label: str) -> list[dict]:
+    """Quote/sale lines (w/h/sft, rate, amount) -> invoice LineItems. The
+    quote's absolute discount is spread as the same % on every line so the
+    invoice total matches the quote's grand total."""
+    lines = [calc_line(dict(l)) for l in sale_lines or []]
+    subtotal = lines_subtotal(lines)
+    tax = money(tax_pct)
+    disc_pct = round(min(money(discount), subtotal) / subtotal * 100, 4) if subtotal > 0 else 0
+    out = []
+    for l in lines:
+        by_area = money(l.get("sft")) > 0
+        qty = money(l.get("sft")) if by_area else (money(l.get("qty")) or 1)
+        out.append({
+            "sku": str(l.get("sku") or ""), "hsn": str(l.get("hsn") or ""),
+            "description": str(l.get("description") or l.get("item") or l.get("name") or "Item"),
+            "qty": qty, "rate": money(l.get("rate")),
+            "unit": "sqft" if by_area else str(l.get("unit") or ""),
+            "discount_pct": disc_pct, "tax_pct": tax,
+        })
+    if not out:
+        base = money(fallback_value)
+        out = [{"sku": "", "hsn": "", "description": fallback_label, "qty": 1,
+                "rate": round(base / (1 + tax / 100), 2) if tax else base,
+                "unit": "", "discount_pct": 0, "tax_pct": tax}]
+    return out
+
+
 # ------------------------------------------------------------- D&W surveys
 def calc_opening(opening: dict) -> dict:
     """W and H are captured in INCHES in the field; area is square feet."""
