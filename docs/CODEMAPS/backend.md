@@ -49,6 +49,8 @@ quote-lines, dw-openings, vendors, floors, sites.
 Auth & tenants   POST /auth/login · /auth/users (admin; reports_to validated, no loops)
                  GET /users/directory · GET /tenants/me (effective_enabled_modules)
                  PUT /tenants/me/config (drops retired module ids)
+Flows            GET /flows/meta · GET/POST /flows · PUT/DELETE /flows/{id} · /flows/{id}/toggle|test
+                 POST /flows/run-scheduled · GET /flow-runs (flows.py; scheduler on the dispatch loop)
 Workflows        GET /workflows[/{entity}] · PUT /workflows/{entity} {stages, rules, enforce}
                  POST /workflows/{entity}/adopt|reset
 Projects         POST/PUT /projects · PUT /projects/{id}/stage (gates + automations)

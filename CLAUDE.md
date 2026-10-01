@@ -39,6 +39,9 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   visitor-to-profit lineage, Deal P&L and Company P&L
   (`backend/finance_lineage.py`, `frontend/src/pages/ProfitLoss.jsx`). Petty
   Cash is read-only history. See `docs/FINANCE.md`.
+- Flows (tenant-built automations: triggers incl. scheduled, conditions,
+  multi-step actions, waits, run log): `backend/flows.py`, "Flows" section of
+  `server.py`, `frontend/src/pages/Flows.jsx`. See `docs/FLOWS.md`.
 - New module ids must also go in `MODULES_ADDED_AFTER_TRACKING` in
   `server.py` (tenants with a saved module list then see them switched on).
 - Delivery go-live (`backend/operations.py`, routes in server.py's "Delivery

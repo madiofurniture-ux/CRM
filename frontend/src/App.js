@@ -59,6 +59,7 @@ const DataCentre = lazy(() => import("@/pages/DataCentre"));
 const DataHealth = lazy(() => import("@/pages/DataHealth"));
 const FinancialYear = lazy(() => import("@/pages/FinancialYear"));
 const Workflows = lazy(() => import("@/pages/Workflows"));
+const Flows = lazy(() => import("@/pages/Flows"));
 const BusinessSettings = lazy(() => import("@/pages/BusinessSettings"));
 const MasterData = lazy(() => import("@/pages/MasterData"));
 const CustomFields = lazy(() => import("@/pages/CustomFields"));
@@ -170,6 +171,7 @@ function App() {
           <Route path="/admin/data-health" element={<ProtectedRoute page="data-health"><Layout><DataHealth /></Layout></ProtectedRoute>} />
           <Route path="/admin/financial-year" element={<ProtectedRoute page="financial-year"><Layout><FinancialYear /></Layout></ProtectedRoute>} />
           <Route path="/admin/workflows" element={<ProtectedRoute page="workflows"><Layout><Workflows /></Layout></ProtectedRoute>} />
+          <Route path="/admin/flows" element={<ProtectedRoute page="flows"><Layout><Flows /></Layout></ProtectedRoute>} />
           <Route path="/admin/business" element={<ProtectedRoute page="business"><Layout><BusinessSettings /></Layout></ProtectedRoute>} />
           <Route path="/admin/master-data" element={<ProtectedRoute page="master-data"><Layout><MasterData /></Layout></ProtectedRoute>} />
           <Route path="/admin/custom-fields" element={<ProtectedRoute page="custom-fields"><Layout><CustomFields /></Layout></ProtectedRoute>} />

@@ -335,18 +335,22 @@ def split_at_wait(steps: list, start: int = 0) -> tuple[list, Optional[int], int
 
 
 def flow_summary(flow: dict) -> str:
-    """One line for lists: 'When a Quotation enters Won → 2 steps'."""
+    """One line for lists, e.g. 'When a Quotation enters won: 2 steps' or
+    '2 days before a Quotation's valid until: 1 step'."""
     t = flow.get("trigger") or {}
     kind = t.get("type")
-    what = {
-        "created": "is created", "updated": "is saved",
-        "stage_enter": f"enters {t.get('stage', '')}",
-        "field_changed": f"changes {t.get('field', '')}",
-        "date_relative": (f"{abs(t.get('offset_days', 0))} days {'before' if t.get('offset_days', 0) < 0 else 'after'} "
-                          f"{t.get('field', '')}" if t.get("offset_days") else f"on {t.get('field', '')}"),
-        "stage_stale": f"sits in {t.get('stage', '')} for {t.get('days', 0)} days",
-    }.get(kind, "")
-    n = len(flow.get("steps") or [])
     noun = SINGULAR.get(flow.get("entity"), str(flow.get("entity") or "record"))
     article = "an" if noun[:1].lower() in "aeiou" else "a"
-    return f"When {article} {noun} {what}: {n} step{'s' if n != 1 else ''}"
+    field = str(t.get("field") or "").replace("_", " ")
+    n = len(flow.get("steps") or [])
+    steps = f"{n} step{'s' if n != 1 else ''}"
+    if kind == "date_relative":
+        off = int(t.get("offset_days") or 0)
+        when = f"On {article} {noun}'s {field}" if not off else \
+            f"{abs(off)} day{'s' if abs(off) != 1 else ''} {'before' if off < 0 else 'after'} {article} {noun}'s {field}"
+        return f"{when}: {steps}"
+    if kind == "stage_stale":
+        return f"When {article} {noun} sits in {t.get('stage', '')} for {t.get('days', 0)} days: {steps}"
+    what = {"created": "is created", "updated": "is saved", "stage_enter": f"enters {t.get('stage', '')}",
+            "field_changed": f"changes {field}"}.get(kind, "")
+    return f"When {article} {noun} {what}: {steps}"

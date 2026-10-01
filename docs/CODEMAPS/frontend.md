@@ -42,6 +42,7 @@ Theme tokens are in `index.css` (`--color-*`, remapped legacy tokens under
 /reports/project-pnl  project-pnl   ProjectPnL.jsx
 /petty-cash           petty         PettyCash.jsx (read-only history)
 /admin/workflows      workflows     Workflows.jsx (stages, gates, automations builder)
+/admin/flows          flows         Flows.jsx (flow builder, dry run, run log)
 /admin/roles          roles         RoleManager.jsx (users, incl. "Reports to")
 /discussions          discussions   Discussions.jsx (Team Board, polls every 15s)
 ```

@@ -225,3 +225,11 @@ def test_field_change_ignores_saves_where_the_old_value_is_unknown():
     assert not fl.event_matches(flow, created=False, before={"stage": "New", "__partial__": True},
                                 record=rec, entered_key=None)
     assert fl.event_matches(flow, created=False, before={"assigned_to": "Priya"}, record=rec, entered_key=None)
+
+
+def test_summaries_read_naturally():
+    assert fl.flow_summary({"entity": "quote", "steps": [1],
+                            "trigger": {"type": "date_relative", "field": "valid_until", "offset_days": -2}}) \
+        == "2 days before a Quotation's valid until: 1 step"
+    assert fl.flow_summary({"entity": "invoice", "steps": [1, 2], "trigger": {"type": "created"}}) \
+        == "When an Invoice is created: 2 steps"

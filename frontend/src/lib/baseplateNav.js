@@ -95,6 +95,7 @@ export const ALL_BASEPLATE_SUBNAV = {
     { code: "DH", label: "Data Health", to: "/admin/data-health", page: "data-health", adminOnly: true },
     { code: "FY", label: "Financial Year", to: "/admin/financial-year", page: "financial-year", adminOnly: true },
     { code: "WF", label: "Workflows", to: "/admin/workflows", page: "workflows", adminOnly: true },
+    { code: "FL", label: "Flows", to: "/admin/flows", page: "flows", adminOnly: true },
     { code: "BS", label: "Business Settings", to: "/admin/business", page: "business", adminOnly: true },
     { code: "CX", label: "Custom Fields", to: "/admin/custom-fields", page: "custom-fields", adminOnly: true },
     { code: "RP2", label: "Roles & Permissions", to: "/admin/roles-permissions", page: "roles-permissions", adminOnly: true },

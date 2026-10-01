@@ -41,7 +41,7 @@ const SECTIONS = [
   { label: "Delivery", ids: ["projects", "dwsurvey", "service", "outstanding"] },
   { label: "Inventory", ids: ["inventory", "stock-ledger", "purchase-orders", "manufacturer-orders", "inv-analytics"] },
   { label: "Finance", ids: ["expenses", "cashbook", "pnl", "project-pnl", "finance-payments", "invoice-gen", "incentives", "petty"] },
-  { label: "Admin", ids: ["data-centre", "discussions", "audit-trail"] },
+  { label: "Admin", ids: ["data-centre", "discussions", "audit-trail", "workflows", "flows"] },
 ];
 
 export default function LightSidebar({ collapsed = false, onNavigate }) {
