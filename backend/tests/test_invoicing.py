@@ -48,13 +48,14 @@ def test_numbers_are_server_side_per_fy_and_unique():
     async def go():
         a = await create_inv(InvoiceCreate(date="2026-10-01", customer="A", line_items=[LINE]), user=ADMIN)
         b = await create_inv(InvoiceCreate(date="2026-10-02", customer="B", line_items=[LINE]), user=ADMIN)
-        assert a["invoice_no"] == "MAD/26-27/0001" and b["invoice_no"] == "MAD/26-27/0002"
+        # A company with no office record yet numbers with the neutral INV prefix.
+        assert a["invoice_no"] == "INV/26-27/0001" and b["invoice_no"] == "INV/26-27/0002"
         with pytest.raises(HTTPException) as e:
             await create_inv(InvoiceCreate(invoice_no=a["invoice_no"], date="2026-10-03", customer="C"), user=ADMIN)
         assert e.value.status_code == 409
         # Another tenant starts its own series.
         c = await create_inv(InvoiceCreate(date="2026-10-01", customer="X", line_items=[LINE]), user=OTHER)
-        assert c["invoice_no"] == "MAD/26-27/0001"
+        assert c["invoice_no"] == "INV/26-27/0001"
     run(go())
 
 

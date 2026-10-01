@@ -463,9 +463,8 @@ def stamp_fy(doc: dict, collection: str) -> dict:
     return doc
 
 
-async def hidden_fys() -> list:
-    doc = await db.settings.find_one({"key": "fy"}) or {}
-    return list(doc.get("hidden_fys") or [])
+async def hidden_fys(user: dict) -> list:
+    return (await visibility_settings(user))["hidden_fys"]
 
 
 # ── Record visibility: manual hide + auto-hide of closed business ──────────
@@ -504,8 +503,11 @@ def stamp_closure(doc: dict, collection: str, existing: dict = None) -> dict:
     return doc
 
 
-async def visibility_settings() -> dict:
-    doc = await db.settings.find_one({"key": "fy"}) or {}
+async def visibility_settings(user: dict) -> dict:
+    """This company's hide rules (hidden financial years, auto-hide of closed
+    business). Per tenant: one company hiding a year must never hide it for
+    another. No tenant reads as nothing configured."""
+    doc = await db.settings.find_one(tenancy.scope({"key": "fy"}, "settings", user), {"_id": 0}) or {}
     return {
         "hidden_fys": list(doc.get("hidden_fys") or []),
         "auto_hide_enabled": bool(doc.get("auto_hide_enabled", False)),
@@ -527,7 +529,7 @@ async def fy_query(collection: str, base: dict = None, user: dict = None) -> dic
     base = tenancy.scope(base, collection, user)
 
     q = dict(base or {})
-    st = await visibility_settings()
+    st = await visibility_settings(user)
     conds = []
 
     if collection in FY_COLLECTIONS and st["hidden_fys"]:
@@ -1688,18 +1690,19 @@ async def workflow_reset(entity: str, user: dict = Depends(require_admin)):
 
 
 @api.get("/fy/options")
-async def fy_options(_: dict = Depends(get_current_user)):
+async def fy_options(user: dict = Depends(get_current_user)):
     """Every financial year present in the data, with per-year record counts."""
     # Self-heal: if data arrived by import/seed it may not be stamped yet.
     await backfill_fy()
     counts: dict = {}
     for coll in sorted(FY_COLLECTIONS):
-        async for row in db[coll].aggregate([{"$group": {"_id": "$fy", "n": {"$sum": 1}}}]):
+        async for row in db[coll].aggregate([{"$match": tenancy.scope({}, coll, user)},
+                                             {"$group": {"_id": "$fy", "n": {"$sum": 1}}}]):
             label = row["_id"] or ""
             if not label:
                 continue
             counts[label] = counts.get(label, 0) + row["n"]
-    hidden = await hidden_fys()
+    hidden = await hidden_fys(user)
     years = sorted(counts.keys(), reverse=True)
     return {
         "years": [{"fy": y, "records": counts[y], "hidden": y in hidden} for y in years],
@@ -1709,29 +1712,29 @@ async def fy_options(_: dict = Depends(get_current_user)):
 
 
 @api.get("/visibility/settings")
-async def visibility_get(_: dict = Depends(get_current_user)):
+async def visibility_get(user: dict = Depends(get_current_user)):
     """Current hide rules + how much they're actually hiding right now."""
     from datetime import date as _d, timedelta as _td
-    st = await visibility_settings()
+    st = await visibility_settings(user)
     manual = {}
     for coll in sorted(FY_COLLECTIONS | CLOSURE_COLLECTIONS):
-        n = await db[coll].count_documents({"hidden": True})
+        n = await db[coll].count_documents(tenancy.scope({"hidden": True}, coll, user))
         if n:
             manual[coll] = n
     auto = {}
     cutoff = (_d.today() - _td(days=st["auto_hide_days"])).isoformat()
     for coll in sorted(CLOSURE_COLLECTIONS):
-        auto[coll] = await db[coll].count_documents({
+        auto[coll] = await db[coll].count_documents(tenancy.scope({
             "stage": {"$in": DELIVERED_STAGES},
             "balance": {"$lte": 0},
             "closed_on": {"$ne": "", "$lt": cutoff},
-        })
+        }, coll, user))
     return {**st, "manually_hidden": manual, "auto_hidden_now": auto,
             "closure_cutoff": cutoff, "delivered_stages": DELIVERED_STAGES}
 
 
 @api.put("/visibility/settings")
-async def visibility_update(payload: dict, _: dict = Depends(require_admin)):
+async def visibility_update(payload: dict, user: dict = Depends(require_admin)):
     """Admin-only: turn auto-hide on/off and set the window (0 disables)."""
     patch = {}
     if "auto_hide_enabled" in payload:
@@ -1747,44 +1750,50 @@ async def visibility_update(payload: dict, _: dict = Depends(require_admin)):
     if not patch:
         raise HTTPException(status_code=400, detail="Nothing to update")
     patch["updated_at"] = now_iso()
-    await db.settings.update_one({"key": "fy"}, {"$set": {"key": "fy", **patch}}, upsert=True)
-    return await visibility_settings()
+    await _save_fy_settings(patch, user)
+    return await visibility_settings(user)
 
 
 @api.put("/records/{collection}/{item_id}/hidden")
 async def record_hide(collection: str, item_id: str, payload: dict,
-                      _: dict = Depends(require_admin)):
+                      user: dict = Depends(require_admin)):
     """Admin-only: hide or restore one specific record. Never deletes."""
     if collection not in (FY_COLLECTIONS | CLOSURE_COLLECTIONS):
         raise HTTPException(status_code=400, detail=f"Cannot hide records in '{collection}'")
     hide = bool(payload.get("hidden", True))
-    res = await db[collection].update_one({"id": item_id}, {"$set": {"hidden": hide}})
+    res = await db[collection].update_one(tenancy.scope({"id": item_id}, collection, user),
+                                          {"$set": {"hidden": hide}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Record not found")
     return {"ok": True, "collection": collection, "id": item_id, "hidden": hide}
 
 
 @api.get("/records/{collection}/hidden")
-async def record_hidden_list(collection: str, _: dict = Depends(require_admin)):
+async def record_hidden_list(collection: str, user: dict = Depends(require_admin)):
     """The records an admin has hidden, so they can be found and restored."""
     if collection not in (FY_COLLECTIONS | CLOSURE_COLLECTIONS):
         raise HTTPException(status_code=400, detail=f"Unknown collection '{collection}'")
-    return await db[collection].find({"hidden": True}, {"_id": 0}).to_list(1000)
+    return await db[collection].find(tenancy.scope({"hidden": True}, collection, user),
+                                     {"_id": 0}).to_list(1000)
 
 
 @api.put("/fy/settings")
-async def fy_settings_update(payload: dict, _: dict = Depends(require_admin)):
+async def fy_settings_update(payload: dict, user: dict = Depends(require_admin)):
     """Admin-only: choose which financial years are hidden from every list."""
     hide = payload.get("hidden_fys") or []
     if not isinstance(hide, list):
         raise HTTPException(status_code=400, detail="hidden_fys must be a list")
     hide = [str(x) for x in hide if str(x).strip()]
-    await db.settings.update_one(
-        {"key": "fy"},
-        {"$set": {"key": "fy", "hidden_fys": hide, "updated_at": now_iso()}},
-        upsert=True,
-    )
+    await _save_fy_settings({"hidden_fys": hide, "updated_at": now_iso()}, user)
     return {"ok": True, "hidden_fys": hide}
+
+
+async def _save_fy_settings(patch: dict, user: dict) -> None:
+    if not tenancy.tenant_of(user):
+        raise HTTPException(status_code=403, detail="No company on this account")
+    await db.settings.update_one(
+        tenancy.scope({"key": "fy"}, "settings", user),
+        {"$set": tenancy.stamp({"key": "fy", **patch}, "settings", user)}, upsert=True)
 
 
 # ---------- Phone validation shared by Visitors + Leads ----------
@@ -3066,7 +3075,7 @@ async def record_manufacturer_payment(order_id: str, payload: ManufacturerPaymen
 
 
 async def _next_invoice_no(date_str: str, user: dict) -> str:
-    office = await _get_settings()
+    office = await _get_settings(user)
     existing = await db.invoices.find(
         tenancy.scope({}, "invoices", user), {"_id": 0, "invoice_no": 1}).to_list(20000)
     return lc.next_invoice_no(existing, office.get("invoice_prefix") or "INV",
@@ -3097,7 +3106,7 @@ async def normalize_invoice(doc: dict, existing: dict | None, user: dict) -> Non
                 raise HTTPException(status_code=409, detail=f"Invoice number {no} is already used.")
             doc["invoice_no"] = no
     if "place_of_supply" in doc:
-        office = await _get_settings()
+        office = await _get_settings(user)
         doc["is_igst"] = lc.is_interstate(doc.get("place_of_supply"), office.get("home_state") or "Telangana")
     if "line_items" in doc or "is_igst" in doc or existing is None:
         lines = doc.get("line_items", prev.get("line_items") or [])
@@ -3178,7 +3187,7 @@ async def invoice_from_sale(sale_id: str, user: dict = Depends(get_current_user)
     customer = await db.customers.find_one(
         tenancy.scope({"phone": sale.get("phone") or quote.get("phone") or "__none__"}, "customers", user),
         {"_id": 0}) if (sale.get("phone") or quote.get("phone")) else None
-    office = await _get_settings()
+    office = await _get_settings(user)
     doc = InvoiceCreate(
         date=lc.today_iso(), customer=sale.get("customer") or quote.get("customer") or "",
         phone=sale.get("phone") or quote.get("phone") or "",
@@ -4437,25 +4446,48 @@ async def outstanding_report(user: dict = Depends(get_current_user)):
 
 
 # ---------- Office Settings ----------
-async def _get_settings():
-    s = await db.settings.find_one({"_id": "office"})
-    if not s:
-        default = OfficeSettings().model_dump()
-        await db.settings.insert_one({"_id": "office", **default})
-        return default
-    s.pop("_id", None)
-    return s
+async def _get_settings(user: dict) -> dict:
+    """
+    This company's office record: name, address, GSTIN and home state on
+    invoices, the invoice-number prefix, and the attendance geofence for
+    staff with no assigned site. One per tenant.
+
+    The record used to be a single shared document (`_id: "office"`); the
+    startup backfill stamped it with the original company's tenant, so that
+    company inherits its values here the first time it reads. A new company
+    starts from neutral defaults, never from another company's details.
+    """
+    fields = OfficeSettings.model_fields
+    owned = tenancy.scope({"key": "office"}, "settings", user)
+    doc = await db.settings.find_one(owned, {"_id": 0})
+    if doc:
+        return {**OfficeSettings().model_dump(), **{k: v for k, v in doc.items() if k in fields}}
+    base = OfficeSettings().model_dump()
+    legacy = await db.settings.find_one(tenancy.scope({"_id": "office"}, "settings", user))
+    if legacy:
+        base.update({k: v for k, v in legacy.items() if k in fields})
+    elif tenancy.tenant_of(user) != DEFAULT_TENANT:     # the default company keeps the model's defaults
+        tenant = await db.tenants.find_one({"id": tenancy.tenant_of(user)}, {"_id": 0, "name": 1}) or {}
+        base.update(name=tenant.get("name") or "Head Office", address="", gstin="", invoice_prefix="INV")
+    if tenancy.tenant_of(user):
+        await db.settings.update_one(owned, {"$set": tenancy.stamp({"key": "office", **base}, "settings", user)},
+                                     upsert=True)
+    return base
 
 
 @api.get("/settings/office")
-async def get_office_settings(_: dict = Depends(get_current_user)):
-    return await _get_settings()
+async def get_office_settings(user: dict = Depends(get_current_user)):
+    return await _get_settings(user)
 
 
 @api.put("/settings/office")
-async def update_office_settings(payload: OfficeSettings, _: dict = Depends(require_admin)):
+async def update_office_settings(payload: OfficeSettings, user: dict = Depends(require_admin)):
+    if not tenancy.tenant_of(user):
+        raise HTTPException(status_code=403, detail="No company on this account")
     data = payload.model_dump()
-    await db.settings.update_one({"_id": "office"}, {"$set": data}, upsert=True)
+    await db.settings.update_one(tenancy.scope({"key": "office"}, "settings", user),
+                                 {"$set": tenancy.stamp({"key": "office", **data}, "settings", user)},
+                                 upsert=True)
     return data
 
 
@@ -4541,7 +4573,7 @@ async def _resolve_geofence(user: dict, lat: float, lng: float) -> dict:
                 "lat": best.get("latitude", 0.0), "lng": best.get("longitude", 0.0),
                 "radius_m": best.get("radius_meters", 150),
             }
-    settings = await _get_settings()
+    settings = await _get_settings(user)
     return {"site_id": "", "site_name": settings.get("name", "Office"),
             "lat": settings["lat"], "lng": settings["lng"],
             "radius_m": settings["radius_m"]}
