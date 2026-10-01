@@ -132,11 +132,16 @@ def test_earned_commission_payout_reaches_payroll_without_manual_entry(db):
         assert payout["status"] == "Included"
         assert payout["payroll_period_id"] == result["id"]
 
-        # a second run must not double-count the now-Included payout
+        # Recalculating the same month replaces the Draft: the payout moves to
+        # the new run and is counted once, never twice.
         again = await api_hr.payroll_calculate(
             PayrollPeriodCreate(employee_id="e1", period_start="2026-09-01", period_end="2026-09-30"),
             _req(db), user=ADMIN)
-        assert again["incentive_bonus"] == 0.0
+        assert again["incentive_bonus"] == 1500.0
+        runs = await db.payroll_periods.find({"employee_id": "e1"}).to_list(10)
+        assert [r["id"] for r in runs] == [again["id"]]
+        payout = await db.commission_payouts.find_one({"id": "cp1"}, {"_id": 0})
+        assert payout["payroll_period_id"] == again["id"]
     asyncio.run(run())
 
 

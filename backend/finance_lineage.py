@@ -206,7 +206,8 @@ def _in(d: Optional[date], start: date, end: date) -> bool:
 
 
 def company_pnl(*, sales: list, pos: list, mos: list, entries: list, petty: list, payouts: list,
-                book_project: dict, projects: dict, start: date, end: date, division: str = "") -> dict:
+                book_project: dict, projects: dict, start: date, end: date, division: str = "",
+                payroll: list = ()) -> dict:
     """Revenue (sales orders by date), direct cost (vendor orders/POs by date,
     project expenses by date), overheads (spend not tied to a project), and
     incentives, for [start, end]. `book_project` maps cashbook id -> project id;
@@ -288,8 +289,20 @@ def company_pnl(*, sales: list, pos: list, mos: list, entries: list, petty: list
             incentives += v
             add(d, "incentives", v)
 
+    # Paid payroll runs are company-level cost (no division), dated when paid.
+    salaries = 0.0
+    if not division:
+        for pr in payroll:
+            if pr.get("status") != "Paid":
+                continue
+            d = lc.parse_date(pr.get("paid_at") or pr.get("period_end"))
+            if _in(d, start, end):
+                v = lc.payroll_cost(pr)
+                salaries += v
+                add(d, "salaries", v)
+
     gross = revenue - vendor - project_exp
-    net = gross - overheads - incentives
+    net = gross - overheads - salaries - incentives
     month_keys = []
     y, mth = start.year, start.month
     while (y, mth) <= (end.year, end.month):
@@ -299,9 +312,9 @@ def company_pnl(*, sales: list, pos: list, mos: list, entries: list, petty: list
     for k in month_keys:
         row = months.get(k, {})
         r = {f: round(row.get(f, 0.0), 2) for f in
-             ("revenue", "vendor_cost", "project_expenses", "overheads", "incentives")}
+             ("revenue", "vendor_cost", "project_expenses", "overheads", "salaries", "incentives")}
         r["net_profit"] = round(r["revenue"] - r["vendor_cost"] - r["project_expenses"]
-                                - r["overheads"] - r["incentives"], 2)
+                                - r["overheads"] - r["salaries"] - r["incentives"], 2)
         r["month"] = k
         r["label"] = date(int(k[:4]), int(k[5:]), 1).strftime("%b %Y")
         series.append(r)
@@ -314,7 +327,8 @@ def company_pnl(*, sales: list, pos: list, mos: list, entries: list, petty: list
             "revenue": round(revenue, 2), "vendor_cost": round(vendor, 2),
             "project_expenses": round(project_exp, 2), "gross_profit": round(gross, 2),
             "gross_margin_pct": _pct(gross, revenue),
-            "overheads": round(overheads, 2), "incentives": round(incentives, 2),
+            "overheads": round(overheads, 2), "salaries": round(salaries, 2),
+            "incentives": round(incentives, 2),
             "net_profit": round(net, 2), "net_margin_pct": _pct(net, revenue),
         },
         "series": series,

@@ -3571,7 +3571,11 @@ async def company_pnl(start: str = "", end: str = "", division: str = "", mask_o
         sales=data["sales"], pos=data["purchase_orders"], mos=data["manufacturer_orders"],
         entries=data["cashbook_entries"], petty=data["petty_cash"], payouts=data["commission_payouts"],
         book_project=data["book_project"], projects={p["id"]: p for p in data["projects"] if p.get("id")},
-        start=s_, end=e_, division=division)
+        start=s_, end=e_, division=division,
+        payroll=await db.payroll_periods.find(
+            tenancy.scope({"status": "Paid"}, "payroll_periods", user),
+            {"_id": 0, "status": 1, "paid_at": 1, "period_end": 1, "gross_pay": 1, "bonuses": 1,
+             "employer_contributions": 1}).to_list(50000))
     out.update(start=s_.isoformat(), end=e_.isoformat(), division=division)
     return fl.mask_company(out) if mask_other else out
 

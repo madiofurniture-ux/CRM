@@ -15,6 +15,7 @@ with it, because both read the same historical data:
 from __future__ import annotations
 
 import csv
+import math
 import io
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -635,6 +636,86 @@ def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: 
                 "rate": round(base / (1 + tax / 100), 2) if tax else base,
                 "unit": "", "discount_pct": 0, "tax_pct": tax}]
     return out
+
+
+# ---------------------------------------------------------------- payroll
+# Statutory deductions are per-company switches (all off by default): a
+# business turns on what it is registered for. Rates are the current Indian
+# defaults and stay editable in the policy.
+PAYROLL_POLICY_DEFAULTS = {
+    "basic_pct": 50.0,            # basic as % of gross
+    "hra_pct_of_basic": 40.0,     # HRA as % of basic (non-metro default)
+    "pf_enabled": False, "pf_rate": 12.0, "pf_employer_rate": 12.0, "pf_wage_ceiling": 15000.0,
+    "esi_enabled": False, "esi_rate": 0.75, "esi_employer_rate": 3.25, "esi_gross_limit": 21000.0,
+    "pt_enabled": False,
+    # Telangana slabs: gross up to 15,000 nil; 15,001-20,000 Rs 150; above Rs 200.
+    "pt_slabs": [{"upto": 15000, "amount": 0}, {"upto": 20000, "amount": 150}, {"upto": None, "amount": 200}],
+}
+
+
+def payroll_policy_from(doc: Optional[dict]) -> dict:
+    out = {**PAYROLL_POLICY_DEFAULTS, "pt_slabs": list(PAYROLL_POLICY_DEFAULTS["pt_slabs"])}
+    for k, v in (doc or {}).items():
+        if k not in out:
+            continue
+        if isinstance(out[k], bool):
+            out[k] = bool(v)
+        elif k == "pt_slabs":
+            slabs = []
+            for sl in v or []:
+                upto = sl.get("upto") if isinstance(sl, dict) else None
+                slabs.append({"upto": money(upto) if upto not in (None, "") else None,
+                              "amount": money((sl or {}).get("amount"))})
+            out[k] = slabs or out[k]
+        else:
+            out[k] = max(0.0, money(v))
+    return out
+
+
+def professional_tax(gross: Any, slabs: Iterable[dict]) -> float:
+    g = money(gross)
+    if g <= 0:
+        return 0.0
+    for sl in slabs:
+        if sl.get("upto") is None or g <= money(sl.get("upto")):
+            return money(sl.get("amount"))
+    return 0.0
+
+
+def payroll_statutory(gross: Any, policy: dict) -> dict:
+    """Salary split and statutory deductions for one month's earned gross."""
+    g = round(money(gross), 2)
+    basic = round(g * money(policy.get("basic_pct")) / 100, 2)
+    hra = round(min(basic * money(policy.get("hra_pct_of_basic")) / 100, g - basic), 2)
+    special = round(max(0.0, g - basic - hra), 2)
+    pf_wage = min(basic, money(policy.get("pf_wage_ceiling")) or basic)
+    pf_emp = pf_er = esi_emp = esi_er = pt = 0.0
+    if policy.get("pf_enabled"):
+        pf_emp = round(pf_wage * money(policy.get("pf_rate")) / 100)
+        pf_er = round(pf_wage * money(policy.get("pf_employer_rate")) / 100)
+    if policy.get("esi_enabled") and 0 < g <= money(policy.get("esi_gross_limit")):
+        esi_emp = math.ceil(g * money(policy.get("esi_rate")) / 100)
+        esi_er = math.ceil(g * money(policy.get("esi_employer_rate")) / 100)
+    if policy.get("pt_enabled"):
+        pt = professional_tax(g, policy.get("pt_slabs") or [])
+    return {
+        "basic": basic, "hra": hra, "special_allowance": special,
+        "pf_employee": float(pf_emp), "pf_employer": float(pf_er),
+        "esi_employee": float(esi_emp), "esi_employer": float(esi_er),
+        "professional_tax": float(pt),
+        "statutory_deductions": float(pf_emp + esi_emp + pt),
+        "employer_contributions": float(pf_er + esi_er),
+    }
+
+
+PAYROLL_TRANSITIONS = {"Draft": {"Approved"}, "Approved": {"Draft", "Paid"}, "Paid": set()}
+
+
+def payroll_cost(period: dict) -> float:
+    """What a paid payroll period costs the company. Commission incentives are
+    excluded: the P&L already counts them on the incentives line."""
+    return round(money(period.get("gross_pay")) + money(period.get("bonuses"))
+                 + money(period.get("employer_contributions")), 2)
 
 
 # ------------------------------------------------------------- D&W surveys

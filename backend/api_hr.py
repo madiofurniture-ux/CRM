@@ -284,7 +284,20 @@ async def _calculate_payroll(db, user: dict, payload: PayrollPeriodCreate, *, pe
     module's own hr_attendance_logs (not server.py's geofenced attendance
     collection — see models_hr.py's module docstring). `persist=False`
     (bulk dry-run) computes and returns the same shape without writing
-    anything or consuming commission payouts."""
+    anything or consuming commission payouts.
+
+    One run per employee per period: recalculating replaces a Draft (and
+    returns its commission payouts first); an Approved or Paid run blocks."""
+    if persist:
+        prior = await db[PAYROLL_PERIODS].find_one(tenancy.scope(
+            {"employee_id": payload.employee_id, "period_start": payload.period_start,
+             "period_end": payload.period_end}, PAYROLL_PERIODS, user), {"_id": 0})
+        if prior and prior.get("status") != "Draft":
+            raise HTTPException(status_code=409, detail=(
+                f"Payroll for this employee and period is already {prior.get('status')}. "
+                "Move it back to Draft to recalculate."))
+        if prior:
+            await _release_draft(db, user, prior)
     rows = await _employee_attendance_rows(
         db, payload.employee_id, payload.period_start, payload.period_end, user)
 
@@ -331,7 +344,9 @@ async def _calculate_payroll(db, user: dict, payload: PayrollPeriodCreate, *, pe
     )
     late_count = sum(1 for r in rows if r.get("status") == "Late")
     incentive_bonus, payout_ids = await _earned_commission_bonus(db, employee.get("name", ""), user)
-    net_salary = round(pay["gross_pay"] + payload.bonuses + incentive_bonus - payload.deductions, 2)
+    statutory = lc.payroll_statutory(pay["gross_pay"], await _payroll_policy(db, user))
+    net_salary = round(pay["gross_pay"] + payload.bonuses + incentive_bonus - payload.deductions
+                       - statutory["statutory_deductions"], 2)
 
     # prompt_2_attendance_payroll_link.md: attendance is imported as part of
     # this same call (this codebase creates+computes a period in one step —
@@ -353,6 +368,10 @@ async def _calculate_payroll(db, user: dict, payload: PayrollPeriodCreate, *, pe
         "leave_days_deducted": leave_days,
         "incentive_bonus": incentive_bonus,
         "net_salary": net_salary,
+        **statutory,
+        "employee_name": employee.get("name", ""),
+        "employee_role": employee.get("role", ""),
+        "pay_model": employee.get("pay_model", "monthly"),
         "status": "Draft",
         "created_at": now_iso(),
         "payable_days": breakdown["payable_days"], "lop_days": breakdown["lop_days"],
@@ -371,9 +390,43 @@ async def _calculate_payroll(db, user: dict, payload: PayrollPeriodCreate, *, pe
         await db[PAYROLL_PERIODS].insert_one(dict(doc))
         if payout_ids:
             await db[COMMISSION_PAYOUTS].update_many(
-                {"id": {"$in": payout_ids}}, {"$set": {"status": "Included", "payroll_period_id": doc["id"]}})
+                tenancy.scope({"id": {"$in": payout_ids}}, COMMISSION_PAYOUTS, user),
+                {"$set": {"status": "Included", "payroll_period_id": doc["id"]}})
     doc.pop("_id", None)
     return doc
+
+
+async def _payroll_policy(db, user: dict) -> dict:
+    doc = await db.settings.find_one(tenancy.scope({"key": "payroll_policy"}, "settings", user), {"_id": 0})
+    return lc.payroll_policy_from(doc)
+
+
+@router.get("/payroll/policy")
+async def payroll_policy_get(request: Request, user: dict = Depends(get_current_user)):
+    db = _db(request)
+    await _require_payroll(db, user, "view")
+    return await _payroll_policy(db, user)
+
+
+@router.put("/payroll/policy")
+async def payroll_policy_put(payload: dict, request: Request, user: dict = Depends(get_current_user)):
+    """Per-company statutory switches and salary-split rates (admin/payroll approvers)."""
+    db = _db(request)
+    await _require_payroll(db, user, "approve")
+    policy = lc.payroll_policy_from(payload)
+    owned = tenancy.scope({"key": "payroll_policy"}, "settings", user)
+    await db.settings.update_one(owned, {"$set": tenancy.stamp({"key": "payroll_policy", **policy},
+                                                               "settings", user)}, upsert=True)
+    return policy
+
+
+async def _release_draft(db, user: dict, period: dict) -> None:
+    """Drop a Draft run so it can be recalculated, handing back the commission
+    payouts it had taken."""
+    await db[COMMISSION_PAYOUTS].update_many(
+        tenancy.scope({"payroll_period_id": period["id"], "status": "Included"}, COMMISSION_PAYOUTS, user),
+        {"$set": {"status": "Earned", "payroll_period_id": ""}})
+    await db[PAYROLL_PERIODS].delete_one(tenancy.scope({"id": period["id"]}, PAYROLL_PERIODS, user))
 
 
 @router.post("/payroll/calculate")
@@ -539,6 +592,11 @@ async def payroll_set_status(period_id: str, payload: PayrollStatusUpdate, reque
     db = _db(request)
     await _require_payroll(db, user, "approve")
     period = await _period_or_404(db, period_id, user)
+    current = period.get("status") or "Draft"
+    if payload.status != current and payload.status not in lc.PAYROLL_TRANSITIONS.get(current, set()):
+        raise HTTPException(status_code=400, detail=(
+            f"A {current} payroll can't move to {payload.status}. "
+            "The order is Draft, then Approved, then Paid; a Paid run is final."))
 
     if payload.status == "Approved" and lc.payroll_approval_blocked(period.get("attendance_exceptions") or []):
         exceptions = period.get("attendance_exceptions") or []
@@ -553,8 +611,12 @@ async def payroll_set_status(period_id: str, payload: PayrollStatusUpdate, reque
             before={"exceptions": exceptions}, after={"reason": payload.override_reason or ""})
 
     owned = tenancy.scope({"id": period_id}, PAYROLL_PERIODS, user)
-    res = await db[PAYROLL_PERIODS].update_one(
-        owned, {"$set": {"status": payload.status, "updated_at": now_iso()}})
+    upd = {"status": payload.status, "updated_at": now_iso()}
+    if payload.status == "Paid" and current != "Paid":
+        upd.update(paid_at=now_iso(), paid_by=(user or {}).get("name", ""))
+    if payload.status == "Approved" and current == "Draft":
+        upd.update(approved_at=now_iso(), approved_by=(user or {}).get("name", ""))
+    res = await db[PAYROLL_PERIODS].update_one(owned, {"$set": upd})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Payroll period not found")
     return await db[PAYROLL_PERIODS].find_one(owned, {"_id": 0})
