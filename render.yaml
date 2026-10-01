@@ -21,8 +21,8 @@ services:
         sync: false
       # File storage in SharePoint (docs/SHAREPOINT.md). Until these are set,
       # uploads go to the server disk, which Render wipes on every deploy.
-      - key: STORAGE_BACKEND
-        value: local            # change to sharepoint once the values below are set
+      - key: STORAGE_BACKEND    # set to sharepoint in the dashboard once the values below are set (unset = local)
+        sync: false
       - key: SHAREPOINT_TENANT_ID
         sync: false
       - key: SHAREPOINT_CLIENT_ID
