@@ -76,3 +76,8 @@ def test_quote_expiry():
     assert not lc.quote_expired({"stage": "Quoted", "valid_until": "2026-09-05"}, today="2026-09-02")
     assert not lc.quote_expired({"status": "Won", "valid_until": "2026-09-01"}, today="2026-09-02")
     assert not lc.quote_expired({"stage": "Quoted", "valid_until": ""}, today="2026-09-02")
+
+
+def test_lost_stage_reads_as_lost_and_never_expires():
+    assert lc.quote_status({"stage": "Lost"}) == "Lost"
+    assert not lc.quote_expired({"stage": "Lost", "valid_until": "2026-01-01"}, today="2026-09-02")

@@ -138,3 +138,10 @@ def test_payment_state_rules():
     assert lc.invoice_payment_state(1000, 5000, "Sent")["balance"] == 0
     assert lc.next_invoice_no([{"invoice_no": "MAD/26-27/0009"}, {"invoice_no": "MAD/25-26/0040"}],
                               "MAD", "2026-27") == "MAD/26-27/0010"
+
+
+def test_sale_without_lines_invoices_to_the_exact_sale_value():
+    for value in (302900, 84500, 118000, 99999, 1, 2500000):
+        lines = lc.invoice_lines_from_sale([], 0, 18, value, "As per order")
+        out = lc.invoice_totals(lines, False)
+        assert out["total"] == value and abs(out["round_off"]) < 0.5

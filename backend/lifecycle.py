@@ -361,7 +361,7 @@ def quote_status(q: dict) -> str:
     if stored:
         return stored
     stage = str(q.get("stage") or "")
-    if stage == "Cancelled":
+    if stage in ("Cancelled", "Lost"):
         return "Lost"
     if stage in _WON_STAGES:
         return "Won"
@@ -566,11 +566,17 @@ def invoice_totals(lines: Iterable[dict], is_igst: bool) -> dict:
     igst = tax_total if is_igst else 0.0
     cgst = 0.0 if is_igst else round(tax_total / 2, 2)
     sgst = 0.0 if is_igst else round(tax_total - cgst, 2)
+    # Invoice value is rounded to the rupee with a visible round-off line, as
+    # on most GST invoices: paise-rounded taxable + tax can't always land on
+    # a whole-rupee price (e.g. 3,02,900 incl. 18% GST).
+    exact = round(subtotal + tax_total, 2)
+    total = float(round(exact))
     return {
         "subtotal": subtotal,
-        "discount_total": round(discount_total, 2),
+        "discount_total": round(max(0.0, discount_total), 2),
         "cgst": cgst, "sgst": sgst, "igst": igst,
-        "total": round(subtotal + tax_total, 2),
+        "round_off": round(total - exact, 2),
+        "total": total,
         "tax_breakup": [{"rate": r, "tax": t} for r, t in sorted(by_slab.items())],
     }
 
@@ -610,6 +616,21 @@ def invoice_payment_state(total: Any, paid: Any, status: Any) -> dict:
     return {"paid": round(p, 2), "balance": balance, "status": st}
 
 
+def _taxable_for_total(total: float, tax_pct: float) -> float:
+    """The paise-exact pre-tax amount whose GST brings it to `total` (taxable
+    and tax are each rounded to paise, so a plain division can be a paisa off).
+    Falls back to the nearest when no exact amount exists."""
+    if not tax_pct:
+        return round(total, 2)
+    guess = round(total / (1 + tax_pct / 100), 2)
+    best = guess
+    for delta in (0, -1, 1, -2, 2, -3, 3):
+        t = round(guess + delta / 100, 2)
+        if round(t + round(t * tax_pct / 100, 2), 2) == round(total, 2):
+            return t
+    return best
+
+
 def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: Any,
                             fallback_value: Any, fallback_label: str) -> list[dict]:
     """Quote/sale lines (w/h/sft, rate, amount) -> invoice LineItems. The
@@ -618,7 +639,9 @@ def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: 
     lines = [calc_line(dict(l)) for l in sale_lines or []]
     subtotal = lines_subtotal(lines)
     tax = money(tax_pct)
-    disc_pct = round(min(money(discount), subtotal) / subtotal * 100, 4) if subtotal > 0 else 0
+    # Kept unrounded: rounding the % or the back-computed rate drifts the
+    # invoice total off the quote by a paisa.
+    disc_pct = min(money(discount), subtotal) / subtotal * 100 if subtotal > 0 else 0
     out = []
     for l in lines:
         by_area = money(l.get("sft")) > 0
@@ -633,7 +656,7 @@ def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: 
     if not out:
         base = money(fallback_value)
         out = [{"sku": "", "hsn": "", "description": fallback_label, "qty": 1,
-                "rate": round(base / (1 + tax / 100), 2) if tax else base,
+                "rate": _taxable_for_total(base, tax),
                 "unit": "", "discount_pct": 0, "tax_pct": tax}]
     return out
 

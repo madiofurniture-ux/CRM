@@ -760,6 +760,7 @@ class InvoiceBase(BaseModel):
     cgst: float = 0
     sgst: float = 0
     igst: float = 0
+    round_off: float = 0     # to the rupee; see lifecycle.invoice_totals
     total: float = 0
     paid: float = 0
     balance: float = 0
