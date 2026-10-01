@@ -7,9 +7,11 @@ wiped on every deploy and restart, so files saved there don't survive.
 
 Where files go: site `https://madiofurniture.sharepoint.com/sites/MadioFurniture`,
 library **Documents** ("Shared Documents"), folder
-`CRM/<company>/<record type>/`, e.g. `CRM/madio/quote/…`. Existing folders
-such as `MF/PowerPointFiles` are not touched. Set `SHAREPOINT_FOLDER` to put
-the CRM folder elsewhere, e.g. `MF/CRM`.
+`CRM Images and content/<company>/<record type>/`, e.g.
+`CRM Images and content/madio/quote/…`. That is `SHAREPOINT_FOLDER` (set in
+`render.yaml`). The library's older `CRM`, `CRM - Copy` and `MF/CRM` folders
+and everything else are not touched. The code's own default, used when
+`SHAREPOINT_FOLDER` is unset, is `CRM`, so leave the variable set.
 
 Files stay private. The CRM stores only the SharePoint item id, never a
 sharing link, and files are opened only through the CRM's logged-in,
@@ -52,14 +54,14 @@ membership to people who should see customer documents.
    | `SHAREPOINT_CLIENT_SECRET` | secret value from step 2 |
    | `SHAREPOINT_SITE_URL` | `https://madiofurniture.sharepoint.com/sites/MadioFurniture` |
    | `SHAREPOINT_LIBRARY` | `Documents` (optional; that is the default) |
-   | `SHAREPOINT_FOLDER` | `CRM` (optional; that is the default) |
+   | `SHAREPOINT_FOLDER` | `CRM Images and content` (already in `render.yaml`) |
 
    Put the secret only in Render, never in chat, email or the repo.
 6. **Check it.** As an admin, open `GET /api/admin/storage/status` (for
    example `https://<api host>/api/admin/storage/status` with your login). It
    should say `"backend": "sharepoint", "ok": true`. Otherwise `error` names
    the failing step (sign-in, site or library). Then upload a file on any
-   record and confirm it appears under `Documents/CRM/madio/…`.
+   record and confirm it appears under `Documents/CRM Images and content/madio/…`.
 
 ## Notes
 - Files uploaded before the switch keep pointing at the server's disk. On

@@ -31,6 +31,8 @@ services:
         sync: false
       - key: SHAREPOINT_SITE_URL
         value: https://madiofurniture.sharepoint.com/sites/MadioFurniture
+      - key: SHAREPOINT_FOLDER  # inside the Documents library; kept apart from the older "CRM" folder
+        value: CRM Images and content
 
   # Separate service, separate database — server.py refuses to boot if
   # APP_ENV=staging but DB_NAME doesn't contain "staging", so this can never

@@ -58,7 +58,8 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   Uploaded files are private: served only by `GET /api/documents/{id}/file`.
 - File storage: `backend/storage.py`, `STORAGE_BACKEND=local|s3|sharepoint`.
   SharePoint goes through Microsoft Graph (app registration, client
-  credentials) into `Documents/CRM/<tenant>/<entity>/`; setup in
+  credentials) into `Documents/<SHAREPOINT_FOLDER>/<tenant>/<entity>/`
+  (MADIO: `CRM Images and content`); setup in
   `docs/SHAREPOINT.md`, check with `GET /api/admin/storage/status`.
 
 ## Core rules (never break)

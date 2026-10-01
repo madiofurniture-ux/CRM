@@ -100,6 +100,13 @@ def test_small_upload_lands_in_the_company_folder_of_the_documents_library(graph
     assert sum(1 for c in graph.calls if c[1].endswith("/drives")) == 1
 
 
+def test_madio_folder_with_spaces(graph, monkeypatch):
+    monkeypatch.setenv("SHAREPOINT_FOLDER", "CRM Images and content")
+    storage.save("madio", "visitor", "a.jpg", b"x")
+    put = [c for c in graph.calls if c[0] == "PUT"][0]
+    assert "/root:/CRM%20Images%20and%20content/madio/visitor/a.jpg:/content" in put[1]
+
+
 def test_a_link_into_a_library_view_still_resolves_the_site(graph, monkeypatch):
     monkeypatch.setenv("SHAREPOINT_SITE_URL", SITE + "/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FMF")
     assert storage.save("madio", "visitor", "a.jpg", b"x").startswith("sharepoint:drive-docs/")
