@@ -304,6 +304,9 @@ class QuoteBase(BaseModel):
     # `discount` is an absolute rupee amount off the subtotal, not a percentage
     # (LineItem.discount_pct is the per-line percentage and is unrelated).
     version: int = 1
+    # Offer validity. Defaults to quote date + QUOTE_VALIDITY_DAYS on create;
+    # an open quote past it reads as expired (lc.quote_expired).
+    valid_until: Optional[str] = ""
     discount: Optional[float] = 0
     # "" (none needed) | "pending" | "approved" | "rejected"
     approval: Optional[str] = ""

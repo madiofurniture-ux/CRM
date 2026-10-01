@@ -1958,11 +1958,41 @@ def _compute_quote_financials(sections: list) -> dict:
     }
 
 
+QUOTE_APPROVAL_FIELDS = ("approval", "approved_by", "approved_at")
+
+
+def _guard_quote_approval(doc: dict, existing: dict | None) -> None:
+    """
+    Discount sign-off belongs to POST /quotes/{id}/approve (admin) and
+    /save-total only. A plain create or edit can never write the approval
+    fields; and changing the discount here re-opens the gate exactly as
+    save-total does, so an approved discount can't be raised afterwards.
+    """
+    for f in QUOTE_APPROVAL_FIELDS:
+        doc.pop(f, None)
+    if "discount" not in doc and "subtotal" not in doc:
+        return
+    prev = existing or {}
+    discount = lc.money(doc.get("discount", prev.get("discount")))
+    subtotal = lc.money(doc.get("subtotal", prev.get("subtotal")))
+    unchanged = existing is not None and abs(discount - lc.money(prev.get("discount"))) < 0.005 \
+        and abs(subtotal - lc.money(prev.get("subtotal"))) < 0.005
+    if unchanged:
+        return
+    if lc.needs_approval(subtotal, discount):
+        doc.update(approval="pending", approved_by="", approved_at="")
+    elif existing is None or prev.get("approval") in ("pending", "rejected", "approved"):
+        doc.update(approval="", approved_by="", approved_at="")
+
+
 async def normalize_quote_template(doc: dict, existing: dict | None, user: dict) -> None:
     """Instantiates a pre-built template's sections onto a brand-new quote
     (create only — never overwrites sections a user is actively editing),
     then recomputes financial_summary from whatever sections the write
     carries, so every save's totals are server-derived."""
+    _guard_quote_approval(doc, existing)
+    if existing is None and not doc.get("valid_until"):
+        doc["valid_until"] = lc.quote_valid_until(doc.get("date"))
     if existing is None and doc.get("template_id") and not doc.get("sections"):
         template = quotation_templates.get_template(doc["template_id"])
         if template:
@@ -5262,6 +5292,7 @@ def _quote_view(q: dict, all_lines: list) -> dict:
     versions = sorted({int(l.get("version") or 1) for l in all_lines} | {version})
     q = dict(q)
     q["derived_status"] = lc.quote_status(q)
+    q["expired"] = lc.quote_expired(q)
     return {"quote": q, "lines": lines, "subtotal": subtotal,
             "totals": totals, "versions": versions}
 

@@ -367,6 +367,23 @@ def quote_status(q: dict) -> str:
     return "Sent"
 
 
+QUOTE_VALIDITY_DAYS = 30
+
+
+def quote_valid_until(quote_date: Any, days: int = QUOTE_VALIDITY_DAYS) -> str:
+    d = parse_date(quote_date) or date.today()
+    return (d + timedelta(days=days)).isoformat()
+
+
+def quote_expired(q: dict, today: Any = None) -> bool:
+    """An open quote whose validity date has passed. Won/lost quotes never expire."""
+    if not quote_is_open(q):
+        return False
+    until = parse_date(q.get("valid_until"))
+    ref = parse_date(today) if today else date.today()
+    return bool(until and ref and until < ref)
+
+
 def quote_is_open(q: dict) -> bool:
     return quote_status(q) in ("Draft", "Sent", "Negotiation")
 
