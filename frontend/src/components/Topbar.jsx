@@ -1,13 +1,17 @@
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, Plus, Bell, Shield, ShieldCheck } from "lucide-react";
+import { Search, Plus, Bell, Shield, ShieldCheck, X } from "lucide-react";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import api from "@/lib/api";
 
+// Where a search hit opens. Functions deep-link to the record itself.
 const RESULT_ROUTE = {
-  customer: "/customers", lead: "/leads", quotation: null /* built per-row */,
-  project: "/projects", inventory: "/inventory", employee: "/admin/roles",
+  customer: (r) => `/customers?open=${r.id}`, lead: (r) => `/leads?open=${r.id}`,
+  quotation: (r) => `/quotes/ws/${r.id}`, project: (r) => `/projects?open=${r.id}`,
+  service_ticket: (r) => `/service?ticket=${r.id}`, architect: () => "/architects",
+  inventory: () => "/inventory", employee: () => "/admin/roles",
 };
+const TYPE_LABEL = { service_ticket: "service" };
 
 export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actions }) {
   const { isOtherHidden, requestUnlock, relock } = usePrivacyMode();
@@ -15,6 +19,7 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [open, setOpen2] = useState(false);
+  const [mobileSearch, setMobileSearch] = useState(false);
   const timer = useRef(null);
 
   const onSearch = (v) => {
@@ -32,10 +37,25 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
     }, 300);
   };
   const goTo = (r) => {
-    setOpen2(false); setQ("");
-    if (r.type === "quotation") nav(`/quotes/ws/${r.id}`);
-    else nav(RESULT_ROUTE[r.type] || "/");
+    setOpen2(false); setQ(""); setMobileSearch(false);
+    const route = RESULT_ROUTE[r.type];
+    nav(route ? route(r) : "/");
   };
+  const resultsList = open && (
+    <div className="absolute z-30 mt-1 left-0 right-0 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-sm)] shadow-lg max-h-80 overflow-y-auto">
+      {results.length === 0 && <div className="p-3 text-xs text-[var(--color-text-muted)]">No matches</div>}
+      {results.map((r, i) => (
+        <button key={i} onClick={() => goTo(r)} data-testid={`search-result-${r.type}-${i}`}
+          className="w-full text-left px-3 py-2 hover:bg-[var(--color-surface-muted)] border-b border-[var(--color-border)] last:border-0 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--color-text)] truncate">{r.title}</div>
+            <div className="text-xs text-[var(--color-text-muted)] truncate">{r.subtitle}</div>
+          </div>
+          <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--color-primary-soft)] text-[var(--color-primary)] font-semibold shrink-0">{TYPE_LABEL[r.type] || r.type}</span>
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <header className="sticky top-0 z-30 h-16 bg-[var(--color-surface)]/85 backdrop-blur-md border-b border-[var(--color-border)] flex items-center px-3 sm:px-6 gap-2 sm:gap-4" data-testid="topbar">
@@ -52,28 +72,32 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
           <input
             value={q} onChange={(e) => onSearch(e.target.value)}
             onFocus={() => results.length && setOpen2(true)}
-            placeholder="Search customers, leads, quotes…"
+            placeholder="Search name, phone, project, quote…"
             className="bg-transparent outline-none text-sm flex-1 placeholder:text-[var(--color-text-muted)]"
             data-testid="global-search-input"
           />
           <kbd className="text-[10px] font-mono text-[var(--color-text-muted)] px-1.5 py-0.5 rounded border border-[var(--color-border)]">⌘K</kbd>
         </div>
-        {open && (
-          <div className="absolute z-30 mt-1 w-full bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-sm)] shadow-lg max-h-80 overflow-y-auto">
-            {results.length === 0 && <div className="p-3 text-xs text-[var(--color-text-muted)]">No matches</div>}
-            {results.map((r, i) => (
-              <button key={i} onClick={() => goTo(r)} data-testid={`search-result-${r.type}-${i}`}
-                className="w-full text-left px-3 py-2 hover:bg-[var(--color-surface-muted)] border-b border-[var(--color-border)] last:border-0 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-[var(--color-text)] truncate">{r.title}</div>
-                  <div className="text-xs text-[var(--color-text-muted)] truncate">{r.subtitle}</div>
-                </div>
-                <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--color-primary-soft)] text-[var(--color-primary)] font-semibold shrink-0">{r.type}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        {!mobileSearch && resultsList}
       </div>
+
+      <button type="button" onClick={() => setMobileSearch(true)} className="md:hidden p-2 rounded-full hover:bg-[var(--color-surface-muted)] text-[var(--color-text-muted)] shrink-0"
+        aria-label="Search" data-testid="mobile-search-btn">
+        <Search size={17} strokeWidth={1.8} />
+      </button>
+      {mobileSearch && (
+        <div className="md:hidden fixed inset-x-0 top-0 z-50 bg-[var(--color-surface)] border-b border-[var(--color-border)] p-3 shadow-lg">
+          <div className="relative">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] border border-[var(--color-border)]">
+              <Search size={15} className="text-[var(--color-text-muted)]" />
+              <input autoFocus value={q} onChange={(e) => onSearch(e.target.value)} placeholder="Name, phone, project, quote, ticket…"
+                className="bg-transparent outline-none text-base flex-1" data-testid="mobile-search-input" />
+              <button type="button" onClick={() => { setMobileSearch(false); setOpen2(false); }} aria-label="Close search"><X size={16} /></button>
+            </div>
+            {resultsList}
+          </div>
+        </div>
+      )}
 
       {actions}
 

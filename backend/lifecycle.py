@@ -1121,7 +1121,7 @@ def build_pipeline(phone: Any, *, leads, quotes, tasks, sales, projects, payment
                 continue
             if name == "Production":
                 at["production"] = earliest(at["production"], m.get("completed_at"))
-            elif name == "Installation":
+            elif name in ("Installation", "Application"):  # MAP applies, others install
                 at["installation"] = earliest(at["installation"], m.get("completed_at"))
 
     for pay in payments:

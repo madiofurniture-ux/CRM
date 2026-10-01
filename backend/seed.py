@@ -47,8 +47,13 @@ SEED_ROLES = [
 ]
 
 
-def _seed_pins() -> dict:
-    """PINs from the SEED_PINS env var; the rest are random and logged once."""
+def _seed_pins(only: set | None = None) -> dict:
+    """PINs from the SEED_PINS env var; the rest are random and logged once.
+
+    `only` limits generation to the roles actually being created — existing
+    accounts keep their PIN, so printing a fresh random one for them on every
+    boot (as this used to) is both misleading and leaks PIN-shaped values
+    into the host's logs."""
     supplied = {}
     raw = os.environ.get("SEED_PINS", "")
     for part in raw.split(","):
@@ -59,6 +64,8 @@ def _seed_pins() -> dict:
                 supplied[k.lower()] = v
     out, generated = {}, []
     for username, *_ in SEED_ROLES:
+        if only is not None and username not in only:
+            continue
         pin = supplied.get(username.lower())
         if not pin:
             pin = f"{secrets.randbelow(9000) + 1000}"
@@ -118,7 +125,9 @@ def _norm_phone(p):
 
 
 async def seed_users(db):
-    pins = _seed_pins()
+    missing = {u["username"] for u in SEED_USERS
+               if not await db.users.find_one({"username": u["username"]}, {"_id": 1})}
+    pins = _seed_pins(missing) if missing else {}
     for u in SEED_USERS:
         existing = await db.users.find_one({"username": u["username"]})
         if existing:

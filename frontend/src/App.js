@@ -1,6 +1,6 @@
 import "@/App.css";
 import { Suspense, lazy, useEffect } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "sonner";
 
 import { AuthProvider } from "@/context/AuthContext";
@@ -73,6 +73,8 @@ const Incentives = lazy(() => import("@/pages/Incentives"));
 const Payments = lazy(() => import("@/pages/Payments"));
 const AuditTrail = lazy(() => import("@/pages/AuditTrail"));
 const RecordChain = lazy(() => import("@/pages/RecordChain"));
+const Service = lazy(() => import("@/pages/Service"));
+const FollowUps = lazy(() => import("@/pages/FollowUps"));
 
 function PageLoader() {
   return (
@@ -137,6 +139,8 @@ function App() {
           <Route path="/tasks" element={<ProtectedRoute page="tasks"><Layout><Tasks /></Layout></ProtectedRoute>} />
           <Route path="/daily-planner" element={<ProtectedRoute page="daily-planner"><Layout><DailyPlanner /></Layout></ProtectedRoute>} />
           <Route path="/projects" element={<ProtectedRoute page="projects"><Layout><Projects /></Layout></ProtectedRoute>} />
+          <Route path="/service" element={<ProtectedRoute page="projects"><Layout><Service /></Layout></ProtectedRoute>} />
+          <Route path="/follow-ups" element={<ProtectedRoute page="leads"><Layout><FollowUps /></Layout></ProtectedRoute>} />
           <Route path="/attendance" element={<ProtectedRoute page="attendance"><Layout><Attendance /></Layout></ProtectedRoute>} />
           <Route path="/people/payroll" element={<ProtectedRoute page="payroll"><Layout><PayrollPage /></Layout></ProtectedRoute>} />
           <Route path="/admin/roles" element={<ProtectedRoute page="roles"><Layout><RoleManager /></Layout></ProtectedRoute>} />
@@ -178,6 +182,8 @@ function App() {
           <Route path="/payments" element={<ProtectedRoute page="finance-payments"><Layout><Payments /></Layout></ProtectedRoute>} />
           <Route path="/audit" element={<ProtectedRoute page="audit-trail"><Layout><AuditTrail /></Layout></ProtectedRoute>} />
           <Route path="/record-chain" element={<ProtectedRoute page="record-chain"><Layout><RecordChain /></Layout></ProtectedRoute>} />
+          {/* Unknown URL (old bookmark, typo) -> home instead of a blank page. */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </Suspense>
       </BrowserRouter>

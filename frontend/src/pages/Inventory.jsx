@@ -4,10 +4,54 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import SearchSelect from "@/components/SearchSelect";
 import api from "@/lib/api";
-import { inrFull } from "@/lib/format";
+import { inrFull, fmtDate } from "@/lib/format";
 import { shrinkImage } from "@/lib/image";
-import { Package, Grid3x3, List, X, Tag, Camera } from "lucide-react";
+import { Package, Grid3x3, List, X, Tag, Camera, History } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
+
+// Dimensions line for cards/list: always shown from the canonical mm values,
+// in the unit the item was entered in.
+const dimsLabel = (r) => {
+  const d = [r.width_mm, r.height_mm, r.depth_mm];
+  if (d.every((x) => x === null || x === undefined || x === "")) return "";
+  const u = r.dimension_unit === "in" ? "in" : "mm";
+  const f = (x) => (x === null || x === undefined || x === "" ? "–" : u === "in" ? +(x / 25.4).toFixed(1) : +x);
+  return `${f(d[0])} × ${f(d[1])} × ${f(d[2])} ${u} (W×H×D)`;
+};
+
+const ACTION_LABEL = { create: "Created", update: "Edited", delete: "Deleted" };
+const FIELD_LABEL = { qty: "Qty", cost: "Cost", mrp: "MRP", margin: "Margin", location: "Location", status: "Status",
+  width_mm: "Width mm", height_mm: "Height mm", depth_mm: "Depth mm", name: "Name", sku: "SKU", vendor_code: "Vendor code" };
+
+// Admin-only change history for one item (server: GET /activities is admin-only).
+function ItemHistory({ itemId }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api.get("/activities", { params: { entity: "inventory", entity_id: itemId }, skipCache: true })
+      .then(({ data }) => { if (live) setRows(data); })
+      .catch(() => { if (live) setRows([]); });
+    return () => { live = false; };
+  }, [itemId]);
+  if (rows === null) return <div className="text-xs text-[var(--ink-3)]">Loading history…</div>;
+  if (rows.length === 0) return <div className="text-xs text-[var(--ink-3)]">No recorded changes yet.</div>;
+  return (
+    <ul className="space-y-1.5 max-h-40 overflow-y-auto" data-testid="item-history">
+      {rows.map((r) => {
+        const keys = Object.keys(r.after || {}).filter((k) => FIELD_LABEL[k]);
+        return (
+          <li key={r.id} className="text-xs border-l-2 border-[var(--border)] pl-2">
+            <b>{ACTION_LABEL[r.action] || r.action}</b> by {r.by_user || "—"} · {fmtDate(r.at)}
+            {r.action === "update" && keys.map((k) => (
+              <div key={k} className="text-[var(--ink-2)]">{FIELD_LABEL[k]}: {String(r.before?.[k] ?? "—")} → {String(r.after?.[k] ?? "—")}</div>
+            ))}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 const STATUSES = ["In Stock", "Display", "Sold", "Missing", "Reserved"];
 
@@ -71,6 +115,8 @@ function locationBadge(location) {
 }
 
 export default function Inventory() {
+  const { user: authUser } = useAuth();
+  const isAdmin = authUser?.role === "admin";
   const [rows, setRows] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [floors, setFloors] = useState([]);
@@ -192,6 +238,9 @@ export default function Inventory() {
     if (saving) return;
     if (!form.sku.trim() || !form.name.trim()) { toast.error("SKU and Name are required"); return; }
     if (!editingId && !form.vendor_code.trim()) { toast.error("Vendor code is required for new items"); return; }
+    if ((form.qty ?? 0) < 0 || (form.mrp ?? 0) < 0 || (showCost && (form.cost ?? 0) < 0)) { toast.error("Qty and prices cannot be negative"); return; }
+    if (showCost && form.cost > 0 && form.mrp > 0 && form.mrp < form.cost &&
+        !window.confirm("MRP is below the landing cost — this item would sell at a loss. Save anyway?")) return;
     const unit = form.dimension_unit || "mm";
     const payload = {
       ...form,
@@ -292,6 +341,7 @@ export default function Inventory() {
                       <div className="font-mono font-semibold">{i.qty}</div>
                     </div>
                   </div>
+                  {dimsLabel(i) && <div className="text-[11px] text-[var(--ink-3)] mt-2">{dimsLabel(i)}</div>}
                   <div className="mt-auto pt-2 border-t border-[var(--border-light)] flex items-center justify-between gap-2 text-[11px] text-[var(--ink-3)]">
                     <span className="truncate">{vendorLabel(i)}</span>
                     <span className="shrink-0">{locationBadge(i.location)}</span>
@@ -318,6 +368,7 @@ export default function Inventory() {
                     {seesCost && <th className="text-right font-semibold px-4 py-2.5">Margin</th>}
                     <th className="text-left font-semibold px-4 py-2.5">Status</th>
                     <th className="text-left font-semibold px-4 py-2.5">Location</th>
+                    <th className="text-left font-semibold px-4 py-2.5">Size (W×H×D)</th>
                     <th className="w-12"></th>
                   </tr>
                 </thead>
@@ -335,6 +386,7 @@ export default function Inventory() {
                       {seesCost && <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{i.margin?.toFixed(0)}%</td>}
                       <td className="px-4 py-3"><StageBadge stage={i.status} /></td>
                       <td className="px-4 py-3 text-[var(--ink-2)] text-xs">{locationBadge(i.location)}</td>
+                      <td className="px-4 py-3 text-[var(--ink-3)] text-xs whitespace-nowrap">{dimsLabel(i).replace(" (W×H×D)", "") || "—"}</td>
                       <td className="px-2 py-3">
                         <button
                           onClick={(e) => { e.stopPropagation(); openPriceTag(i); }}
@@ -349,7 +401,7 @@ export default function Inventory() {
                     </tr>
                   ))}
                   {filtered.length === 0 && (
-                    <tr><td colSpan={seesCost ? 12 : 10} className="text-center py-12 text-[var(--ink-3)]">No inventory items</td></tr>
+                    <tr><td colSpan={seesCost ? 13 : 11} className="text-center py-12 text-[var(--ink-3)]">No inventory items</td></tr>
                   )}
                 </tbody>
               </table>
@@ -468,6 +520,14 @@ export default function Inventory() {
                    oc={(v) => setForm({ ...form, image_url: v })} cls="mt-2"
                    placeholder="…or paste an image URL" />
               </div>
+              {editingId && isAdmin && (
+                <div className="col-span-2 border-t pt-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-2 flex items-center gap-1">
+                    <History size={12} /> Change history (admin)
+                  </div>
+                  <ItemHistory itemId={editingId} />
+                </div>
+              )}
             </div>
             <div className="px-5 py-4 border-t flex items-center gap-2">
               {editingId && (
