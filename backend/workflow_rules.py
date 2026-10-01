@@ -269,6 +269,8 @@ def render(template: str, record: dict, stage_label: str) -> str:
         if key == "record":
             return record_title(record)
         v = record.get(key)
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))            # 600000.0 reads as 600000 in a task title
         return str(v) if isinstance(v, (str, int, float)) and not isinstance(v, bool) else mt.group(0)
     return _PLACEHOLDER.sub(sub, template or "")
 

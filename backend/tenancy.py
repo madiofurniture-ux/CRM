@@ -81,6 +81,8 @@ TENANT_COLLECTIONS = {
     "invoices", "meets", "petty_cash", "quote_lines", "dw_openings", "dw_surveys",
     "projects", "payments", "stock_movements", "customers", "activities",
     "settings", "workflows", "attendance", "vendors", "floors",
+    # Flows (flows.py): definitions and their run log.
+    "flows", "flow_runs",
     "commission_rules", "commission_payouts",
     "teams", "roles", "audit_log", "notification_logs",
     # Call log (cold calls etc.) — server.py "Call log" section.

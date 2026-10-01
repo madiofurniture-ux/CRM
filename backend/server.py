@@ -38,6 +38,7 @@ import quotation_templates
 import storage
 import tally
 import workflow_rules as wf
+import flows as flowlib
 import analytics as an
 import expenses as ex
 import finance_lineage as fl
@@ -845,7 +846,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         if after_write:
             await after_write(out, user)
         stage_key_field = tenancy.stage_field(tenancy.COLLECTION_ENTITY.get(collection, ""))
-        await run_stage_automation(collection, existing.get(stage_key_field), out, user)
+        await run_stage_automation(collection, existing.get(stage_key_field), out, user, before=existing)
         if entity:
             keys = [k for k in payload if k != "updated_at"]
             changed = {k: existing.get(k) for k in keys}
@@ -894,7 +895,7 @@ ALL_MODULE_IDS = [
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
     "finance-payments", "purchase-orders", "master-data", "manufacturer-orders",
-    "payroll", "calls", "analytics", "expenses", "pnl",
+    "payroll", "calls", "analytics", "expenses", "pnl", "flows",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -913,7 +914,7 @@ RETIRED_MODULE_IDS = {"requirements", "configurator"}
 # then is treated as having seen exactly these, so modules added later show up
 # switched ON for it rather than silently hidden (the payroll-menu defect).
 # Every module id added after seen_modules tracking began goes in this tuple.
-MODULES_ADDED_AFTER_TRACKING = ("calls", "analytics", "expenses", "pnl")
+MODULES_ADDED_AFTER_TRACKING = ("calls", "analytics", "expenses", "pnl", "flows")
 MODULES_BEFORE_SEEN_TRACKING = [m for m in ALL_MODULE_IDS if m not in MODULES_ADDED_AFTER_TRACKING]
 
 
@@ -1154,7 +1155,23 @@ async def validate_stage(collection: str, doc: dict, user: dict, existing: dict 
 
 
 async def run_stage_automation(collection: str, before_stage, record: dict, user: dict,
-                               *, created: bool = False):
+                               *, created: bool = False, before: dict | None = None):
+    """
+    After every successful write: stage history and workflow rules, then the
+    tenant's event-triggered Flows. `before` is the record as it was (for
+    field-change triggers); call sites that only know the old stage pass that.
+    """
+    entered_key = await _stage_history_and_rules(collection, before_stage, record, user, created=created)
+    entity = tenancy.COLLECTION_ENTITY.get(collection)
+    if entity and record and record.get("id"):
+        # Without the full old record only the stage is known; mark it so a
+        # field-change flow doesn't read every other field as "changed".
+        prior = before if before is not None else {tenancy.stage_field(entity): before_stage, "__partial__": True}
+        await run_flows(collection, prior, record, user, created=created, entered_key=entered_key)
+
+
+async def _stage_history_and_rules(collection: str, before_stage, record: dict, user: dict,
+                                   *, created: bool = False):
     """
     After a successful write: append to the record's stage history and fire
     the tenant's automation rules for the stage it entered (or for creation).
@@ -1166,12 +1183,13 @@ async def run_stage_automation(collection: str, before_stage, record: dict, user
     """
     entity = tenancy.COLLECTION_ENTITY.get(collection)
     if not entity or not record or not record.get("id"):
-        return
+        return None
     field = tenancy.stage_field(entity)
     new_value = str(record.get(field) or "").strip()
     changed = bool(new_value) and (created or new_value.lower() != str(before_stage or "").strip().lower())
     if not changed and not created:
-        return
+        return None
+    entered = None
     try:
         doc = await workflow_doc(entity, user)
         stages = (doc or {}).get("stages") or tenancy.default_workflow(entity)
@@ -1190,6 +1208,184 @@ async def run_stage_automation(collection: str, before_stage, record: dict, user
             await _run_rule(entity, collection, owned, rule, record, label, user)
     except Exception as e:
         logger.warning(f"Workflow automation failed ({collection}/{record.get('id')}): {e}")
+    return entered["key"] if entered else None
+
+
+# ── Flows (flows.py): tenant-built multi-step automations ─────────────────
+FLOW_SCHEDULE_EVERY_S = 600       # scheduled flows are checked every 10 minutes
+_last_flow_schedule = 0.0
+
+
+def _flow_engine_user(tenant_id: str) -> dict:
+    """Scheduled runs and resumed waits act as the flow engine, inside the
+    flow's own tenant (taken from the stored flow, never from a request)."""
+    return {"id": "flow-engine", "name": "Flow automation", "username": "flow-engine",
+            "tenant_id": tenant_id, "role": "admin"}
+
+
+async def run_flows(collection: str, before: dict, record: dict, user: dict, *,
+                    created: bool, entered_key: str | None):
+    """Start every active event-triggered flow this save matches. Never raises."""
+    entity = tenancy.COLLECTION_ENTITY.get(collection)
+    if not entity or not record or not record.get("id"):
+        return
+    try:
+        defs = await db.flows.find(tenancy.scope(
+            {"entity": entity, "active": True, "trigger.type": {"$in": list(flowlib.EVENT_TRIGGERS)}},
+            "flows", user), {"_id": 0}).to_list(flowlib.MAX_FLOWS)
+        if not defs:
+            return
+        stage_field = tenancy.stage_field(entity)
+        for flow in defs:
+            if flowlib.event_matches(flow, created=created, before=before or {}, record=record,
+                                entered_key=entered_key) and flowlib.conditions_met(flow, record, stage_field):
+                await _start_flow(flow, record, user, reason=flowlib.TRIGGER_LABELS[flow["trigger"]["type"]])
+    except Exception as e:
+        logger.warning(f"Flows failed ({collection}/{record.get('id')}): {e}")
+
+
+async def _start_flow(flow: dict, record: dict, user: dict, *, reason: str, fire_key: str = "") -> dict:
+    run = {
+        "id": new_id(), "flow_id": flow["id"], "flow_name": flow.get("name", ""),
+        "entity": flow["entity"], "record_id": record["id"], "record_title": wf.record_title(record),
+        "reason": reason, "fire_key": fire_key, "started_at": now_iso(),
+        "started_by": (user or {}).get("name", ""), "status": "running", "log": [], "next_step": 0,
+    }
+    tenancy.stamp(run, "flow_runs", user)
+    await db.flow_runs.insert_one(dict(run))
+    run.pop("_id", None)
+    await db.flows.update_one(tenancy.scope({"id": flow["id"]}, "flows", user),
+                              {"$inc": {"run_count": 1}, "$set": {"last_run_at": run["started_at"]}})
+    return await _continue_flow_run(flow, run, record, user)
+
+
+async def _continue_flow_run(flow: dict, run: dict, record: dict, user: dict) -> dict:
+    """Run steps from run.next_step until the end or the next wait."""
+    entity = flow["entity"]
+    collection = tenancy.ENTITY_COLLECTION[entity]
+    owned = tenancy.scope({"id": record["id"]}, collection, user)
+    steps = flow.get("steps") or []
+    now_steps, resume_index, wait_days = flowlib.split_at_wait(steps, int(run.get("next_step") or 0))
+    log, failed = list(run.get("log") or []), False
+    stage_label = str(record.get(tenancy.stage_field(entity)) or "")
+    for step in now_steps:
+        try:
+            log.append({"at": now_iso(), "step": flowlib.STEP_LABELS.get(step["type"], step["type"]),
+                        "result": await _run_flow_step(step, entity, collection, owned, record, stage_label, user),
+                        "ok": True})
+        except Exception as e:
+            failed = True
+            log.append({"at": now_iso(), "step": flowlib.STEP_LABELS.get(step["type"], step["type"]),
+                        "result": str(e)[:300], "ok": False})
+            logger.warning(f"Flow step failed ({flow.get('name')}/{step.get('type')}): {e}")
+    upd = {"log": log[-50:], "updated_at": now_iso()}
+    if resume_index is not None:
+        from datetime import timedelta as _td
+        resume = (_ist_today() + _td(days=wait_days)).isoformat()
+        upd.update(status="waiting", next_step=resume_index, resume_at=resume)
+        log.append({"at": now_iso(), "step": "Wait", "result": f"until {resume}", "ok": True})
+        upd["log"] = log[-50:]
+    else:
+        upd.update(status="failed" if failed else "completed", next_step=len(steps), finished_at=now_iso())
+    await db.flow_runs.update_one(tenancy.scope({"id": run["id"]}, "flow_runs", user), {"$set": upd})
+    return {**run, **upd}
+
+
+async def _run_flow_step(step: dict, entity: str, collection: str, owned: dict, record: dict,
+                         stage_label: str, user: dict) -> str:
+    kind = step["type"]
+    if kind in ("create_task", "alert_user"):
+        if kind == "create_task":
+            task = wf.task_for(step, entity, record, stage_label, user, today=_ist_today())
+            task["category"] = "Flow"
+        else:
+            task = wf.task_for({"title": step["message"], "assign_to": step["user"], "priority": "High",
+                                "due_in_days": 0}, entity, record, stage_label, user, today=_ist_today())
+            task["category"] = "Flow alert"
+        task.update(id=new_id(), created_at=now_iso())
+        stamp_fy(task, "tasks")
+        tenancy.stamp(task, "tasks", user)
+        await db.tasks.insert_one(dict(task))
+        return f"task '{task['title']}' for {task['assigned_to'] or 'unassigned'}"
+    if kind in ("set_field", "assign_owner"):
+        field = step["field"] if kind == "set_field" else wf.OWNER_FIELD[entity]
+        value = step["value"] if kind == "set_field" else step["user"]
+        await db[collection].update_one(owned, {"$set": {field: value}})
+        record[field] = value
+        return f"{field} set to {value}"
+    if kind == "notify_customer":
+        phone = wf.record_phone(record)
+        if not phone:
+            return "skipped: no phone on the record"
+        await notif.notify(db, user, step["event"], to=phone,
+                           customer_name=record.get("customer") or record.get("name", ""),
+                           ref_type=entity, ref_id=wf.record_title(record))
+        return f"message '{step['event']}' to {phone}"
+    raise ValueError(f"unknown step {kind}")
+
+
+async def run_scheduled_flows(*, today=None, tenant_id: str = "") -> dict:
+    """Fire due scheduled flows and resume waits that have come due. Each flow
+    runs inside its own tenant. Safe to call repeatedly: an occasion fires once."""
+    today = today or _ist_today()
+    started = resumed = 0
+    q = {"active": True, "trigger.type": {"$in": list(flowlib.SCHEDULED_TRIGGERS)}}
+    if tenant_id:
+        q["tenant_id"] = tenant_id
+    for flow in await db.flows.find(q, {"_id": 0}).to_list(1000):
+        sys_user = _flow_engine_user(flow.get("tenant_id") or "")
+        if not tenancy.tenant_of(sys_user):
+            continue
+        collection = tenancy.ENTITY_COLLECTION[flow["entity"]]
+        stage_field = tenancy.stage_field(flow["entity"])
+        try:
+            records = await db[collection].find(tenancy.scope({}, collection, sys_user), {"_id": 0}).to_list(5000)
+            for rec in records:
+                key = flowlib.scheduled_fire_key(flow, rec, today, stage_field)
+                if not key or not flowlib.conditions_met(flow, rec, stage_field):
+                    continue
+                if await db.flow_runs.find_one(tenancy.scope(
+                        {"flow_id": flow["id"], "record_id": rec.get("id"), "fire_key": key}, "flow_runs", sys_user)):
+                    continue
+                await _start_flow(flow, rec, sys_user, reason=flowlib.flow_summary(flow), fire_key=key)
+                started += 1
+        except Exception as e:
+            logger.warning(f"Scheduled flow failed ({flow.get('name')}): {e}")
+    wq = {"status": "waiting", "resume_at": {"$lte": today.isoformat()}}
+    if tenant_id:
+        wq["tenant_id"] = tenant_id
+    for run in await db.flow_runs.find(wq, {"_id": 0}).to_list(2000):
+        sys_user = _flow_engine_user(run.get("tenant_id") or "")
+        if not tenancy.tenant_of(sys_user):
+            continue
+        owned_run = tenancy.scope({"id": run["id"]}, "flow_runs", sys_user)
+        flow = await db.flows.find_one(tenancy.scope({"id": run["flow_id"]}, "flows", sys_user), {"_id": 0})
+        collection = tenancy.ENTITY_COLLECTION.get(run.get("entity"), "")
+        rec = await db[collection].find_one(tenancy.scope({"id": run["record_id"]}, collection, sys_user),
+                                            {"_id": 0}) if collection else None
+        if not flow or not flow.get("active", True) or not rec:
+            why = "the flow was switched off or deleted" if rec else "the record no longer exists"
+            await db.flow_runs.update_one(owned_run, {"$set": {"status": "cancelled", "finished_at": now_iso(),
+                                                               "cancel_reason": why}})
+            continue
+        try:
+            await _continue_flow_run(flow, run, rec, sys_user)
+            resumed += 1
+        except Exception as e:
+            logger.warning(f"Resuming flow run {run['id']} failed: {e}")
+    return {"started": started, "resumed": resumed, "date": today.isoformat()}
+
+
+async def _maybe_run_scheduled_flows():
+    global _last_flow_schedule
+    now = time.monotonic()
+    if now - _last_flow_schedule < FLOW_SCHEDULE_EVERY_S:
+        return
+    _last_flow_schedule = now
+    try:
+        await run_scheduled_flows()
+    except Exception:
+        logger.exception("scheduled flows tick failed")
 
 
 async def _run_rule(entity: str, collection: str, owned: dict, rule: dict, record: dict,
@@ -1236,6 +1432,129 @@ def _workflow_view(entity: str, doc: dict | None) -> dict:
         "stage_field": tenancy.stage_field(entity),
         "fields": wf.field_catalog(entity),
     }
+
+
+# ---------- Flows API (admin): builder, on/off, run log, test, run now ----------
+async def _flow_or_404(flow_id: str, user: dict) -> dict:
+    doc = await db.flows.find_one(tenancy.scope({"id": flow_id}, "flows", user), {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Flow not found")
+    return doc
+
+
+async def _validated_flow(payload: dict, user: dict) -> dict:
+    entity = str((payload or {}).get("entity") or "")
+    stages = (await workflow_for(entity, user))[0] if entity in tenancy.ENTITY_COLLECTION else []
+    try:
+        return flowlib.validate_flow(payload, stages)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _flow_view(doc: dict) -> dict:
+    return {**doc, "summary": flowlib.flow_summary(doc)}
+
+
+@api.get("/flows/meta")
+async def flows_meta(user: dict = Depends(require_admin)):
+    entities = []
+    for entity in tenancy.ENTITY_COLLECTION:
+        stages, _ = await workflow_for(entity, user)
+        entities.append(flowlib.entity_meta(entity, stages))
+    return {**flowlib.builder_meta(), "entities": entities}
+
+
+@api.get("/flows")
+async def flows_list(user: dict = Depends(require_admin)):
+    rows = await db.flows.find(tenancy.scope({}, "flows", user), {"_id": 0}).sort("created_at", -1).to_list(flowlib.MAX_FLOWS)
+    return [_flow_view(r) for r in rows]
+
+
+@api.post("/flows")
+async def flow_create(payload: dict, user: dict = Depends(require_admin)):
+    if await db.flows.count_documents(tenancy.scope({}, "flows", user)) >= flowlib.MAX_FLOWS:
+        raise HTTPException(status_code=400, detail=f"At most {flowlib.MAX_FLOWS} flows per company")
+    doc = await _validated_flow({**(payload or {}), "id": ""}, user)
+    doc.update(created_at=now_iso(), updated_at=now_iso(), created_by=user.get("name", ""),
+               run_count=0, last_run_at="")
+    tenancy.stamp(doc, "flows", user)
+    await db.flows.insert_one(dict(doc))
+    doc.pop("_id", None)
+    await record_activity("flow", doc["id"], "create", user, note=f"Flow '{doc['name']}' created")
+    return _flow_view(doc)
+
+
+@api.put("/flows/{flow_id}")
+async def flow_update(flow_id: str, payload: dict, user: dict = Depends(require_admin)):
+    existing = await _flow_or_404(flow_id, user)
+    doc = await _validated_flow({**existing, **(payload or {}), "id": flow_id}, user)
+    doc.update(updated_at=now_iso(), updated_by=user.get("name", ""))
+    owned = tenancy.scope({"id": flow_id}, "flows", user)
+    await db.flows.update_one(owned, {"$set": doc})
+    await record_activity("flow", flow_id, "update", user, note=f"Flow '{doc['name']}' edited")
+    return _flow_view(await db.flows.find_one(owned, {"_id": 0}))
+
+
+@api.post("/flows/{flow_id}/toggle")
+async def flow_toggle(flow_id: str, payload: dict, user: dict = Depends(require_admin)):
+    await _flow_or_404(flow_id, user)
+    owned = tenancy.scope({"id": flow_id}, "flows", user)
+    await db.flows.update_one(owned, {"$set": {"active": bool((payload or {}).get("active")), "updated_at": now_iso()}})
+    return _flow_view(await db.flows.find_one(owned, {"_id": 0}))
+
+
+@api.delete("/flows/{flow_id}")
+async def flow_delete(flow_id: str, user: dict = Depends(require_admin)):
+    flow = await _flow_or_404(flow_id, user)
+    await db.flows.delete_one(tenancy.scope({"id": flow_id}, "flows", user))
+    await db.flow_runs.update_many(tenancy.scope({"flow_id": flow_id, "status": "waiting"}, "flow_runs", user),
+                                   {"$set": {"status": "cancelled", "finished_at": now_iso(),
+                                             "cancel_reason": "the flow was deleted"}})
+    await record_activity("flow", flow_id, "delete", user, note=f"Flow '{flow.get('name')}' deleted")
+    return {"ok": True}
+
+
+@api.get("/flow-runs")
+async def flow_runs_list(flow_id: str = "", status: str = "", limit: int = 100,
+                         user: dict = Depends(require_admin)):
+    q: dict = {}
+    if flow_id:
+        q["flow_id"] = flow_id
+    if status:
+        q["status"] = status
+    return await db.flow_runs.find(tenancy.scope(q, "flow_runs", user), {"_id": 0}) \
+        .sort("started_at", -1).to_list(max(1, min(int(limit or 100), 500)))
+
+
+@api.post("/flows/{flow_id}/test")
+async def flow_test(flow_id: str, payload: dict, user: dict = Depends(require_admin)):
+    """Dry run against one record: would the conditions pass, and what would
+    each step do? Nothing is written."""
+    flow = await _flow_or_404(flow_id, user)
+    collection = tenancy.ENTITY_COLLECTION[flow["entity"]]
+    rec = await db[collection].find_one(
+        tenancy.scope({"id": str((payload or {}).get("record_id") or "")}, collection, user), {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Record not found")
+    stage_field = tenancy.stage_field(flow["entity"])
+    checks = [{"field": c["field"], "op": c["op"], "value": c.get("value", ""),
+               "actual": rec.get(stage_field if c["field"] == "stage" else c["field"]),
+               "passed": flowlib.conditions_met({"conditions": [c]}, rec, stage_field)}
+              for c in flow.get("conditions") or []]
+    return {"record": wf.record_title(rec), "conditions_met": flowlib.conditions_met(flow, rec, stage_field),
+            "checks": checks,
+            "scheduled_key": flowlib.scheduled_fire_key(flow, rec, _ist_today(), stage_field)
+            if flow["trigger"]["type"] in flowlib.SCHEDULED_TRIGGERS else None,
+            "steps": [flowlib.STEP_LABELS[s["type"]] for s in flow.get("steps") or []]}
+
+
+@api.post("/flows/run-scheduled")
+async def flows_run_scheduled(user: dict = Depends(require_admin)):
+    """Run this company's scheduled flows now instead of waiting for the next check."""
+    tid = tenancy.tenant_of(user)
+    if not tid:
+        raise HTTPException(status_code=403, detail="No company on this account")
+    return await run_scheduled_flows(tenant_id=tid)
 
 
 def _require_workflow_entity(entity: str):
@@ -7774,6 +8093,7 @@ async def _agent_task_dispatch_loop():
             await _dispatch_tick()
         except Exception:
             logger.exception("agent_task dispatch tick failed")
+        await _maybe_run_scheduled_flows()
         await asyncio.sleep(15)
 
 
