@@ -4,6 +4,10 @@ import StageBadge from "@/components/StageBadge";
 import WhatsAppButton from "@/components/WhatsAppButton";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { FileText } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 
 export default function Sales() {
@@ -11,6 +15,24 @@ export default function Sales() {
   const [search, setSearch] = useState("");
   const [fDiv, setFDiv] = useState("All");
   const { divisions } = useTenantConfig();
+  const { canAccess } = useAuth();
+  const navigate = useNavigate();
+  const [invoicing, setInvoicing] = useState("");
+  const canInvoice = canAccess("invoice-gen");
+
+  // One click: the server builds the tax invoice from the sale and its
+  // quotation (or returns the one already raised).
+  const raiseInvoice = async (s) => {
+    if (invoicing) return;
+    setInvoicing(s.id);
+    try {
+      const { data } = await api.post(`/invoices/from-sale/${s.id}`);
+      toast.success(`Invoice ${data.invoice_no} ready`);
+      navigate("/invoices");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Couldn't create the invoice");
+    } finally { setInvoicing(""); }
+  };
 
   // A sales order stores no phone of its own; the customer's number lives on
   // the quotation it came from (same lookup the backend uses for the
@@ -70,7 +92,7 @@ export default function Sales() {
                   <th className="text-right font-semibold px-4 py-2.5">Value</th>
                   <th className="text-right font-semibold px-4 py-2.5">Paid</th>
                   <th className="text-right font-semibold px-4 py-2.5">Balance</th>
-                  <th className="px-2 py-2.5"><span className="sr-only">WhatsApp</span></th>
+                  <th className="px-2 py-2.5"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -86,9 +108,17 @@ export default function Sales() {
                     <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{inrFull(s.paid)}</td>
                     <td className={`px-4 py-3 text-right font-mono ${s.balance > 0 ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-3)]"}`}>{inrFull(s.balance)}</td>
                     <td className="px-2 py-3">
+                      <div className="flex items-center gap-1">
+                      {canInvoice && (
+                        <button onClick={() => raiseInvoice(s)} disabled={invoicing === s.id}
+                                className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)] disabled:opacity-50"
+                                title="Create tax invoice" aria-label={`Create tax invoice for ${s.sale_no}`}
+                                data-testid={`sale-invoice-${s.id}`}><FileText size={14} /></button>
+                      )}
                       <WhatsAppButton phone={phoneOf(s)} context={s.balance > 0 ? "payment-reminder" : "follow-up"}
                                       customerName={s.customer} ref={s.sale_no} refType="sale" refId={s.id}
                                       testId={`sale-wa-${s.id}`} />
+                      </div>
                     </td>
                   </tr>
                 ))}

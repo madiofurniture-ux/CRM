@@ -3,9 +3,9 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
 import { GST_DEFAULT, GST_SLABS } from "@/lib/constants";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, amountInWords } from "@/lib/format";
 import { toast } from "sonner";
-import { Trash2, Edit2, Printer, X, Plus } from "lucide-react";
+import { Trash2, Edit2, Printer, X, Plus, IndianRupee } from "lucide-react";
 
 const HSN_OPTIONS = ["9403", "3208", "4418", "9401", "6304", "9405"];
 // Furniture/interiors line items are priced per piece, per square foot
@@ -24,10 +24,11 @@ export default function Invoices() {
   const [editing, setEditing] = useState(null);
   const [printRow, setPrintRow] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [office, setOffice] = useState({ name: "", address: "", gstin: "", invoice_prefix: "INV" });
+  const [office, setOffice] = useState({ name: "", address: "", gstin: "", invoice_prefix: "INV", home_state: "Telangana" });
+  const [payFor, setPayFor] = useState(null);
 
   const empty = {
-    invoice_no: "", date: new Date().toISOString().slice(0, 10),
+    invoice_no: "", date: new Date().toISOString().slice(0, 10), due_date: "",
     customer: "", billing_address: "", phone: "", gstin: "",
     place_of_supply: "Telangana", is_igst: false,
     line_items: [emptyItem()],
@@ -43,6 +44,11 @@ export default function Invoices() {
   };
   useEffect(() => { load(); }, []);
 
+  // Interstate when the place of supply is outside the office's GST state;
+  // the server makes the same call on save.
+  const homeState = office.home_state || "Telangana";
+  const isIgst = !!form.place_of_supply && form.place_of_supply.trim().toLowerCase() !== homeState.trim().toLowerCase();
+
   const computed = useMemo(() => {
     let subtotal = 0, tax = 0, cgst = 0, sgst = 0, igst = 0, disc = 0;
     for (const it of form.line_items || []) {
@@ -54,12 +60,15 @@ export default function Invoices() {
       disc += d;
       tax += t;
     }
-    if (form.is_igst) igst = tax;
+    if (isIgst) igst = tax;
     else { cgst = tax / 2; sgst = tax / 2; }
-    const total = subtotal + tax;
-    const balance = total - (form.paid || 0);
-    return { subtotal, discount_total: disc, cgst, sgst, igst, total, balance };
-  }, [form.line_items, form.is_igst, form.paid]);
+    // Rounded to the rupee like the server's invoice_totals.
+    const exact = Math.round((subtotal + tax) * 100) / 100;
+    const total = Math.round(exact);
+    const round_off = Math.round((total - exact) * 100) / 100;
+    const balance = Math.max(0, total - (form.paid || 0));
+    return { subtotal, discount_total: disc, cgst, sgst, igst, round_off, total, balance };
+  }, [form.line_items, isIgst, form.paid]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -76,8 +85,7 @@ export default function Invoices() {
 
   const openNew = () => {
     setEditing(null);
-    const nextNo = `${office.invoice_prefix || "MAD"}/25-26/${String(rows.length + 1).padStart(4, "0")}`;
-    setForm({ ...empty, invoice_no: nextNo });
+    setForm({ ...empty, invoice_no: "" });  // numbered by the server on save
     setShow(true);
   };
   const openEdit = (r) => { setEditing(r); setForm({ ...r, line_items: r.line_items?.length ? r.line_items : [emptyItem()] }); setShow(true); };
@@ -85,12 +93,15 @@ export default function Invoices() {
   const save = async () => {
     if (saving) return;
     setSaving(true);
-    const payload = { ...form, ...computed };
+    // Money received comes from payments, never from this form.
+    const payload = { ...form, is_igst: isIgst };
+    delete payload.paid;
+    delete payload.balance;
     try {
       if (editing) { await api.put(`/invoices/${editing.id}`, payload); toast.success("Invoice updated"); }
       else { await api.post("/invoices", payload); toast.success("Invoice created"); }
       setShow(false); load();
-    } catch (e) { toast.error("Save failed"); }
+    } catch (e) { toast.error(e?.response?.data?.detail || "Save failed"); }
     finally { setSaving(false); }
   };
   const remove = async (id) => {
@@ -145,9 +156,13 @@ export default function Invoices() {
                     <td className="px-4 py-3 text-right font-mono text-[var(--ink-2)] hidden lg:table-cell">{inrFull((r.cgst || 0) + (r.sgst || 0) + (r.igst || 0))}</td>
                     <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(r.total)}</td>
                     <td className={`px-4 py-3 text-right font-mono ${r.balance > 0 ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-3)]"}`}>{inrFull(r.balance)}</td>
-                    <td className="px-4 py-3"><StageBadge stage={r.status === "Paid" ? "Delivered" : r.status === "Sent" ? "Quoted" : "New"} /></td>
+                    <td className="px-4 py-3"><StageBadge stage={r.status === "Paid" ? "Delivered" : r.status === "Sent" ? "Quoted" : r.status === "Cancelled" ? "Lost" : "New"} />
+                      {r.sale_id && <div className="text-[10px] text-[var(--ink-3)] mt-0.5">from sale</div>}</td>
                     <td className="px-2 py-3">
                       <div className="flex items-center gap-1">
+                        {r.balance > 0 && r.status !== "Cancelled" && (
+                          <button onClick={() => setPayFor(r)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" title="Record payment" data-testid={`inv-pay-${r.id}`}><IndianRupee size={13} /></button>
+                        )}
                         <button onClick={() => setPrintRow(r)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" title="Print" data-testid={`inv-print-${r.id}`}><Printer size={13} /></button>
                         <button onClick={() => openEdit(r)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Edit2 size={13} /></button>
                         <button onClick={() => remove(r.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
@@ -171,18 +186,18 @@ export default function Invoices() {
             </div>
             <div className="p-5 overflow-y-auto">
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
-                <Fld l="Invoice No" v={form.invoice_no} oc={(v) => setForm({ ...form, invoice_no: v })} t2="inv-no" />
+                <Fld l="Invoice No" v={form.invoice_no} oc={(v) => setForm({ ...form, invoice_no: v })} t2="inv-no" ph="Assigned on save" />
                 <Fld l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />
+                <Fld l="Due date" t="date" v={form.due_date} oc={(v) => setForm({ ...form, due_date: v })} />
                 <Fld l="By" v={form.by_user} oc={(v) => setForm({ ...form, by_user: v })} />
                 <Fld l="Customer" v={form.customer} oc={(v) => setForm({ ...form, customer: v })} cls="col-span-2 md:col-span-3" t2="inv-cust" />
                 <Fld l="Billing Address" v={form.billing_address} oc={(v) => setForm({ ...form, billing_address: v })} cls="col-span-2 md:col-span-3" />
                 <Fld l="Phone" v={form.phone} oc={(v) => setForm({ ...form, phone: v })} />
                 <Fld l="GSTIN" v={form.gstin} oc={(v) => setForm({ ...form, gstin: v })} />
                 <Fld l="Place of Supply" v={form.place_of_supply} oc={(v) => setForm({ ...form, place_of_supply: v })} />
-                <label className="col-span-2 md:col-span-3 flex items-center gap-2 text-sm text-[var(--ink-2)] mt-1">
-                  <input type="checkbox" checked={form.is_igst} onChange={(e) => setForm({ ...form, is_igst: e.target.checked })} className="accent-[var(--brand)]" data-testid="inv-igst" />
-                  Interstate — apply IGST (uncheck for CGST + SGST)
-                </label>
+                <div className="col-span-2 md:col-span-3 text-sm text-[var(--ink-2)] mt-1" data-testid="inv-igst">
+                  {isIgst ? `Interstate supply (outside ${homeState}): IGST applies.` : `Within ${homeState}: CGST + SGST apply.`}
+                </div>
               </div>
 
               <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-2">Line items</div>
@@ -246,12 +261,12 @@ export default function Invoices() {
                 <div>
                   <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Notes</label>
                   <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows="3" className="w-full px-3 py-2 rounded-lg border border-[var(--border)] text-sm resize-none focus:border-[var(--brand)] outline-none" />
-                  <Fld l="Paid" t="number" v={form.paid} oc={(v) => setForm({ ...form, paid: parseFloat(v) || 0 })} cls="mt-2" />
+                  <p className="text-xs text-[var(--ink-3)] mt-2">Payments are recorded with the ₹ button on the invoice list{form.sale_id ? " (they go against the sale this invoice was raised from)" : ""}.</p>
                 </div>
                 <div className="bg-[var(--surface-2)] rounded-lg p-4 text-sm space-y-1.5 font-mono">
                   <Row label="Subtotal" val={computed.subtotal} />
                   <Row label="Discount" val={-computed.discount_total} muted />
-                  {form.is_igst ? (
+                  {isIgst ? (
                     <Row label="IGST" val={computed.igst} />
                   ) : (
                     <>
@@ -259,6 +274,7 @@ export default function Invoices() {
                       <Row label="SGST" val={computed.sgst} />
                     </>
                   )}
+                  {computed.round_off ? <div className="flex justify-between text-[var(--ink-3)]"><span>Round off</span><span>{paise(computed.round_off)}</span></div> : null}
                   <div className="border-t border-[var(--border)] pt-2 mt-2">
                     <Row label="TOTAL" val={computed.total} bold />
                     <Row label="Paid" val={form.paid} muted />
@@ -276,9 +292,12 @@ export default function Invoices() {
       )}
 
       {printRow && <InvoicePrint invoice={printRow} office={office} onClose={() => setPrintRow(null)} />}
+      {payFor && <RecordPayment invoice={payFor} onClose={() => setPayFor(null)} onSaved={() => { setPayFor(null); load(); }} />}
     </>
   );
 }
+
+const paise = (n) => `${n < 0 ? "−" : "+"}₹${Math.abs(Number(n) || 0).toFixed(2)}`;
 
 function Row({ label, val, bold, muted, danger }) {
   return (
@@ -289,11 +308,55 @@ function Row({ label, val, bold, muted, danger }) {
   );
 }
 
-function Fld({ l, v, oc, t = "text", cls = "", t2 }) {
+function RecordPayment({ invoice, onClose, onSaved }) {
+  const [amount, setAmount] = useState(invoice.balance || 0);
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [mode, setMode] = useState("Bank");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (busy || !(amount > 0)) return;
+    setBusy(true);
+    try {
+      await api.post("/payments", {
+        date, amount, mode, direction: "In", kind: amount >= invoice.balance ? "Final" : "Part",
+        phone: invoice.phone || "", remarks: `Invoice ${invoice.invoice_no}`,
+        // A sale-linked invoice's money is tracked on the sale.
+        ...(invoice.sale_id ? { against_sale_id: invoice.sale_id } : { against_invoice_id: invoice.id }),
+      });
+      toast.success("Payment recorded");
+      onSaved();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Couldn't record the payment"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl border w-full max-w-sm" onClick={(e) => e.stopPropagation()} data-testid="inv-pay-modal">
+        <div className="px-5 py-4 border-b font-heading font-semibold">Record payment · {invoice.invoice_no}</div>
+        <div className="p-5 space-y-3">
+          <div className="text-sm text-[var(--ink-2)]">Balance due {inrFull(invoice.balance)}</div>
+          <Fld l="Amount" t="number" v={amount} oc={(v) => setAmount(parseFloat(v) || 0)} t2="inv-pay-amount" />
+          <Fld l="Date" t="date" v={date} oc={setDate} />
+          <div>
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Mode</label>
+            <select value={mode} onChange={(e) => setMode(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
+              {["Bank", "UPI", "Cheque", "Other"].map((m) => <option key={m}>{m}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="px-5 py-4 border-t flex justify-end gap-2">
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary disabled:opacity-60" disabled={busy || !(amount > 0)} onClick={save} data-testid="inv-pay-save">{busy ? "Saving…" : "Record"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Fld({ l, v, oc, t = "text", cls = "", t2, ph }) {
   return (
     <div className={cls}>
       <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">{l}</label>
-      <input type={t} value={v ?? ""} onChange={(e) => oc(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" data-testid={t2} />
+      <input type={t} value={v ?? ""} placeholder={ph} onChange={(e) => oc(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" data-testid={t2} />
     </div>
   );
 }
@@ -318,6 +381,7 @@ function InvoicePrint({ invoice, office, onClose }) {
             <div className="text-[10px] uppercase tracking-widest text-[var(--ink-3)] font-semibold">Tax Invoice</div>
             <div className="font-heading font-bold text-lg mt-1">{invoice.invoice_no}</div>
             <div className="text-sm text-[var(--ink-2)] mt-1">{fmtDate(invoice.date)}</div>
+            {invoice.due_date && <div className="text-xs text-[var(--ink-3)] mt-0.5">Due {fmtDate(invoice.due_date)}</div>}
           </div>
         </div>
 
@@ -380,12 +444,14 @@ function InvoicePrint({ invoice, office, onClose }) {
                 <div className="flex justify-between"><span className="text-[var(--ink-2)]">SGST</span><span>{inrFull(invoice.sgst)}</span></div>
               </>
             )}
+            {invoice.round_off ? <div className="flex justify-between"><span className="text-[var(--ink-2)]">Round off</span><span>{paise(invoice.round_off)}</span></div> : null}
             <div className="flex justify-between border-t border-[var(--ink)] pt-2 mt-2 font-bold text-base"><span>TOTAL</span><span>{inrFull(invoice.total)}</span></div>
             <div className="flex justify-between text-[var(--ink-3)]"><span>Paid</span><span>{inrFull(invoice.paid)}</span></div>
             <div className={`flex justify-between font-bold ${invoice.balance > 0 ? "text-[var(--danger)]" : ""}`}><span>Balance</span><span>{inrFull(invoice.balance)}</span></div>
           </div>
         </div>
 
+        <div className="text-sm text-[var(--ink)] mb-4" data-testid="inv-words"><span className="text-[var(--ink-3)]">Amount in words: </span>{amountInWords(invoice.total)}</div>
         <div className="text-xs text-[var(--ink-3)] italic border-t border-[var(--border)] pt-4">
           {invoice.notes}
         </div>

@@ -4,7 +4,7 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
 import useWorkflow from "@/hooks/useWorkflow";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers } from "lucide-react";
 import { useTenantConfig } from "@/context/TenantConfigContext";
@@ -255,6 +255,10 @@ export default function Quotes() {
                     </td>
                     <td className="px-4 py-3">
                       <StageBadge stage={r.stage} />
+                      {isExpired(r) && (
+                        <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
+                              title={`Offer valid until ${fmtDate(r.valid_until)}`} data-testid={`quote-expired-${r.id}`}>Expired</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-bold text-[var(--color-text)]">{inrFull(r.value)}</td>
                     <td className="px-4 py-3 text-right space-x-1">
@@ -522,4 +526,14 @@ export default function Quotes() {
       )}
     </>
   );
+}
+
+const CLOSED_QUOTE = ["won", "lost", "cancelled", "adv received"];
+
+// Same rule as lifecycle.quote_expired: an open quote past its validity date.
+function isExpired(q) {
+  if (!q.valid_until) return false;
+  const closed = CLOSED_QUOTE.includes(String(q.status || "").toLowerCase())
+    || CLOSED_QUOTE.includes(String(q.stage || "").toLowerCase());
+  return !closed && q.valid_until < todayIST();
 }

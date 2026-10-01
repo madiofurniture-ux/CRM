@@ -52,7 +52,9 @@ Auth & tenants   POST /auth/login · /auth/users (admin; reports_to validated, n
 Workflows        GET /workflows[/{entity}] · PUT /workflows/{entity} {stages, rules, enforce}
                  POST /workflows/{entity}/adopt|reset
 Projects         POST/PUT /projects · PUT /projects/{id}/stage (gates + automations)
-Quotes           /quotes/{id}/workspace · save-total · approve · revise
+Quotes           /quotes/{id}/workspace · save-total · approve · revise (approval fields locked on plain PUT)
+Invoices         POST /invoices/from-sale/{id} · CRUD numbers, totals and paid server-side
+Payroll (HR)     /v1/payroll[/calculate|/bulk-calculate|/policy|/{id}/status] (api_hr.py)
 Calls            POST /calls/{id}/convert (lead from a call; dedupes by phone)
 Analytics        GET /analytics/hub/{sales|leads|calls|attendance|vendors}?start&end&division
                  (older: /analytics/pipeline|revenue|commissions|inventory, /reports)

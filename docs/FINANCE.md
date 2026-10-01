@@ -86,8 +86,11 @@ without one, with these figures. Projects link here from their detail drawer.
 
 **Company P&L** covers a period (this month, last 90 days, this or last FY,
 or custom) and a division: revenue, vendor cost, project expenses, gross
-profit, overheads (spend not tied to a deal, by category), incentives and
-net profit, month by month.
+profit, overheads (spend not tied to a deal, by category), salaries,
+incentives and net profit, month by month. **Salaries** are paid payroll runs
+(gross + bonuses + employer PF/ESI), dated when marked Paid; they are
+company-level, so a single-division view leaves them out. Commission
+incentives stay on their own line and are not counted again in salaries.
 
 **Project P&L fix:** spend now counts toward a project when the entry itself
 is tagged to it (so money-request payouts from any wallet land there) and
@@ -99,6 +102,42 @@ server until the PIN unlocks them.
 
 API: `GET /api/finance/deal-pnl`, `/api/finance/deals`, `/api/finance/pnl`.
 Logic: `backend/finance_lineage.py`. Tests: `backend/tests/test_finance_lineage.py`.
+
+## Quotations, invoices and payroll
+
+**Quotations.** Discount sign-off only happens through
+`POST /quotes/{id}/approve` (admin) and `/save-total`. A plain create or edit
+can't write `approval`, `approved_by` or `approved_at`, and changing the
+discount re-opens the gate. Each quote gets `valid_until` (date + 30 days);
+an open quote past it shows as Expired in the list and workspace, and the
+date can be extended from the workspace.
+
+**Tax invoices.** The server assigns numbers as `PREFIX/26-27/0001`, one
+series per financial year, unique per company. Totals, GST and round-off to
+the rupee are computed from line items; IGST applies when the place of supply
+is outside the office's `home_state` (default Telangana). Paid, balance and
+Paid status come from recorded payments, never from the form, and deleting a
+payment reverses it on the invoice. **Create invoice** on a sale
+(`POST /invoices/from-sale/{id}`) builds the invoice from the sale and its
+quotation (lines, discount, GST, customer, project) and links it by
+`sale_id`. Such an invoice mirrors the sale's payments and isn't counted
+again in receivables. Payments are recorded with the ₹ button on the invoice
+list; the print shows the amount in words.
+
+**Payroll.** `GET/PUT /api/v1/payroll/policy` holds per-company switches for
+PF (12% of basic, ₹15,000 ceiling), ESI (0.75% / 3.25% up to ₹21,000 gross)
+and Telangana Professional Tax (₹150 / ₹200 slabs), all off by default,
+plus the basic and HRA split. Each run stores basic, HRA, special allowance
+and employee and employer contributions; net pay is after statutory
+deductions. Recalculating a month replaces its Draft and hands back its
+commission payouts; an Approved or Paid run blocks recalculation. Status goes
+Draft → Approved → Paid (Approved can reopen to Draft; Paid is final). Each
+run has a printable payslip.
+
+Logic: `lifecycle.py` (`invoice_totals`, `invoice_payment_state`,
+`payroll_statutory`), `server.py` (`normalize_invoice`, `_sync_invoices`),
+`api_hr.py`. Tests: `test_quote_hardening.py`, `test_invoicing.py`,
+`test_payroll_statutory.py`.
 
 ## Roll-out
 

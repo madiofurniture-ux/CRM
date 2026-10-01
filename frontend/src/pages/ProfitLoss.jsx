@@ -148,6 +148,7 @@ function CompanyPnl() {
                 <Line label="Project expenses" v={st.project_expenses} minus />
                 <Line label="Gross profit" v={st.gross_profit} total note={pct(st.gross_margin_pct)} />
                 <Line label="Overheads" v={st.overheads} minus />
+                {st.salaries ? <Line label="Salaries (paid payroll)" v={st.salaries} minus /> : null}
                 <Line label="Incentives" v={st.incentives} minus />
                 <Line label="Net profit" v={st.net_profit} total note={pct(st.net_margin_pct)} />
               </dl>
@@ -169,13 +170,13 @@ function CompanyPnl() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-                      <tr>{["Month", "Revenue", "Vendor", "Project exp.", "Overheads", "Incentives", "Net profit"].map((h, i) => <th key={h} className={`py-2 pr-3 font-medium ${i ? "text-right" : "text-left"}`}>{h}</th>)}</tr>
+                      <tr>{["Month", "Revenue", "Vendor", "Project exp.", "Overheads", "Salaries", "Incentives", "Net profit"].map((h, i) => <th key={h} className={`py-2 pr-3 font-medium ${i ? "text-right" : "text-left"}`}>{h}</th>)}</tr>
                     </thead>
                     <tbody>
                       {data.series.map((r) => (
                         <tr key={r.month} className="border-b border-[var(--color-border)] last:border-0">
                           <td className="py-2 pr-3">{r.label}</td>
-                          {["revenue", "vendor_cost", "project_expenses", "overheads", "incentives", "net_profit"].map((f) => (
+                          {["revenue", "vendor_cost", "project_expenses", "overheads", "salaries", "incentives", "net_profit"].map((f) => (
                             <td key={f} className="py-2 pr-3 text-right"><Amt v={r[f]} /></td>
                           ))}
                         </tr>

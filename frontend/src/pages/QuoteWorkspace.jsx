@@ -6,7 +6,7 @@ import StageProgressBar from "@/components/StageProgressBar";
 import LogTimeline from "@/components/LogTimeline";
 import AttachmentPanel from "@/components/AttachmentPanel";
 import api from "@/lib/api";
-import { inrFull } from "@/lib/format";
+import { inrFull, fmtDate } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { ChevronLeft, Plus, Trash2, ArrowRightCircle, GitBranch } from "lucide-react";
@@ -111,6 +111,14 @@ export default function QuoteWorkspace() {
     finally { setBusy(false); }
   };
 
+  const setValidity = async (value) => {
+    if (busy || !value) return;
+    setBusy(true);
+    try { await api.put(`/quotes/${id}`, { valid_until: value }); await load(); }
+    catch { toast.error("Couldn't update the validity date"); }
+    finally { setBusy(false); }
+  };
+
   return (
     <>
       <Topbar title={`${q.quote_no}${q.version > 1 ? ` · v${q.version}` : ""}`} subtitle={q.customer}
@@ -126,6 +134,17 @@ export default function QuoteWorkspace() {
       <div className="p-6 space-y-4" data-testid="quote-workspace">
         <button onClick={() => nav("/quotes")} className="text-sm text-[var(--ink-2)] inline-flex items-center gap-1"><ChevronLeft size={14} /> All deals</button>
         {pipeline && <StageProgressBar stages={pipeline} />}
+
+        <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="quote-validity">
+          <span className="text-[var(--ink-2)]">Offer valid until</span>
+          <input type="date" value={q.valid_until || ""} onChange={(e) => setValidity(e.target.value)} disabled={busy}
+                 className="px-2 py-1 rounded border border-[var(--border)] bg-white text-sm" aria-label="Offer valid until" />
+          {q.expired && (
+            <span className="px-2 py-0.5 rounded text-xs font-semibold bg-[var(--danger-soft)] text-[var(--danger)]">
+              Expired {fmtDate(q.valid_until)}. Extend the date or revise the quote before the customer accepts.
+            </span>
+          )}
+        </div>
 
         {pending && (
           <div className="bg-[var(--warn-soft)] border border-[var(--warn)] rounded-lg px-4 py-3 flex items-center justify-between">

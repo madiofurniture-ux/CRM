@@ -75,3 +75,30 @@ export const fmtDateTime = (s) => {
     return s;
   }
 };
+
+// "Rupees One Lakh Six Thousand Two Hundred Only" — Indian grouping
+// (crore / lakh / thousand), as printed on tax invoices and payslips.
+const ONES = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+  "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+const twoDigits = (n) => (n < 20 ? ONES[n] : `${TENS[Math.floor(n / 10)]}${n % 10 ? ` ${ONES[n % 10]}` : ""}`);
+const threeDigits = (n) => {
+  const h = Math.floor(n / 100), r = n % 100;
+  return [h ? `${ONES[h]} Hundred` : "", r ? twoDigits(r) : ""].filter(Boolean).join(" ");
+};
+export const amountInWords = (value) => {
+  const num = Math.abs(Number(value) || 0);
+  let rupees = Math.floor(num);
+  const paise = Math.round((num - rupees) * 100);
+  if (rupees === 0 && paise === 0) return "Rupees Zero Only";
+  const parts = [];
+  const crore = Math.floor(rupees / 10000000); rupees %= 10000000;
+  const lakh = Math.floor(rupees / 100000); rupees %= 100000;
+  const thousand = Math.floor(rupees / 1000); rupees %= 1000;
+  if (crore) parts.push(`${threeDigits(crore)} Crore`);
+  if (lakh) parts.push(`${twoDigits(lakh)} Lakh`);
+  if (thousand) parts.push(`${twoDigits(thousand)} Thousand`);
+  if (rupees) parts.push(threeDigits(rupees));
+  const words = parts.join(" ");
+  return `Rupees ${words || "Zero"}${paise ? ` and ${twoDigits(paise)} Paise` : ""} Only`;
+};
