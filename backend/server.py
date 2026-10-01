@@ -7561,7 +7561,11 @@ async def startup():
     try:
         await db.customers.create_index(
             [("tenant_id", 1), ("phone", 1)], unique=True,
-            partialFilterExpression={"phone": {"$exists": True, "$ne": ""}})
+            # Atlas rejects $ne/$exists:true-with-$ne in partial indexes
+            # ("Expression not supported in partial index: $not"), which is
+            # why this index silently never existed in production. A string
+            # strictly greater than "" is exactly "non-blank".
+            partialFilterExpression={"phone": {"$type": "string", "$gt": ""}})
     except Exception as e:
         logger.warning(f"Customer phone-uniqueness index not created: {e}")
 
