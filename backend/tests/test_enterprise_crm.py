@@ -361,6 +361,8 @@ async def _stock_nodes():
     for name in ("Central Warehouse", "Showroom Display", "Factory Unit"):
         await _insert("floors", {"id": f"f-{name[:3].lower()}", "name": name,
                                  "color": "", "created_at": "2026-01-01T00:00:00+00:00"})
+    # Stock movements must reference a real inventory SKU (typo guard).
+    await _insert("inventory", {"id": "inv-sofa", "sku": "MF-SOFA-001", "name": "Sofa"})
 
 
 def test_inventory_nodes_cover_warehouse_showroom_and_factory():
@@ -418,6 +420,8 @@ def test_transfer_books_an_offsetting_receipt_at_the_destination_node():
 
 def test_stock_movements_are_tenant_scoped():
     async def body():
+        await _insert("inventory", {"id": "inv-sofa", "sku": "MF-SOFA-001", "name": "Sofa"})
+        await _insert("inventory", {"id": "inv-beam", "sku": "SSF-BEAM-1", "name": "Beam"}, user=SISTER_ADMIN)
         await server.create_stock_movement(StockMovementCreate(
             type="Receipt", product_id="MF-SOFA-001", qty=5,
             warehouse="Central Warehouse", date="2026-01-01"), user=ADMIN)

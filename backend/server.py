@@ -1753,10 +1753,75 @@ async def normalize_floor(doc: dict, existing: dict | None, user: dict) -> None:
         raise HTTPException(status_code=400, detail=f"color must be one of {PALETTE_KEYS}")
 
 
+INVENTORY_STATUSES = ("In Stock", "Display", "Sold", "Missing", "Reserved")
+MAX_DIMENSION_MM = 100_000  # 100 m — anything above is a typo, not furniture
+
+
+def _inv_num(doc: dict, field: str, label: str, minimum: float = 0.0):
+    """Validate one numeric inventory field if the payload carries it."""
+    if field not in doc or doc[field] is None or doc[field] == "":
+        return
+    try:
+        n = float(doc[field])
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{label} must be a number")
+    if n != n or n in (float("inf"), float("-inf")):
+        raise HTTPException(status_code=400, detail=f"{label} must be a number")
+    if n < minimum:
+        raise HTTPException(status_code=400, detail=f"{label} cannot be negative")
+
+
 async def normalize_inventory(doc: dict, existing: dict | None, user: dict) -> None:
-    """vendor/vendor_code are always derived from vendor_id server-side — never
-    trust client-supplied text for them, or a redacted user could write a
-    vendor name into inventory that they can't even see themselves."""
+    """Server-side guard for every inventory write (create AND update).
+
+    * vendor/vendor_code are always derived from vendor_id — never trust
+      client-supplied text for them, or a redacted user could write a vendor
+      name into inventory that they can't even see themselves.
+    * cost/margin are admin/accountant-only on WRITE as well as read: anyone
+      else's values for them are dropped, so a floor user can't overwrite the
+      landing price they are not allowed to see.
+    * margin is never taken from the client — it is recomputed from cost and
+      MRP here, so it can't drift from the figures it is derived from.
+    * quantities, prices and dimensions are range-checked, status is checked
+      against the known list and SKU is unique within the tenant."""
+    if not _can_see_cost_prices(user):
+        for f in COST_FIELDS:
+            doc.pop(f, None)
+        if existing is None:
+            doc["cost"] = 0
+            doc["margin"] = 0
+
+    for field, label in (("qty", "Quantity"), ("cost", "Cost"), ("mrp", "MRP")):
+        _inv_num(doc, field, label)
+    for field in ("width_mm", "height_mm", "depth_mm"):
+        _inv_num(doc, field, field.split("_")[0].title())
+        v = doc.get(field)
+        if v not in (None, "") and float(v) > MAX_DIMENSION_MM:
+            raise HTTPException(status_code=400, detail=f"{field.split('_')[0].title()} looks wrong (over {MAX_DIMENSION_MM} mm)")
+        if v == 0:
+            raise HTTPException(status_code=400, detail=f"{field.split('_')[0].title()} must be greater than 0")
+
+    if "status" in doc and doc["status"] not in INVENTORY_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Status must be one of {', '.join(INVENTORY_STATUSES)}")
+
+    if "sku" in doc:
+        sku = str(doc.get("sku") or "").strip()
+        if not sku:
+            raise HTTPException(status_code=400, detail="SKU is required")
+        doc["sku"] = sku
+        if not (existing is not None and sku.lower() == str(existing.get("sku") or "").strip().lower()):
+            q = tenancy.scope({}, "inventory", user)
+            q["sku"] = {"$regex": f"^{re.escape(sku)}$", "$options": "i"}
+            if existing:
+                q["id"] = {"$ne": existing["id"]}
+            if await db.inventory.find_one(q, {"_id": 0, "id": 1}):
+                raise HTTPException(status_code=400, detail=f"SKU \"{sku}\" already exists in inventory")
+
+    if "cost" in doc or "mrp" in doc:
+        cost = float(doc.get("cost", (existing or {}).get("cost")) or 0)
+        mrp = float(doc.get("mrp", (existing or {}).get("mrp")) or 0)
+        doc["margin"] = round((mrp - cost) / cost * 100, 2) if cost > 0 else 0
+
     if "vendor_id" not in doc:
         return
     vid = doc.get("vendor_id")
@@ -2171,7 +2236,7 @@ make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_fi
 make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user",
           on_create=_notify_order_confirmed, entity="sale")
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory",
-          normalize=normalize_inventory, redact=redact_inventory)
+          normalize=normalize_inventory, redact=redact_inventory, entity="inventory")
 
 
 def _render_price_tag_pdf(item: dict, division: Optional[dict]) -> bytes:
@@ -2228,6 +2293,7 @@ def _render_price_tag_pdf(item: dict, division: Optional[dict]) -> bytes:
 
 @api.get("/inventory/{item_id}/price-tag.pdf")
 async def inventory_price_tag(item_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("inventory", "view", user)
     owned = tenancy.scope({"id": item_id}, "inventory", user)
     item = await db.inventory.find_one(owned, {"_id": 0})
     if not item:
@@ -4513,7 +4579,10 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
         "total_paid": sum(lc.money(s.get("paid")) for s in sales),
         "outstanding": sum(lc.money(s.get("balance")) for s in sales),
         "stock_mrp": sum(lc.money(item.get("mrp")) * lc.money(item.get("qty")) for item in inventory),
-        "stock_cost": sum(lc.money(item.get("cost")) * lc.money(item.get("qty")) for item in inventory),
+        # Landing cost is admin/accountant-only everywhere; None (not 0) so a
+        # hidden figure never reads as "this stock cost nothing".
+        "stock_cost": (sum(lc.money(item.get("cost")) * lc.money(item.get("qty")) for item in inventory)
+                       if _can_see_cost_prices(user) else None),
         "active_leads": sum(1 for l in leads if l.get("stage") not in ("Won", "Lost")),
         "todays_visitors": sum(1 for v in visitors if str(v.get("date") or "")[:10] == today),
         "overdue_followups": sum(1 for l in leads if l.get("follow_up_date") and str(l["follow_up_date"]) < today and l.get("stage") not in ("Won", "Lost")),
@@ -6528,13 +6597,29 @@ async def list_projects(user: dict = Depends(get_current_user)):
 
 @api.get("/stock-movements")
 async def list_stock_movements(user: dict = Depends(get_current_user)):
+    await _require_permission("inventory", "view", user)
     q = await fy_query("stock_movements", user=user)
     return await db.stock_movements.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
 
 
 @api.post("/stock-movements")
 async def create_stock_movement(payload: StockMovementCreate, user: dict = Depends(get_current_user)):
+    await _require_permission("inventory", "edit", user)
     doc = payload.model_dump()
+    if doc.get("type") not in lc.STOCK_MOVE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Type must be one of {', '.join(lc.STOCK_MOVE_TYPES)}")
+    if not doc.get("qty") or doc["qty"] != doc["qty"]:
+        raise HTTPException(status_code=400, detail="Quantity is required and cannot be 0")
+    if doc["type"] not in ("Adjustment", "Reservation") and doc["qty"] < 0:
+        raise HTTPException(status_code=400, detail="Quantity must be positive (use an Adjustment to reduce stock)")
+    if doc["type"] == "Adjustment" and not str(doc.get("reason") or "").strip():
+        raise HTTPException(status_code=400, detail="An adjustment needs a reason")
+    if doc["type"] == "Transfer" and (not doc.get("to_warehouse") or doc["to_warehouse"] == doc.get("warehouse")):
+        raise HTTPException(status_code=400, detail="A transfer needs a different destination location")
+    product = await db.inventory.find_one(
+        tenancy.scope({"sku": doc.get("product_id")}, "inventory", user), {"_id": 0, "id": 1})
+    if not product:
+        raise HTTPException(status_code=400, detail="Product (SKU) not found in inventory")
     doc["id"] = new_id()
     doc["created_at"] = now_iso()
     if not doc.get("date"):
@@ -6563,10 +6648,13 @@ async def create_stock_movement(payload: StockMovementCreate, user: dict = Depen
 
 @api.delete("/stock-movements/{item_id}")
 async def delete_stock_movement(item_id: str, user: dict = Depends(get_current_user)):
-    res = await db.stock_movements.delete_one(
-        tenancy.scope({"id": item_id}, "stock_movements", user))
-    if res.deleted_count == 0:
+    await _require_permission("inventory", "delete", user)
+    owned = tenancy.scope({"id": item_id}, "stock_movements", user)
+    existing = await db.stock_movements.find_one(owned, {"_id": 0})
+    if not existing:
         raise HTTPException(status_code=404, detail="Not found")
+    await db.stock_movements.delete_one(owned)
+    await record_activity("stock_movement", item_id, "delete", user, before=existing)
     return {"ok": True}
 
 

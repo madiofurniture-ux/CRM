@@ -42,8 +42,10 @@ function moduleFlag(name, defaultOn) {
 // operational core of all three divisions. REACT_APP_SHOW_DELIVERY=false hides it.
 export const SHOW_DELIVERY = moduleFlag("DELIVERY", true);
 
-// Inventory (Stock, Stock Ledger, Purchasing) — outside v1 scope.
-export const SHOW_INVENTORY = moduleFlag("INVENTORY", false);
+// Inventory (Stock, Stock Ledger, Purchasing). ON for go-live: product
+// location, dimensions, MRP and the admin-only landing price are the core of
+// the showroom/warehouse workflow. REACT_APP_SHOW_INVENTORY=false hides it.
+export const SHOW_INVENTORY = moduleFlag("INVENTORY", true);
 
 // Finance (Money Requests, Wallets & Cashbooks, Profit & Loss, Project P&L,
 // Tax Invoices, Payments, Petty Cash history). ON for go-live since the finance build (money requests, wallets, P&L):
