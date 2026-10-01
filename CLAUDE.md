@@ -56,6 +56,10 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   These ride the existing `projects`/`leads`/`customers` permissions — nav items
   use `perm:` in `frontend/src/lib/nav.js` — so no account needs re-granting.
   Uploaded files are private: served only by `GET /api/documents/{id}/file`.
+- File storage: `backend/storage.py`, `STORAGE_BACKEND=local|s3|sharepoint`.
+  SharePoint goes through Microsoft Graph (app registration, client
+  credentials) into `Documents/CRM/<tenant>/<entity>/`; setup in
+  `docs/SHAREPOINT.md`, check with `GET /api/admin/storage/status`.
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.

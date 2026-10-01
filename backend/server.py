@@ -7850,7 +7850,12 @@ async def upload_document(entity_type: str = Form(...), entity_id: str = Form(..
     raw = await _read_capped(file, MAX_DOCUMENT_BYTES)
     tenant_id = tenancy.tenant_of(user) or "__no_tenant__"
     filename = storage.safe_filename(file.filename or "file", new_id())
-    file_url = storage.save(tenant_id, entity_type, filename, raw)
+    try:
+        # Off the event loop: SharePoint/S3 uploads are blocking network calls.
+        file_url = await asyncio.to_thread(storage.save, tenant_id, entity_type, filename, raw)
+    except storage.SharePointError as e:
+        logger.warning(f"Document upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Couldn't save the file to SharePoint. Try again, or ask an admin to check Storage status.")
     doc = {
         "id": new_id(), "entity_type": entity_type, "entity_id": entity_id,
         "file_name": file.filename or filename, "file_url": file_url,
@@ -7882,6 +7887,17 @@ async def download_document(doc_id: str, user: dict = Depends(get_current_user))
     if not d:
         raise HTTPException(status_code=404, detail="Not found")
     url = str(d.get("file_url") or "")
+    safe_name = re.sub(r'[^A-Za-z0-9._ -]+', "_", d.get("file_name") or "file")
+    private = {"Content-Disposition": f'inline; filename="{safe_name}"',
+               "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
+    if url.startswith(storage.SHAREPOINT_PREFIX):
+        try:
+            data = await asyncio.to_thread(storage.read, url)
+        except storage.SharePointError as e:
+            logger.warning(f"Document download failed: {e}")
+            raise HTTPException(status_code=502, detail="Couldn't fetch the file from SharePoint")
+        return Response(content=data, media_type=d.get("content_type") or "application/octet-stream",
+                        headers=private)
     if not url.startswith("/uploads/"):
         raise HTTPException(status_code=404, detail="File is stored externally")
     root = storage.UPLOAD_ROOT.resolve()
@@ -7905,8 +7921,15 @@ async def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
     if not existing:
         raise HTTPException(status_code=404, detail="Not found")
     await db.documents.delete_one(owned)
-    storage.delete(existing["file_url"])
+    await asyncio.to_thread(storage.delete, existing["file_url"])
     return {"ok": True}
+
+
+@api.get("/admin/storage/status")
+async def storage_status(user: dict = Depends(require_admin)):
+    """Where uploaded files go, and for SharePoint whether sign-in, the site
+    and the library all resolve. Use it to confirm the setup."""
+    return await asyncio.to_thread(storage.status)
 
 
 # ------- Discussion forum (Team Board) -------
