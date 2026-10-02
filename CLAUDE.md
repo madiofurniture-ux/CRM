@@ -56,6 +56,16 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   These ride the existing `projects`/`leads`/`customers` permissions — nav items
   use `perm:` in `frontend/src/lib/nav.js` — so no account needs re-granting.
   Uploaded files are private: served only by `GET /api/documents/{id}/file`.
+- Tally ← CRM refresh: `tools/tally_connector/` (runs on the office Tally PC,
+  reads Tally's XML server, posts to `POST /api/tally/ingest` with a per-tenant
+  connector key), `backend/tally_import.py` (validation/matching), "Tally →
+  CRM" block in `server.py`. CRM inventory `qty` is the stock of record; Tally
+  stock sits beside it as `tally_qty`. Tally invoices are read-only
+  (`source="tally"`). See `docs/TALLY_CONNECTOR.md`.
+- Inventory link: `GET /inventory/lookup` (product picker); quote lines carry
+  `sku`; sales reserve stock, issued invoices issue it, cancelled ones return
+  it; every movement goes through `_post_stock_move`, which keeps item `qty`
+  in step.
 - File storage: `backend/storage.py`, `STORAGE_BACKEND=local|s3|sharepoint`.
   SharePoint goes through Microsoft Graph (app registration, client
   credentials) into `Documents/<SHAREPOINT_FOLDER>/<tenant>/<entity>/`
