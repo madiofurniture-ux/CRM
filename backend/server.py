@@ -3125,7 +3125,7 @@ async def _stock_positions(user: dict, skus: list | None = None) -> dict:
 
 
 @api.get("/inventory/lookup")
-async def inventory_lookup(q: str = "", limit: int = 20, user: dict = Depends(get_current_user)):
+async def inventory_lookup(q: str = "", limit: int = 20, skus: str = "", user: dict = Depends(get_current_user)):
     """Product picker for quotation and invoice lines: search by name, SKU or
     model, with live stock. Never returns cost. Open to anyone who can work
     on quotations, invoices or inventory."""
@@ -3140,8 +3140,12 @@ async def inventory_lookup(q: str = "", limit: int = 20, user: dict = Depends(ge
     if not allowed:
         raise HTTPException(status_code=403, detail="Not permitted")
     term = re.escape(str(q or "").strip())[:60]
-    query = {"$or": [{f: {"$regex": term, "$options": "i"}} for f in ("name", "sku", "model_no", "tally_name")]} \
-        if term else {}
+    exact = [x.strip() for x in str(skus or "").split(",") if x.strip()][:100]
+    if exact:                                   # live stock for lines already on a document
+        query, limit = {"sku": {"$in": exact}}, len(exact)
+    else:
+        query = {"$or": [{f: {"$regex": term, "$options": "i"}} for f in ("name", "sku", "model_no", "tally_name")]} \
+            if term else {}
     items = await db.inventory.find(tenancy.scope(query, "inventory", user), {"_id": 0}) \
         .sort("name", 1).to_list(max(1, min(int(limit or 20), 50)))
     pos = await _stock_positions(user, [i.get("sku") for i in items if i.get("sku")])

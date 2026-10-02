@@ -75,6 +75,7 @@ def test_lookup_finds_by_name_sku_or_model_with_stock_and_no_cost():
         assert await server.inventory_lookup(q="wardrobe", user=OTHER) == []      # other company sees nothing
         assert len(await server.inventory_lookup(q="", user=ADMIN)) == 2
         await server.inventory_lookup(q="(.*", user=ADMIN)                         # regex input is escaped
+        assert [r["sku"] for r in await server.inventory_lookup(skus="TB-9,NOPE", user=ADMIN)] == ["TB-9"]
     run(go())
 
 

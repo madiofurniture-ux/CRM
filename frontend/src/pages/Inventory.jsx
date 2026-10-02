@@ -9,6 +9,7 @@ import { shrinkImage } from "@/lib/image";
 import { Package, Grid3x3, List, X, Tag, Camera, History } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
+import TallyStockCompare from "@/components/TallyStockCompare";
 
 // Dimensions line for cards/list: always shown from the canonical mm values,
 // in the unit the item was entered in.
@@ -201,6 +202,7 @@ export default function Inventory() {
   };
 
   const load = async () => { const { data } = await api.get("/inventory"); setRows(data); };
+  const hasTally = rows.some((i) => i.tally_qty !== null && i.tally_qty !== undefined);
   useEffect(() => {
     load();
     api.get("/vendors").then(({ data }) => setVendors(data));
@@ -297,6 +299,7 @@ export default function Inventory() {
         }
       />
       <div className="p-6" data-testid="inventory-page">
+        <TallyStockCompare onChanged={load} />
         <div className="flex flex-wrap gap-2 mb-4">
           <input placeholder="Search SKU, name, vendor, vendor code…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" data-testid="inv-search" />
           <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
@@ -363,6 +366,7 @@ export default function Inventory() {
                     <th className="text-left font-semibold px-4 py-2.5">Vendor</th>
                     <th className="text-left font-semibold px-4 py-2.5">Vendor Code</th>
                     <th className="text-right font-semibold px-4 py-2.5">Qty</th>
+                    {hasTally && <th className="text-right font-semibold px-4 py-2.5" title="Closing stock in Tally, for comparison">Tally</th>}
                     {seesCost && <th className="text-right font-semibold px-4 py-2.5">Cost</th>}
                     <th className="text-right font-semibold px-4 py-2.5">MRP</th>
                     {seesCost && <th className="text-right font-semibold px-4 py-2.5">Margin</th>}
@@ -381,6 +385,7 @@ export default function Inventory() {
                       <td className="px-4 py-3 text-[var(--ink-2)]">{i.vendor}</td>
                       <td className="px-4 py-3 font-mono text-xs text-[var(--ink-2)]">{i.vendor_code || "—"}</td>
                       <td className="px-4 py-3 text-right font-mono">{i.qty}</td>
+                      {hasTally && <td className={`px-4 py-3 text-right font-mono ${i.tally_qty != null && i.tally_qty !== i.qty ? "text-[var(--danger)]" : "text-[var(--ink-3)]"}`}>{i.tally_qty ?? "—"}</td>}
                       {seesCost && <td className="px-4 py-3 text-right font-mono text-[var(--ink-2)]">{inrFull(i.cost)}</td>}
                       <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(i.mrp)}</td>
                       {seesCost && <td className="px-4 py-3 text-right font-mono text-[var(--moss)]">{i.margin?.toFixed(0)}%</td>}
@@ -401,7 +406,7 @@ export default function Inventory() {
                     </tr>
                   ))}
                   {filtered.length === 0 && (
-                    <tr><td colSpan={seesCost ? 13 : 11} className="text-center py-12 text-[var(--ink-3)]">No inventory items</td></tr>
+                    <tr><td colSpan={(seesCost ? 13 : 11) + (hasTally ? 1 : 0)} className="text-center py-12 text-[var(--ink-3)]">No inventory items</td></tr>
                   )}
                 </tbody>
               </table>

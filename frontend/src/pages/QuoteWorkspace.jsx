@@ -5,6 +5,7 @@ import StageBadge from "@/components/StageBadge";
 import StageProgressBar from "@/components/StageProgressBar";
 import LogTimeline from "@/components/LogTimeline";
 import AttachmentPanel from "@/components/AttachmentPanel";
+import ProductPicker, { StockBadge, rateFromMrp } from "@/components/ProductPicker";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
@@ -22,11 +23,14 @@ export default function QuoteWorkspace() {
   const [tab, setTab] = useState("lines");
   const [busy, setBusy] = useState(false);
   const lineTimers = useRef({});   // per-line debounce timers, kept across renders
+  const [stock, setStock] = useState({});   // sku -> live stock for inventory-linked lines
 
   const load = useCallback(async () => {
     try {
       setLoadError(false);
-      const { data } = await api.get(`/quotes/${id}/workspace`);
+      // Always fresh: line edits are written to /quote-lines, which doesn't
+      // clear the cached /quotes/... workspace, so a cached read hid new lines.
+      const { data } = await api.get(`/quotes/${id}/workspace`, { skipCache: true });
       setWs(data);
       if (data.quote?.phone) {
         try { const { data: j } = await api.get(`/journey/${data.quote.phone}`); setPipeline(j.pipeline || null); }
@@ -36,6 +40,13 @@ export default function QuoteWorkspace() {
     catch { toast.error("Quote not found"); setLoadError(true); }
   }, [id]);
   useEffect(() => { load(); }, [load]);
+  const skuList = (ws?.lines || []).map((l) => l.sku).filter(Boolean).sort().join(",");
+  useEffect(() => {
+    if (!skuList) { setStock({}); return; }
+    api.get(`/inventory/lookup?skus=${encodeURIComponent(skuList)}`, { skipCache: true })
+      .then(({ data }) => setStock(Object.fromEntries((data || []).map((r) => [r.sku, r]))))
+      .catch(() => setStock({}));
+  }, [skuList]);
 
   // Without the error branch a failed fetch left `ws` null forever, so the
   // page sat on "Loading…" with no way back.
@@ -77,6 +88,22 @@ export default function QuoteWorkspace() {
     }, 700);
   };
   const removeLine = async (lid) => { await api.delete(`/quote-lines/${lid}`); load(); };
+  // A product from inventory becomes a priced line; MRP includes GST, so the
+  // pre-GST rate is used because the quote adds GST on its total.
+  const addProduct = async (item) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const taxPct = q.tax_pct ?? 18;
+      await api.post("/quote-lines", {
+        quote_id: id, version: q.version || 1, w: 0, h: 0, qty: 1,
+        description: [item.name, item.model_no, item.material_finish].filter(Boolean).join(" · "),
+        rate: rateFromMrp(item.mrp, item.gst_pct ?? taxPct), sku: item.sku, unit: item.unit, hsn: item.hsn,
+      });
+      if (item.available <= 0) toast.warning(`${item.name}: none available in stock right now`);
+      await load();
+    } finally { setBusy(false); }
+  };
 
   const saveTotal = async (discount) => {
     if (busy) return;
@@ -173,7 +200,10 @@ export default function QuoteWorkspace() {
             <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
               <div className="p-3 border-b border-[var(--border-light)] flex justify-between items-center">
                 <div className="font-heading font-semibold text-sm">Line items</div>
-                <button onClick={addLine} disabled={busy} className="btn-ghost disabled:opacity-60"><Plus size={14} /> Add line</button>
+                <div className="flex items-center gap-2">
+                  <ProductPicker onPick={addProduct} className="w-56 md:w-72" testId="quote-product-picker" />
+                  <button onClick={addLine} disabled={busy} className="btn-ghost disabled:opacity-60"><Plus size={14} /> Add line</button>
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -192,7 +222,14 @@ export default function QuoteWorkspace() {
                   <tbody>
                     {ws.lines.map((l) => (
                       <tr key={l.id} className="border-t border-[var(--border-light)]">
-                        <td className="px-3 py-2"><I v={l.description} oc={(v) => patchLine(l, { description: v })} /></td>
+                        <td className="px-3 py-2"><I v={l.description} oc={(v) => patchLine(l, { description: v })} />
+                          {l.sku && (
+                            <div className="mt-1 flex items-center gap-1.5 text-[10px] text-[var(--ink-3)]" data-testid={`quote-line-sku-${l.id}`}>
+                              <span className="font-mono">{l.sku}</span>
+                              <StockBadge item={stock[l.sku]} qty={l.qty} />
+                            </div>
+                          )}
+                        </td>
                         <td className="px-3 py-2 w-16"><I t="number" v={l.w} oc={(v) => patchLine(l, { w: parseFloat(v) || 0 })} right /></td>
                         <td className="px-3 py-2 w-16"><I t="number" v={l.h} oc={(v) => patchLine(l, { h: parseFloat(v) || 0 })} right /></td>
                         <td className="px-3 py-2 w-16"><I t="number" v={l.qty} oc={(v) => patchLine(l, { qty: parseFloat(v) || 0 })} right /></td>

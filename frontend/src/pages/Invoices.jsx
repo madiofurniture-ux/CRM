@@ -6,6 +6,7 @@ import { GST_DEFAULT, GST_SLABS } from "@/lib/constants";
 import { inrFull, fmtDate, amountInWords } from "@/lib/format";
 import { toast } from "sonner";
 import { Trash2, Edit2, Printer, X, Plus, IndianRupee } from "lucide-react";
+import ProductPicker, { StockBadge, rateFromMrp } from "@/components/ProductPicker";
 
 const HSN_OPTIONS = ["9403", "3208", "4418", "9401", "6304", "9405"];
 // Furniture/interiors line items are priced per piece, per square foot
@@ -26,6 +27,7 @@ export default function Invoices() {
   const [saving, setSaving] = useState(false);
   const [office, setOffice] = useState({ name: "", address: "", gstin: "", invoice_prefix: "INV", home_state: "Telangana" });
   const [payFor, setPayFor] = useState(null);
+  const [stock, setStock] = useState({});   // sku -> live stock for the lines in the open form
 
   const empty = {
     invoice_no: "", date: new Date().toISOString().slice(0, 10), due_date: "",
@@ -90,6 +92,24 @@ export default function Invoices() {
   };
   const openEdit = (r) => { setEditing(r); setForm({ ...r, line_items: r.line_items?.length ? r.line_items : [emptyItem()] }); setShow(true); };
 
+  const lineSkus = show ? (form.line_items || []).map((it) => it.sku).filter(Boolean).sort().join(",") : "";
+  useEffect(() => {
+    if (!lineSkus) { setStock({}); return; }
+    api.get(`/inventory/lookup?skus=${encodeURIComponent(lineSkus)}`, { skipCache: true })
+      .then(({ data }) => setStock(Object.fromEntries((data || []).map((r) => [r.sku, r]))))
+      .catch(() => setStock({}));
+  }, [lineSkus]);
+
+  // MRP includes GST; the invoice adds GST per line, so use the pre-GST rate.
+  const addProduct = (item) => setForm((f) => {
+    const gst = item.gst_pct ?? GST_DEFAULT;
+    const line = { ...emptyItem(), sku: item.sku, hsn: item.hsn || emptyItem().hsn, unit: item.unit || "pcs",
+      description: [item.name, item.model_no].filter(Boolean).join(" · "), qty: 1,
+      rate: rateFromMrp(item.mrp, gst), tax_pct: gst };
+    const blankOnly = f.line_items.length === 1 && !f.line_items[0].description && !f.line_items[0].rate;
+    return { ...f, line_items: blankOnly ? [line] : [...f.line_items, line] };
+  });
+
   const save = async () => {
     if (saving) return;
     setSaving(true);
@@ -98,8 +118,9 @@ export default function Invoices() {
     delete payload.paid;
     delete payload.balance;
     try {
-      if (editing) { await api.put(`/invoices/${editing.id}`, payload); toast.success("Invoice updated"); }
-      else { await api.post("/invoices", payload); toast.success("Invoice created"); }
+      const { data } = editing ? await api.put(`/invoices/${editing.id}`, payload) : await api.post("/invoices", payload);
+      toast.success(editing ? "Invoice updated" : "Invoice created");
+      if (data?.stock_warnings?.length) toast.warning(`Stock: ${data.stock_warnings.join("; ")}`, { duration: 8000 });
       setShow(false); load();
     } catch (e) { toast.error(e?.response?.data?.detail || "Save failed"); }
     finally { setSaving(false); }
@@ -157,15 +178,20 @@ export default function Invoices() {
                     <td className="px-4 py-3 text-right font-mono font-semibold">{inrFull(r.total)}</td>
                     <td className={`px-4 py-3 text-right font-mono ${r.balance > 0 ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-3)]"}`}>{inrFull(r.balance)}</td>
                     <td className="px-4 py-3"><StageBadge stage={r.status === "Paid" ? "Delivered" : r.status === "Sent" ? "Quoted" : r.status === "Cancelled" ? "Lost" : "New"} />
-                      {r.sale_id && <div className="text-[10px] text-[var(--ink-3)] mt-0.5">from sale</div>}</td>
+                      {r.source === "tally" ? <div className="text-[10px] text-[var(--ink-3)] mt-0.5" title="Raised in Tally; refreshed by the Tally connector">from Tally</div>
+                        : r.sale_id && <div className="text-[10px] text-[var(--ink-3)] mt-0.5">from sale</div>}</td>
                     <td className="px-2 py-3">
                       <div className="flex items-center gap-1">
-                        {r.balance > 0 && r.status !== "Cancelled" && (
+                        {r.balance > 0 && r.status !== "Cancelled" && r.source !== "tally" && (
                           <button onClick={() => setPayFor(r)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" title="Record payment" data-testid={`inv-pay-${r.id}`}><IndianRupee size={13} /></button>
                         )}
                         <button onClick={() => setPrintRow(r)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]" title="Print" data-testid={`inv-print-${r.id}`}><Printer size={13} /></button>
-                        <button onClick={() => openEdit(r)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Edit2 size={13} /></button>
-                        <button onClick={() => remove(r.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
+                        {r.source !== "tally" && (
+                          <>
+                            <button onClick={() => openEdit(r)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)]"><Edit2 size={13} /></button>
+                            <button onClick={() => remove(r.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -200,7 +226,10 @@ export default function Invoices() {
                 </div>
               </div>
 
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-2">Line items</div>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Line items</div>
+                <ProductPicker onPick={addProduct} className="w-64" testId="invoice-product-picker" />
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-[var(--surface-2)]">
@@ -222,7 +251,13 @@ export default function Invoices() {
                       return (
                         <tr key={it.id || `${it.description}-${i}`} className="border-t border-[var(--border-light)]">
 
-                          <td className="p-1"><input value={it.description} onChange={(e) => setItem(i, "description", e.target.value)} placeholder="Item description" className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)]" data-testid={`inv-item-desc-${i}`} /></td>
+                          <td className="p-1"><input value={it.description} onChange={(e) => setItem(i, "description", e.target.value)} placeholder="Item description" className="w-full px-2 py-1.5 rounded border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)]" data-testid={`inv-item-desc-${i}`} />
+                            {it.sku && (
+                              <div className="mt-1 flex items-center gap-1.5 text-[10px] text-[var(--ink-3)]">
+                                <span className="font-mono">{it.sku}</span><StockBadge item={stock[it.sku]} qty={it.qty} />
+                              </div>
+                            )}
+                          </td>
                           <td className="p-1">
                             <select value={it.hsn} onChange={(e) => setItem(i, "hsn", e.target.value)} className="w-full px-1 py-1.5 rounded border border-[var(--border)] text-xs">
                               {HSN_OPTIONS.map((h) => <option key={h}>{h}</option>)}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Topbar from "@/components/Topbar";
 import EmptyState from "@/components/EmptyState";
+import TallyConnectorPanel from "@/components/TallyConnectorPanel";
 import api, { formatApiError } from "@/lib/api";
 import { inrFull } from "@/lib/format";
 import { toast } from "sonner";
@@ -156,6 +157,7 @@ export default function TallyLedger() {
       <Topbar title="Cashbook & Tally Sync" subtitle="UPI review queue, ledger mapping and Tally voucher dispatch" />
 
       <div className="p-6 space-y-6" data-testid="tally-ledger-page">
+        <TallyConnectorPanel />
         {/* Tabs + actions */}
         <div className="bg-white border border-[var(--border)] rounded-2xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
