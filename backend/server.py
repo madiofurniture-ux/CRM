@@ -2027,6 +2027,7 @@ def _can_see_cost_prices(user: dict) -> bool:
 # figure straight back, exactly the inversion mask_pnl()/mask_settlement()
 # had to close. Both fields go, together.
 COST_FIELDS = ("cost", "margin")
+TALLY_INVENTORY_FIELDS = ("tally_name", "tally_qty", "tally_rate", "tally_synced_at")
 
 
 def redact_cost(item: dict, user: dict) -> dict:
@@ -2112,6 +2113,8 @@ async def normalize_inventory(doc: dict, existing: dict | None, user: dict) -> N
       MRP here, so it can't drift from the figures it is derived from.
     * quantities, prices and dimensions are range-checked, status is checked
       against the known list and SKU is unique within the tenant."""
+    for f in TALLY_INVENTORY_FIELDS:      # only the Tally import writes these
+        doc.pop(f, None)
     if not _can_see_cost_prices(user):
         for f in COST_FIELDS:
             doc.pop(f, None)
@@ -2591,8 +2594,14 @@ async def quote_pdf(quote_id: str, user: dict = Depends(get_current_user)):
 
 make_crud(api, "quotes", "quotes", QuoteCreate, Quote, module="quotes", owner_field="by_user",
           on_create=_notify_quote_created, normalize=normalize_quote_template, entity="quote")
+async def _sale_after_write(doc: dict, user: dict):
+    """A cancelled sales order lets go of the stock held for it."""
+    if str(doc.get("stage") or "").lower() == "cancelled" and doc.get("id"):
+        await _release_sale_reservation(doc["id"], user, why=f"{doc.get('sale_no', 'Order')} cancelled")
+
+
 make_crud(api, "sales", "sales", SaleCreate, Sale, module="sales", owner_field="by_user",
-          on_create=_notify_order_confirmed, entity="sale")
+          on_create=_notify_order_confirmed, entity="sale", after_write=_sale_after_write)
 make_crud(api, "inventory", "inventory", InventoryCreate, InventoryItem, module="inventory",
           normalize=normalize_inventory, redact=redact_inventory, entity="inventory")
 
@@ -2802,9 +2811,7 @@ async def purchase_order_receive(po_id: str, payload: dict, user: dict = Depends
             "source_doc": po.get("po_no", ""), "reason": f"GRN against {po.get('po_no', '')}",
             "by_user": user.get("name", ""),
         }
-        stamp_fy(move, "stock_movements")
-        tenancy.stamp(move, "stock_movements", user)
-        await db.stock_movements.insert_one(dict(move))
+        await _post_stock_move(move, user)
         existing_moves.append({"movement_no": move["movement_no"]})
         received[idx] += qty
 
@@ -3074,6 +3081,161 @@ async def record_manufacturer_payment(order_id: str, payload: ManufacturerPaymen
     return redact_manufacturer_name(out, user)
 
 
+# ── Stock: one place that books a movement and keeps the item's qty in step ──
+# An inventory item's `qty` is the CRM's live on-hand count (the stock of
+# record). Every physical movement adjusts it; a Reservation only holds stock
+# and never changes it.
+async def _bump_item_qty(sku: str, delta: float, user: dict) -> None:
+    if sku and delta:
+        await db.inventory.update_one(tenancy.scope({"sku": sku}, "inventory", user),
+                                      {"$inc": {"qty": round(delta, 3)}})
+
+
+async def _post_stock_move(move: dict, user: dict) -> dict:
+    move.setdefault("id", new_id())
+    move.setdefault("created_at", now_iso())
+    move.setdefault("date", lc.today_iso())
+    move.setdefault("by_user", (user or {}).get("name", ""))
+    if not move.get("movement_no"):
+        existing = await db.stock_movements.find(
+            tenancy.scope({}, "stock_movements", user), {"movement_no": 1, "_id": 0}).to_list(20000)
+        move["movement_no"] = lc.next_movement_id(existing)
+    stamp_fy(move, "stock_movements")
+    tenancy.stamp(move, "stock_movements", user)
+    await db.stock_movements.insert_one(dict(move))
+    move.pop("_id", None)
+    await _bump_item_qty(move.get("product_id"), lc.signed_qty(move), user)
+    return move
+
+
+async def _stock_positions(user: dict, skus: list | None = None) -> dict:
+    """sku -> {on_hand, reserved, available} for this company."""
+    q = {"sku": {"$in": skus}} if skus is not None else {}
+    items = await db.inventory.find(tenancy.scope(q, "inventory", user),
+                                    {"_id": 0, "sku": 1, "qty": 1}).to_list(20000)
+    mq = {"type": "Reservation"}
+    if skus is not None:
+        mq["product_id"] = {"$in": skus}
+    reserved = lc.stock_reserved(await db.stock_movements.find(
+        tenancy.scope(mq, "stock_movements", user), {"_id": 0, "product_id": 1, "type": 1, "qty": 1}).to_list(50000))
+    return {i["sku"]: lc.stock_position(i.get("qty"), reserved.get(i["sku"], 0)) for i in items if i.get("sku")}
+
+
+@api.get("/inventory/lookup")
+async def inventory_lookup(q: str = "", limit: int = 20, user: dict = Depends(get_current_user)):
+    """Product picker for quotation and invoice lines: search by name, SKU or
+    model, with live stock. Never returns cost. Open to anyone who can work
+    on quotations, invoices or inventory."""
+    allowed = False
+    for module in ("quotes", "invoice-gen", "inventory"):
+        try:
+            await _require_permission(module, "view", user)
+            allowed = True
+            break
+        except HTTPException:
+            continue
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Not permitted")
+    term = re.escape(str(q or "").strip())[:60]
+    query = {"$or": [{f: {"$regex": term, "$options": "i"}} for f in ("name", "sku", "model_no", "tally_name")]} \
+        if term else {}
+    items = await db.inventory.find(tenancy.scope(query, "inventory", user), {"_id": 0}) \
+        .sort("name", 1).to_list(max(1, min(int(limit or 20), 50)))
+    pos = await _stock_positions(user, [i.get("sku") for i in items if i.get("sku")])
+    return [{
+        "sku": i.get("sku", ""), "name": i.get("name", ""), "model_no": i.get("model_no", ""),
+        "category": i.get("category", ""), "division": i.get("division", ""),
+        "mrp": lc.money(i.get("mrp")), "hsn": i.get("hsn") or "", "unit": i.get("unit") or "pcs",
+        "gst_pct": i.get("gst_pct"), "material_finish": i.get("material_finish", ""),
+        **pos.get(i.get("sku"), lc.stock_position(i.get("qty"), 0)),
+        "tally_qty": i.get("tally_qty"),
+    } for i in items]
+
+
+async def _reserve_for_sale(sale: dict, user: dict) -> None:
+    """Hold stock for every inventory-linked line of a new sales order."""
+    for line in sale.get("line_items") or []:
+        sku, qty = str(line.get("sku") or ""), lc.money(line.get("qty"))
+        if not sku or qty <= 0:
+            continue
+        if not await db.inventory.find_one(tenancy.scope({"sku": sku}, "inventory", user), {"_id": 1}):
+            continue
+        await _post_stock_move({"type": "Reservation", "product_id": sku, "qty": qty,
+                                "unit": line.get("unit") or "pcs", "warehouse": "Main",
+                                "source_doc": sale.get("sale_no", ""), "ref_sale_id": sale["id"],
+                                "reason": f"Reserved for {sale.get('sale_no', '')}"}, user)
+
+
+async def _release_sale_reservation(sale_id: str, user: dict, *, only: dict | None = None, why: str = "") -> None:
+    """Release what is still held for a sale: everything, or up to `only` {sku: qty}."""
+    moves = await db.stock_movements.find(tenancy.scope(
+        {"type": "Reservation", "ref_sale_id": sale_id}, "stock_movements", user), {"_id": 0}).to_list(2000)
+    held = lc.stock_reserved(moves)
+    for sku, qty in held.items():
+        release = min(qty, only.get(sku, 0)) if only is not None else qty
+        if release > 0:
+            await _post_stock_move({"type": "Reservation", "product_id": sku, "qty": -release,
+                                    "warehouse": "Main", "ref_sale_id": sale_id,
+                                    "reason": why or "Reservation released"}, user)
+
+
+def _invoice_issues(inv: dict) -> dict:
+    """{sku: qty} an invoice takes out of stock."""
+    out: dict = {}
+    for line in inv.get("line_items") or []:
+        sku, qty = str(line.get("sku") or ""), lc.money(line.get("qty"))
+        if sku and qty > 0:
+            out[sku] = out.get(sku, 0) + qty
+    return out
+
+
+async def _sync_invoice_stock(inv: dict, user: dict) -> None:
+    """An invoice that is issued (Sent/Paid) takes its stock out once; a
+    cancelled one puts it back. Tally-imported invoices never touch stock
+    (the CRM is the stock of record and Tally's books follow it)."""
+    if not inv or inv.get("source") == "tally":
+        return
+    owned = tenancy.scope({"id": inv["id"]}, "invoices", user)
+    issued = inv.get("status") in ("Sent", "Paid")
+    if issued and not inv.get("stock_posted"):
+        issues = _invoice_issues(inv)
+        known = {i["sku"] for i in await db.inventory.find(
+            tenancy.scope({"sku": {"$in": list(issues)}}, "inventory", user), {"_id": 0, "sku": 1}).to_list(500)}
+        for sku, qty in issues.items():
+            if sku in known:
+                await _post_stock_move({"type": "Issue", "product_id": sku, "qty": qty, "warehouse": "Main",
+                                        "source_doc": inv.get("invoice_no", ""), "ref_invoice_id": inv["id"],
+                                        "reason": f"Invoice {inv.get('invoice_no', '')}"}, user)
+        if inv.get("sale_id"):
+            await _release_sale_reservation(inv["sale_id"], user, only=issues,
+                                            why=f"Invoiced on {inv.get('invoice_no', '')}")
+        await db.invoices.update_one(owned, {"$set": {"stock_posted": True}})
+    elif inv.get("status") == "Cancelled" and inv.get("stock_posted"):
+        issued_moves = await db.stock_movements.find(tenancy.scope(
+            {"type": "Issue", "ref_invoice_id": inv["id"]}, "stock_movements", user), {"_id": 0}).to_list(500)
+        for m in issued_moves:
+            await _post_stock_move({"type": "Return", "product_id": m["product_id"], "qty": abs(lc.money(m.get("qty"))),
+                                    "warehouse": m.get("warehouse") or "Main", "source_doc": inv.get("invoice_no", ""),
+                                    "ref_invoice_id": inv["id"],
+                                    "reason": f"Invoice {inv.get('invoice_no', '')} cancelled"}, user)
+        await db.invoices.update_one(owned, {"$set": {"stock_posted": False}})
+
+
+async def _invoice_stock_warnings(lines: list, user: dict) -> list:
+    issues = _invoice_issues({"line_items": lines})
+    if not issues:
+        return []
+    pos = await _stock_positions(user, list(issues))
+    out = []
+    for sku, qty in issues.items():
+        p = pos.get(sku)
+        if p is None:
+            out.append(f"{sku}: not in inventory, stock won't be tracked")
+        elif qty > p["on_hand"]:
+            out.append(f"{sku}: invoicing {qty:g} but only {p['on_hand']:g} in stock")
+    return out
+
+
 async def _next_invoice_no(date_str: str, user: dict) -> str:
     office = await _get_settings(user)
     existing = await db.invoices.find(
@@ -3114,6 +3276,13 @@ async def normalize_invoice(doc: dict, existing: dict | None, user: dict) -> Non
         doc.update(lc.invoice_totals(lines, bool(is_igst)))
     doc.pop("paid", None)
     doc.pop("balance", None)
+    for f in ("stock_posted", "stock_warnings", "source", "tally_guid"):   # server-owned
+        doc.pop(f, None)
+    if prev.get("source") == "tally":
+        raise HTTPException(status_code=400, detail="This invoice comes from Tally; change it in Tally and it will refresh here.")
+    status = doc.get("status", prev.get("status"))
+    if status in ("Sent", "Paid") and not prev.get("stock_posted"):
+        doc["stock_warnings"] = await _invoice_stock_warnings(doc.get("line_items", prev.get("line_items") or []), user)
     total = doc.get("total", prev.get("total"))
     doc.update(lc.invoice_payment_state(total, prev.get("paid", 0), doc.get("status", prev.get("status"))))
 
@@ -3154,6 +3323,8 @@ async def _sync_invoices(user: dict, *, invoice_id: str = "", sale_id: str = "",
 async def _invoice_after_write(doc: dict, user: dict):
     if doc.get("sale_id") or doc.get("id"):
         await _sync_invoices(user, invoice_id=doc.get("id", ""), keep_manual=True)
+        fresh = await db.invoices.find_one(tenancy.scope({"id": doc.get("id", "")}, "invoices", user), {"_id": 0})
+        await _sync_invoice_stock(fresh, user)
 
 
 @api.post("/invoices/from-sale/{sale_id}")
@@ -6628,6 +6799,7 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
     await db.sales.insert_one(dict(sale))
     sale.pop("_id", None)
     await run_stage_automation("sales", None, sale, user, created=True)
+    await _reserve_for_sale(sale, user)
     await _mark_won("quotes", quote_id, user)
     await _mark_won("leads", quote.get("lead_id", ""), user)
 
@@ -7133,10 +7305,7 @@ async def create_stock_movement(payload: StockMovementCreate, user: dict = Depen
     existing = await db.stock_movements.find(
         tenancy.scope({}, "stock_movements", user), {"movement_no": 1, "_id": 0}).to_list(5000)
     doc["movement_no"] = lc.next_movement_id(existing)
-    stamp_fy(doc, "stock_movements")
-    tenancy.stamp(doc, "stock_movements", user)
-    await db.stock_movements.insert_one(doc)
-    doc.pop("_id", None)
+    await _post_stock_move(doc, user)
     # A transfer is booked as an issue here + an offsetting receipt into the destination.
     # mirror copies doc (via **doc) after doc has been stamped, so it inherits the
     # same tenant_id rather than needing a second stamp() call.
@@ -7145,7 +7314,7 @@ async def create_stock_movement(payload: StockMovementCreate, user: dict = Depen
                   "warehouse": doc.get("to_warehouse"), "to_warehouse": "",
                   "movement_no": lc.next_movement_id(existing + [doc]),
                   "reason": f"Transfer from {doc.get('warehouse')}", "created_at": now_iso()}
-        await db.stock_movements.insert_one(dict(mirror))
+        await _post_stock_move(mirror, user)
     await record_activity("stock_movement", doc["id"], "create", user, after=doc)
     return doc
 
@@ -7158,6 +7327,7 @@ async def delete_stock_movement(item_id: str, user: dict = Depends(get_current_u
     if not existing:
         raise HTTPException(status_code=404, detail="Not found")
     await db.stock_movements.delete_one(owned)
+    await _bump_item_qty(existing.get("product_id"), -lc.signed_qty(existing), user)
     await record_activity("stock_movement", item_id, "delete", user, before=existing)
     return {"ok": True}
 

@@ -1187,6 +1187,12 @@ def stock_reserved(movements: Iterable[dict]) -> dict:
     return reserved
 
 
+def stock_position(on_hand: Any, reserved: Any) -> dict:
+    """What the product picker and warnings show for one item."""
+    oh, rs = round(money(on_hand), 3), round(max(0.0, money(reserved)), 3)
+    return {"on_hand": oh, "reserved": rs, "available": round(oh - rs, 3)}
+
+
 def stock_summary(movements, inventory) -> dict:
     """On-hand per product joined to its inventory name, plus movement-type counts."""
     on_hand = stock_on_hand(movements)

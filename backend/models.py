@@ -422,6 +422,16 @@ class InventoryBase(BaseModel):
     depth_mm: Optional[float] = None
     dimension_unit: Optional[str] = "mm"  # "mm" | "in" — display/entry unit only
     material_finish: Optional[str] = ""
+    # Billing details the quote/invoice product picker fills in.
+    hsn: Optional[str] = ""
+    gst_pct: Optional[float] = None
+    unit: Optional[str] = "pcs"
+    # Tally's view of this item (server-owned, set only by the Tally import).
+    # The CRM's own `qty` stays the stock of record; these sit alongside it.
+    tally_name: Optional[str] = ""
+    tally_qty: Optional[float] = None
+    tally_rate: Optional[float] = None
+    tally_synced_at: Optional[str] = ""
 
     @field_validator("dimension_unit")
     @classmethod
@@ -770,6 +780,12 @@ class InvoiceBase(BaseModel):
     sgst: float = 0
     igst: float = 0
     round_off: float = 0     # to the rupee; see lifecycle.invoice_totals
+    # Server-owned: stock taken out for this invoice, shortfalls found when it
+    # was issued, and where it came from ("" = raised in the CRM, "tally").
+    stock_posted: bool = False
+    stock_warnings: List[str] = []
+    source: Optional[str] = ""
+    tally_guid: Optional[str] = ""
     total: float = 0
     paid: float = 0
     balance: float = 0
@@ -1524,6 +1540,11 @@ class QuoteLineBase(BaseModel):
     rate: float = 0
     sft: Optional[float] = 0
     amount: Optional[float] = 0
+    # Set when the line was picked from inventory; carried to the sale and
+    # invoice so stock can be reserved and issued against it.
+    sku: Optional[str] = ""
+    unit: Optional[str] = ""
+    hsn: Optional[str] = ""
 
 class DWOpeningBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
