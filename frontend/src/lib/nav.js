@@ -73,6 +73,7 @@ export const NAV = [
   { app: "command", id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
   { app: "command", id: "workflows", to: "/admin/workflows", label: "Workflows", icon: Workflow, adminOnly: true },
   { app: "command", id: "flows", to: "/admin/flows", label: "Flows", icon: Zap, adminOnly: true },
+  { app: "command", id: "go-live", to: "/admin/go-live", label: "Go-live Data", icon: Database, adminOnly: true },
 ];
 
 // Flat list for the Role Manager permission grid.

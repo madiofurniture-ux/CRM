@@ -72,6 +72,11 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   (MADIO: `CRM Images and content`); setup in
   `docs/SHAREPOINT.md`, check with `GET /api/admin/storage/status`.
 
+- Go-live data load: Admin → Go-live Data (`/admin/go-live`) reads MADIO's
+  spreadsheets (`backend/go_live_import.py`), previews, then archives and
+  replaces the company's business data (undoable; `data_resets`,
+  `data_reset_archive`) and can add starter flows. See `docs/GO_LIVE_DATA.md`.
+
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.
   The codebase uses `tenant_id`, not `company_id`. Don't introduce a second name.

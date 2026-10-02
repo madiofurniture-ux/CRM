@@ -114,6 +114,8 @@ TENANT_COLLECTIONS = {
     # Delivery go-live (operations.py): service/warranty tickets and the
     # Furniture/MAP site surveys (D&W keeps dw_surveys).
     "service_tickets", "site_surveys",
+    # Go-live data load (go_live_import.py): each load and the records it archived.
+    "data_resets", "data_reset_archive",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's

@@ -1,0 +1,276 @@
+"""Go-live data load: cleaning MADIO's hand-kept sheets, preview, the
+archived wipe-and-load (company-scoped), undo, and the starter flows."""
+import asyncio
+import io
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import openpyxl
+import pytest
+from fastapi import HTTPException
+from mongomock_motor import AsyncMongoMockClient
+from starlette.datastructures import UploadFile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import go_live_import as gl  # noqa: E402
+import server  # noqa: E402
+
+ADMIN = {"id": "u1", "tenant_id": "madio", "name": "Admin", "role": "admin", "username": "admin"}
+OTHER = {"id": "u9", "tenant_id": "studio", "name": "S", "role": "admin", "username": "s"}
+
+
+@pytest.fixture(autouse=True)
+def _db(monkeypatch):
+    monkeypatch.setattr(server, "db", AsyncMongoMockClient()["go_live"])
+
+
+def run(c):
+    return asyncio.run(c)
+
+
+def _book(sheets: dict) -> bytes:
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for title, rows in sheets.items():
+        ws = wb.create_sheet(title)
+        for r in rows:
+            ws.append(list(r))
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+ENQUIRY = {
+    "Visitors": [
+        (None, "MADIO FURNITURE"),
+        ("Sl. No", "Date", "Cust Name & Location", "Reference", "Phone Number", "Requirement",
+         "Attend person", "Site Visit (Date/Exe)", "Remarks  ", "STATUS & BALANCE", "Ticket Value"),
+        (1, datetime(2026, 4, 1), "Kiran - Gachibowli", "Walk In", 9876500001.0, "Sofa", "Rooth", None,
+         "Need to share quotation", None, None),
+        (2, "15/09/25", "Meena Rao, Shaikpet", "Raghu MF", "+91 98765 00002", "Paint texture", "GK", None,
+         "Deal closed", "Adv Received", 60000),
+        (3, None, "Kishore - Hyd", "walkin", "Not given", "Furniture", "Rooth", None, "", "Cancel", None),
+        (4, None, None, None, None, None, None, None, None, None, None),
+    ],
+    "2026 MF Quotes": [
+        ("Sl. No", "Quot. No.", "Client Visit Date", "Cust Name & Location", "Reference", "Phone Number",
+         "Requirement", "NHPC Q.NO ", "Quot. Date", "Quot. Through", "Attend person", "Site visit Date / Exe",
+         "Remarks  ", "STATUS & BALANCE", "Ticket Value", "Cash", "Bank"),
+        (1, "AF - 2601-001", "04//01/26", "Kiran - Gachibowli", "Walk In", 9876500001.0, "Furniture", None,
+         datetime(2026, 4, 1), "Whatsapp", "Rooth", None, "Amount Received (4/01)", "Delivery Done",
+         171168.0, 56168.0, 11378.0),
+        (2, "AF-2601-002", "?", "Dr Arun - Kohinoor", "Walk In", "-", "Doors&Windows", None, None, "Whatsapp",
+         "Jags", None, "Low Budget", None, None, None, None),
+        (3, "AF-2601-003", "05/01/26", "Ravi - Kokapet", "Ar Rekha", 9876543210.0, "MAP", None, "05/01/26",
+         "Whatsapp", "GK", None, "Shared quotation, follow up", None, "1,20,000", None, None),
+        (4, None, None, "Nameless row with no number", None, None, None, None, None, None, None, None, None,
+         None, None, None, None),
+    ],
+    "MF Sale": [
+        ("Sl. No", "Sale No", "Adv / Cof Date", "Cust Name & Location", "Reference", "Phone Number",
+         "Requirement", "Quot. Date", "Quote No", "Attend person", "Site visit Date / Exe", "Remarks  ",
+         "STATUS & BALANCE", "Ticket Value & Mode", None, "Bank", "cash", "2nd", "3rd"),
+        (1, "MF 001", "06/01/26", "Kiran - Gachibowli", "Walk In", 9876500001.0, "Sofa", None,
+         "AF-2601-001", "Rooth", None, "Amount received", "Delivered", "1,71,168", "x", 11378.0, 56168.0,
+         "-", "-"),
+        (2, "MF 002", "20/09/26", "Walk-in buyer - Hyd", "Walk In", None, "Chairs", None, "", "Rooth", None,
+         "Advance", 30000.0, 50000.0, None, "-", 20000.0, None, None),
+        (None, None, None, "Repeated enquiry tail", None, None, None, None, None, None, None, None, None,
+         None, None, None, None, None, None),
+    ],
+    "Arch": [
+        (1, "Ar Prakash - PK Studio, Yousafguda", "98765 00003", "Arch", "Gift", "Y"),
+        (2, "Latha M - Colour Works", "98765 00004", "Interior", "Gift", None, "Y"),
+    ],
+}
+PURCHASES = {
+    "Purchase Order": [
+        (66080, "DATE", "PO  - NUMBER", "Quotation Number", "CUSTOMER / STOCK", "VENDOR", "PRODUCT DETAILS",
+         "QTY", "VALUE", "INVOICE NO", "INVOICE DATE", "Receive Date"),
+        (1, "30-4-24", "AF/24-25/007", None, None, "Dextra Square Pvt LTD", None, "788.90 sft", "1,22,488",
+         "TS/5/24-25", "30-4-24", None),
+        (2, "21-05-25", "AF/25-26/82", "AF-2601-003/2", "Ravi", "HEURISTIC FORMULATION", "Silcol 05 kg",
+         "3 cont", 7025.0, "25-26/AHF/814", "22-5-25", "23-5-25"),
+        (3, None, None, None, None, None, "Batch : 250612AEDC02", None, None, None, None, None),
+        (4, None, None, None, None, None, "Decor Matt 500 gm", "1 cont", 500.0, None, None, None),
+        (5, "22-05-25", "AF/25-26/82", None, None, None, "Pearl Polo", "2 cont", 1000.0, None, None, None),
+        (6, "25-05-25", "AF/25-26/83", None, "Shop", None, "Cimento", "1 cont", 900.0, "25-26/AHF/900", None,
+         None),
+    ],
+    "Sheet2": [
+        (None, "MAP STOCK LIST"),
+        (None, "sl.No", "Po Number", "Product Name", "Cust", "Batch Number", "Inflow", "Out flow", "Qty", "Cont"),
+        (None, 1, None, "Cimento BD", None, None, None, None, "5kg", 3),
+    ],
+}
+MIS = {
+    "Sales Accounts": [("Madio Furniture",), ("PLOT NO 25 , ROAD NO 1",), ("KONDAPUR , HYDERABAD -500084",),
+                       ("GST IN - 36ACDFA4831E1ZR",), ("E-Mail : LUXURY.ARMADIO@GMAIL.COM",)],
+    "Closing Stock": [
+        (None, None, None, None, None, None, None, None, None, None, 1, 2, None),
+        ("Month", "Purchase Date", "PRODUCT", "VENDOR", "MODEL NO", "QTY", "RATE", "LP", "Taxable Value",
+         "GST - 18%", "Purchase Cost", "Selling Price", "Status"),
+        (datetime(2026, 4, 1), datetime(2024, 3, 31), "Ficus Microcarpa", "  V1- ZHI RAN SHE",
+         "Artificial Plants", 1, 32000, 32000, 27119, 4881, 32000, 98000, "Display"),
+        (datetime(2026, 4, 1), datetime(2026, 4, 21), "10115021", "Dining Chair", "Novanthe Mobila Pvt Ltd",
+         4, 5500, 22000, 18644, 3355, 22000, 66000, "Godown   "),
+    ],
+}
+
+
+def _files():
+    return [UploadFile(io.BytesIO(_book(ENQUIRY)), filename="AF_Sheet.xlsx"),
+            UploadFile(io.BytesIO(_book(PURCHASES)), filename="Purchase_Order.xlsx"),
+            UploadFile(io.BytesIO(_book(MIS)), filename="MIS.xlsx")]
+
+
+# ── cleaning ───────────────────────────────────────────────────────────────
+def test_cell_cleaning():
+    # Excel turned day/month into month/day for any day <= 12; swapped back.
+    assert gl.sheet_date(datetime(2026, 4, 1)) == "2026-01-04"
+    assert gl.sheet_date(datetime(2026, 4, 21)) == "2026-04-21"
+    assert gl.sheet_date("04//01/26") == "2026-01-04"
+    assert gl.sheet_date("15/09/25") == "2025-09-15"
+    assert gl.sheet_date("?") == "" and gl.sheet_date(45000) == ""
+    assert gl.phone(9876500001.0) == "9876500001"
+    assert gl.phone("+91 98765 00002") == "9876500002"
+    assert gl.phone("919246531773") == "9246531773"
+    assert gl.phone("Not given") == "" and gl.phone("-") == ""
+    assert gl.amount("2,60,000") == 260000 and gl.amount("50,000 B.T") == 50000
+    assert gl.amount("2,00,000/-") == 200000 and gl.amount("-") == 0
+    assert gl.name_location("Meena Rao, Shaikpet") == ("Meena Rao", "Shaikpet")
+    assert gl.name_location("Sudheer - Jubleehills") == ("Sudheer", "Jubleehills")
+    assert gl.name_location("Pravin_Kohinoor") == ("Pravin", "Kohinoor")
+    assert gl.name_location("Dr K Srikanth Panjagutta") == ("Dr K Srikanth Panjagutta", "")
+    assert gl.quote_no("AF - 2401-001") == "AF-2401-001"
+    assert gl.division_of("Doors&Windows") == "D&W" and gl.division_of("MAP") == "MAP"
+    assert gl.division_of("Sofa sets") == "Furniture"
+    assert gl.vendor_name("v-33Novanthe Mobila pvt ltd po.no : AF/25-26/127") == ("Novanthe Mobila Pvt Ltd", "V33")
+    assert gl.vendor_key("Arka") == gl.vendor_key("Aarka") == gl.vendor_key("AARKS")
+
+
+def test_build_maps_every_sheet():
+    files = [(f.filename, f.file.getvalue()) for f in _files()]
+    res = gl.build(gl.load_workbooks(files))
+    rec = res["records"]
+    assert res["counts"]["visitors"] == 3 and res["counts"]["quotes"] == 3 and res["counts"]["sales"] == 2
+    v = {x["name"]: x for x in rec["visitors"]}
+    assert v["Kiran"]["date"] == "2026-01-04" and v["Kiran"]["location"] == "Gachibowli"
+    assert v["Meena Rao"]["stage"] == "Won" and v["Meena Rao"]["division"] == "MAP"
+    assert v["Kishore"]["stage"] == "Lost" and v["Kishore"]["date"] == "2025-09-15"   # row above's date
+    q = {x["quote_no"]: x for x in rec["quotes"]}
+    assert q["AF-2601-001"]["stage"] == "Won" and q["AF-2601-001"]["date"] == "2026-01-04"
+    assert q["AF-2601-002"]["stage"] == "Lost" and q["AF-2601-002"]["date"] == "2026-01-01"
+    assert q["AF-2601-003"]["stage"] == "Negotiation" and q["AF-2601-003"]["value"] == 120000
+    s = {x["sale_no"]: x for x in rec["sales"]}
+    assert s["MF 001"]["quote_id"] == q["AF-2601-001"]["id"] and s["MF 001"]["paid"] == 67546
+    assert s["MF 001"]["stage"] == "Delivered" and s["MF 001"]["status"] == "PARTIAL"
+    assert s["MF 002"]["paid"] == 20000 and s["MF 002"]["balance"] == 30000      # paid from balance column
+    assert len(rec["customers"]) == 1 and rec["customers"][0]["phone"] == "9876500001"
+    assert s["MF 001"]["customer_id"] == rec["customers"][0]["id"] == q["AF-2601-001"]["customer_id"]
+    assert {a["name"] for a in rec["architects"]} == {"Ar Prakash", "Latha M"}
+    pos = {p["po_no"]: p for p in rec["purchase_orders"]}
+    assert pos["AF/24-25/007"]["grand_total"] == 122488 and pos["AF/24-25/007"]["status"] == "Received"
+    po = pos["AF/25-26/82"]
+    assert [ln["description"] for ln in po["line_items"]] == [
+        "Silcol 05 kg (3 cont) (Batch : 250612AEDC02)", "Decor Matt 500 gm", "Pearl Polo"]
+    assert po["grand_total"] == 8525 and po["quote_id"] == q["AF-2601-003"]["id"] and po["division"] == "MAP"
+    assert pos["AF/25-26/83"]["vendor_id"] == po["vendor_id"]   # blank vendor, AHF invoice → same supplier
+    inv = {i["name"]: i for i in rec["inventory"]}
+    assert inv["Ficus Microcarpa"]["vendor_code"] == "V1" and inv["Ficus Microcarpa"]["status"] == "Display"
+    chair = inv["Dining Chair"]                       # realigned row
+    assert (chair["model_no"], chair["qty"], chair["cost"], chair["mrp"], chair["location"]) == \
+           ("10115021", 4, 5500, 16500, "Godown")
+    assert inv["Cimento BD 5kg"]["division"] == "MAP" and inv["Cimento BD 5kg"]["qty"] == 3
+    assert res["office"] == {"gstin": "36ACDFA4831E1ZR", "name": "Madio Furniture",
+                             "address": "PLOT NO 25, ROAD NO 1, KONDAPUR, HYDERABAD -500084",
+                             "email": "luxury.armadio@gmail.com"}
+
+
+# ── endpoints ──────────────────────────────────────────────────────────────
+def test_preview_writes_nothing_and_load_needs_the_phrase():
+    async def go():
+        await server.db.visitors.insert_one({"id": "old", "tenant_id": "madio", "name": "Test", "date": "2026-01-01"})
+        p = await server.go_live_preview(files=_files(), include_hr=False, user=ADMIN)
+        assert p["counts"]["quotes"] == 3 and p["will_clear"] == {"visitors": 1}
+        assert p["confirm_phrase"] == gl.CONFIRM_PHRASE and "records" not in p
+        assert await server.db.quotes.count_documents({}) == 0
+        with pytest.raises(HTTPException) as e:
+            await server.go_live_load(files=_files(), confirm="yes", include_hr=False, apply_office=True, user=ADMIN)
+        assert e.value.status_code == 400
+        assert await server.db.visitors.count_documents({}) == 1
+    run(go())
+
+
+def test_load_archives_clears_loads_only_this_company_and_can_be_undone():
+    async def go():
+        db = server.db
+        await db.users.insert_one({"id": "u-rooth", "tenant_id": "madio", "name": "Rooth Kumar", "role": "sales"})
+        await db.visitors.insert_one({"id": "old", "tenant_id": "madio", "name": "Test", "date": "2026-01-01"})
+        await db.attendance.insert_one({"id": "att", "tenant_id": "madio", "user_id": "u-rooth"})
+        await db.flows.insert_one({"id": "f", "tenant_id": "madio", "name": "Mine"})
+        await db.visitors.insert_one({"id": "theirs", "tenant_id": "studio", "name": "Other co", "date": "2026-01-01"})
+        res = await server.go_live_load(files=_files(), confirm="delete and load", include_hr=False,
+                                       apply_office=True, user=ADMIN)
+        assert res["archived"] == {"visitors": 1} and res["loaded"]["visitors"] == 3
+        assert await db.visitors.count_documents({"id": "old"}) == 0
+        assert await db.visitors.count_documents({"id": "theirs"}) == 1           # other company untouched
+        assert await db.attendance.count_documents({}) == 1 and await db.flows.count_documents({}) == 1
+        v = await db.visitors.find_one({"name": "Kiran"}, {"_id": 0})
+        assert v["tenant_id"] == "madio" and v["fy"] == "2025-26" and v["attend_person_id"] == "u-rooth"
+        assert v["source"] == "go-live import"
+        sale = await db.sales.find_one({"sale_no": "MF 001"}, {"_id": 0})
+        assert sale["tenant_id"] == "madio" and sale["fy"] == "2025-26"
+        office = await server._get_settings(ADMIN)
+        assert office["gstin"] == "36ACDFA4831E1ZR" and office["name"] == "Madio Furniture"
+        assert office["lat"] == 17.4065                                         # geofence kept
+
+        # Another company can't see or undo it.
+        assert await server.go_live_resets(user=OTHER) == []
+        with pytest.raises(HTTPException):
+            await server.go_live_restore(res["reset_id"], {"confirm": "RESTORE"}, user=OTHER)
+
+        out = await server.go_live_restore(res["reset_id"], {"confirm": "restore"}, user=ADMIN)
+        assert out["restored"] == {"visitors": 1}
+        assert [d["id"] async for d in db.visitors.find({"tenant_id": "madio"})] == ["old"]
+        assert await db.quotes.count_documents({"tenant_id": "madio"}) == 0
+        assert (await server.go_live_resets(user=ADMIN))[0]["status"] == "restored"
+        with pytest.raises(HTTPException):
+            await server.go_live_restore(res["reset_id"], {"confirm": "RESTORE"}, user=ADMIN)
+    run(go())
+
+
+def test_hr_records_are_cleared_only_when_asked():
+    async def go():
+        await server.db.attendance.insert_one({"id": "att", "tenant_id": "madio"})
+        res = await server.go_live_load(files=_files(), confirm=gl.CONFIRM_PHRASE, include_hr=True,
+                                       apply_office=False, user=ADMIN)
+        assert res["archived"] == {"attendance": 1} and res["office"] == {}
+        assert await server.db.attendance.count_documents({}) == 0
+    run(go())
+
+
+def test_unrecognised_workbook_is_refused():
+    async def go():
+        junk = UploadFile(io.BytesIO(_book({"Notes": [("hello", "world")]})), filename="notes.xlsx")
+        with pytest.raises(HTTPException) as e:
+            await server.go_live_preview(files=[junk], include_hr=False, user=ADMIN)
+        assert e.value.status_code == 400
+        bad = UploadFile(io.BytesIO(b"not a workbook"), filename="x.xlsx")
+        with pytest.raises(HTTPException):
+            await server.go_live_preview(files=[bad], include_hr=False, user=ADMIN)
+    run(go())
+
+
+def test_starter_flows_install_once():
+    async def go():
+        first = await server.go_live_starter_flows(user=ADMIN)
+        assert len(first["added"]) == len(server.GO_LIVE_STARTER_FLOWS) and first["skipped"] == []
+        again = await server.go_live_starter_flows(user=ADMIN)
+        assert again["added"] == [] and len(again["skipped"]) == len(server.GO_LIVE_STARTER_FLOWS)
+        flows = await server.flows_list(user=ADMIN)
+        assert all(f["tenant_id"] == "madio" for f in flows)
+        assert await server.flows_list(user=OTHER) == []
+    run(go())

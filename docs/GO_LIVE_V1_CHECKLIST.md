@@ -430,3 +430,14 @@ stage outside the list.
   data, desktop 1440px and mobile 390px): workflow builder save, enforced
   required-field gate blocking a lead move with the correct toast, Path
   rendering, Pipeline probabilities from the workflow, zero page errors.
+
+## Go-live: load the business's own data
+
+- [ ] Deploy (Render installs `openpyxl` from `requirements-prod.txt`).
+- [ ] Admin → Go-live Data: upload the enquiry book, Purchase Order book and MIS, Preview, read the report.
+- [ ] Type `DELETE AND LOAD` and load. Previous test data is archived and can be restored from "Previous loads".
+- [ ] Add starter flows; review them under Flows.
+- [ ] Spot-check Visitors, Quotes, Sales Register, Customers, Stock, Purchase Orders, Settings → Office (GSTIN).
+- [ ] Audit Trail, Data Health, Team Board and Record Chain now open for admins (they were missing from the module list).
+
+Details: `docs/GO_LIVE_DATA.md`.

@@ -900,7 +900,10 @@ ALL_MODULE_IDS = [
     "roles", "teams", "roles-permissions", "executive", "commissions", "cashbook",
     "record-contacts", "custom-fields", "project-pnl", "daily-planner", "incentives", "quote-builder",
     "finance-payments", "purchase-orders", "master-data", "manufacturer-orders",
-    "payroll", "calls", "analytics", "expenses", "pnl", "flows",
+    "payroll", "calls", "analytics", "expenses", "pnl", "flows", "go-live",
+    # Routed pages that were never listed here, so every tenant (admins
+    # included) got "No access" on them.
+    "audit-trail", "data-health", "discussions", "record-chain",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -919,7 +922,8 @@ RETIRED_MODULE_IDS = {"requirements", "configurator"}
 # then is treated as having seen exactly these, so modules added later show up
 # switched ON for it rather than silently hidden (the payroll-menu defect).
 # Every module id added after seen_modules tracking began goes in this tuple.
-MODULES_ADDED_AFTER_TRACKING = ("calls", "analytics", "expenses", "pnl", "flows")
+MODULES_ADDED_AFTER_TRACKING = ("calls", "analytics", "expenses", "pnl", "flows", "go-live",
+                                "audit-trail", "data-health", "discussions", "record-chain")
 MODULES_BEFORE_SEEN_TRACKING = [m for m in ALL_MODULE_IDS if m not in MODULES_ADDED_AFTER_TRACKING]
 
 
@@ -8585,6 +8589,263 @@ async def whatsapp_webhook_receive(request: Request):
                 }
                 await db.whatsapp_messages.insert_one(dict(doc))
     return {"ok": True}
+
+
+# ═════════════ Go-live data load (go_live_import.py) ═════════════
+# Admin-only. Preview reads MADIO's spreadsheets and reports what would load;
+# load archives every business record this company has (data_reset_archive),
+# clears them and writes the spreadsheet records in their place. Every load
+# can be undone from its archive. Configuration, users and the audit log are
+# never touched; staff attendance/payroll only when asked.
+import go_live_import as gl
+
+GO_LIVE_STARTER_FLOWS = [
+    {"name": "New visitor: call back next day", "entity": "visitor",
+     "description": "Every showroom visitor gets a call-back task for whoever attended them.",
+     "trigger": {"type": "created"},
+     "steps": [{"type": "create_task", "title": "Call back {record}", "due_in_days": 1,
+                "priority": "Medium", "assign_to": "owner"}]},
+    {"name": "New lead: first call within 2 days", "entity": "lead",
+     "trigger": {"type": "stage_stale", "stage": "New", "days": 2},
+     "steps": [{"type": "create_task", "title": "First call to {record}", "due_in_days": 0,
+                "priority": "High", "assign_to": "owner"}]},
+    {"name": "Quotation sent: follow up after 3 days", "entity": "quote",
+     "description": "The sheet's yellow 'Follow-UP': a quotation with no reply for 3 days.",
+     "trigger": {"type": "stage_stale", "stage": "Quoted", "days": 3},
+     "steps": [{"type": "create_task", "title": "Follow up on quotation {record}", "due_in_days": 0,
+                "priority": "High", "assign_to": "owner"},
+               {"type": "wait", "days": 4},
+               {"type": "create_task", "title": "Second follow-up on quotation {record}", "due_in_days": 0,
+                "priority": "High", "assign_to": "owner"}]},
+    {"name": "Negotiation going cold (7 days)", "entity": "quote",
+     "trigger": {"type": "stage_stale", "stage": "Negotiation", "days": 7},
+     "steps": [{"type": "create_task", "title": "Negotiation stalled on {record}: call the customer", "due_in_days": 0,
+                "priority": "High", "assign_to": "owner"}]},
+    {"name": "Delivered with balance: collect payment", "entity": "sale",
+     "trigger": {"type": "stage_enter", "stage": "Delivered"},
+     "conditions": [{"field": "balance", "op": "gt", "value": "0"}],
+     "steps": [{"type": "create_task", "title": "Collect the balance on {record}", "due_in_days": 2,
+                "priority": "High", "assign_to": "owner"}]},
+    {"name": "Order confirmed: raise the vendor PO", "entity": "sale",
+     "trigger": {"type": "created"},
+     "steps": [{"type": "create_task", "title": "Raise the vendor PO for {record}", "due_in_days": 1,
+                "priority": "High", "assign_to": "owner"}]},
+    {"name": "Project in execution over 21 days", "entity": "project",
+     "trigger": {"type": "stage_stale", "stage": "Execution", "days": 21},
+     "steps": [{"type": "create_task", "title": "{record} running long: review with the team",
+                "due_in_days": 0, "priority": "High", "assign_to": "owner"}]},
+]
+
+
+async def _go_live_files(files: List[UploadFile]) -> list:
+    out = []
+    for f in files or []:
+        out.append((f.filename or "workbook.xlsx", await _read_capped(f, gl.MAX_FILE_BYTES)))
+    return out
+
+
+async def _go_live_build(files: List[UploadFile], user: dict) -> dict:
+    try:
+        sheets = await asyncio.to_thread(gl.load_workbooks, await _go_live_files(files))
+        result = await asyncio.to_thread(gl.build, sheets)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not any(result["counts"].values()):
+        raise HTTPException(status_code=400, detail="None of the sheets were recognised: expected Visitors, "
+                                                    "MF Quotes, MF Sale, Purchase Order or Closing Stock")
+    # Stages are spelled the way this company's workflow spells them; any
+    # the workflow doesn't have are reported rather than silently kept.
+    warnings = []
+    for coll, rows in result["records"].items():
+        entity = tenancy.COLLECTION_ENTITY.get(coll)
+        if not entity or not rows:
+            continue
+        stages, _ = await workflow_for(entity, user)
+        field = tenancy.stage_field(entity)
+        missing: dict = {}
+        for r in rows:
+            st = tenancy.resolve_stage(stages, r.get(field) or "")
+            if st:
+                r[field] = st["label"]
+            elif r.get(field):
+                missing[r[field]] = missing.get(r[field], 0) + 1
+        for label, n in missing.items():
+            warnings.append(f"{n} {tenancy.ENTITY_LABELS.get(entity, coll).lower()} at stage '{label}', "
+                            f"which your {entity} workflow doesn't have")
+    result["warnings"] = warnings
+    return result
+
+
+async def _go_live_current_counts(user: dict, include_hr: bool) -> dict:
+    colls = list(gl.WIPE_COLLECTIONS) + (list(gl.HR_COLLECTIONS) if include_hr else [])
+    counts = {}
+    for c in colls:
+        n = await db[c].count_documents(tenancy.scope({}, c, user))
+        if n:
+            counts[c] = n
+    return counts
+
+
+def _go_live_view(result: dict) -> dict:
+    return {k: v for k, v in result.items() if k != "records"}
+
+
+@api.post("/admin/go-live/preview")
+async def go_live_preview(files: List[UploadFile] = File(...), include_hr: bool = Form(False),
+                          user: dict = Depends(require_admin)):
+    """What a load would do: records per type, rows skipped and why, and
+    what currently exists that would be archived and cleared. Writes nothing."""
+    result = await _go_live_build(files, user)
+    return {**_go_live_view(result), "will_clear": await _go_live_current_counts(user, include_hr),
+            "confirm_phrase": gl.CONFIRM_PHRASE,
+            "samples": {k: v[:3] for k, v in result["records"].items()}}
+
+
+@api.post("/admin/go-live/load")
+async def go_live_load(files: List[UploadFile] = File(...), confirm: str = Form(""),
+                       include_hr: bool = Form(False), apply_office: bool = Form(True),
+                       user: dict = Depends(require_admin)):
+    if str(confirm or "").strip().upper() != gl.CONFIRM_PHRASE:
+        raise HTTPException(status_code=400, detail=f"Type {gl.CONFIRM_PHRASE} to confirm")
+    tid = tenancy.tenant_of(user)
+    if not tid:
+        raise HTTPException(status_code=403, detail="No company on this account")
+    result = await _go_live_build(files, user)
+    reset_id = new_id()
+    colls = list(gl.WIPE_COLLECTIONS) + (list(gl.HR_COLLECTIONS) if include_hr else [])
+
+    # 1. Archive everything that is about to go, one archive row per record.
+    archived: dict = {}
+    for c in colls:
+        batch = []
+        async for d in db[c].find(tenancy.scope({}, c, user)):
+            d.pop("_id", None)
+            batch.append({"reset_id": reset_id, "collection": c, "doc": d, "tenant_id": tid})
+            if len(batch) >= 500:
+                await db.data_reset_archive.insert_many(batch)
+                archived[c] = archived.get(c, 0) + len(batch)
+                batch = []
+        if batch:
+            await db.data_reset_archive.insert_many(batch)
+            archived[c] = archived.get(c, 0) + len(batch)
+    reset = tenancy.stamp({
+        "id": reset_id, "at": now_iso(), "by_user": user.get("name", ""), "by_id": user.get("id", ""),
+        "status": "archived", "archived": archived, "loaded": {}, "files": [f.filename for f in files],
+        "include_hr": bool(include_hr)}, "data_resets", user)
+    await db.data_resets.insert_one(dict(reset))
+
+    # 2. Clear, then 3. load.
+    for c in colls:
+        await db[c].delete_many(tenancy.scope({}, c, user))
+    staff = await db.users.find(tenancy.scope({}, "users", user), {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    by_first = {}
+    for u in staff:
+        for key in {str(u.get("name") or "").strip().lower(),
+                    str(u.get("name") or "").strip().lower().split(" ")[0]}:
+            if key:
+                by_first.setdefault(key, u)
+    links = {"visitors": ("attend_person", "attend_person_id")}
+    loaded = {}
+    for coll, rows in result["records"].items():
+        if not rows:
+            continue
+        docs = []
+        for r in rows:
+            d = dict(r)
+            d["division"] = d.get("division") or "Furniture"
+            if coll in links:
+                name_f, id_f = links[coll]
+                u = by_first.get(str(d.get(name_f) or "").strip().lower())
+                if u:
+                    d[id_f] = u["id"]
+            stamp_fy(d, coll)
+            tenancy.stamp(d, coll, user)
+            docs.append(d)
+        for i in range(0, len(docs), 500):
+            await db[coll].insert_many([dict(x) for x in docs[i:i + 500]])
+        loaded[coll] = len(docs)
+
+    office_applied = {}
+    if apply_office and result.get("office"):
+        current = await _get_settings(user)
+        office_applied = {k: v for k, v in result["office"].items() if k in ("name", "address", "gstin") and v}
+        await db.settings.update_one(tenancy.scope({"key": "office"}, "settings", user),
+                                     {"$set": tenancy.stamp({**current, **office_applied, "key": "office"},
+                                                            "settings", user)}, upsert=True)
+    await db.data_resets.update_one(tenancy.scope({"id": reset_id}, "data_resets", user),
+                                    {"$set": {"status": "loaded", "loaded": loaded, "office": office_applied}})
+    await _audit("go_live_load", user, f"Reset {reset_id}: archived {sum(archived.values())} records, "
+                                      f"loaded {sum(loaded.values())} from {', '.join(f.filename for f in files)}")
+    return {"reset_id": reset_id, "archived": archived, "loaded": loaded, "office": office_applied,
+            "report": result["report"], "warnings": result["warnings"]}
+
+
+@api.get("/admin/go-live/resets")
+async def go_live_resets(user: dict = Depends(require_admin)):
+    return await db.data_resets.find(tenancy.scope({}, "data_resets", user), {"_id": 0}) \
+        .sort("at", -1).to_list(50)
+
+
+@api.post("/admin/go-live/resets/{reset_id}/restore")
+async def go_live_restore(reset_id: str, payload: dict, user: dict = Depends(require_admin)):
+    """Put back exactly what a load archived. Whatever is in those
+    collections now (the loaded data and anything added since) is removed."""
+    if str((payload or {}).get("confirm") or "").strip().upper() != "RESTORE":
+        raise HTTPException(status_code=400, detail="Type RESTORE to confirm")
+    reset = await db.data_resets.find_one(tenancy.scope({"id": reset_id}, "data_resets", user), {"_id": 0})
+    if not reset:
+        raise HTTPException(status_code=404, detail="Load not found")
+    if reset.get("status") == "restored":
+        raise HTTPException(status_code=400, detail="This load has already been undone")
+    colls = list(gl.WIPE_COLLECTIONS) + (list(gl.HR_COLLECTIONS) if reset.get("include_hr") else [])
+    for c in colls:
+        await db[c].delete_many(tenancy.scope({}, c, user))
+    restored = {}
+    batch_by = {}
+    async for a in db.data_reset_archive.find(tenancy.scope({"reset_id": reset_id}, "data_reset_archive", user),
+                                              {"_id": 0}):
+        c = a.get("collection")
+        if c not in colls:
+            continue
+        batch_by.setdefault(c, []).append(a["doc"])
+        if len(batch_by[c]) >= 500:
+            await db[c].insert_many(batch_by.pop(c))
+            restored[c] = restored.get(c, 0) + 500
+    for c, docs in batch_by.items():
+        await db[c].insert_many(docs)
+        restored[c] = restored.get(c, 0) + len(docs)
+    await db.data_resets.update_one(tenancy.scope({"id": reset_id}, "data_resets", user),
+                                    {"$set": {"status": "restored", "restored_at": now_iso(),
+                                              "restored_by": user.get("name", "")}})
+    await _audit("go_live_restore", user, f"Reset {reset_id} undone: restored {sum(restored.values())} records")
+    return {"restored": restored}
+
+
+@api.post("/admin/go-live/starter-flows")
+async def go_live_starter_flows(user: dict = Depends(require_admin)):
+    """Add MADIO's follow-up flows (any already present by name are left alone)."""
+    have = {f.get("name") for f in await db.flows.find(tenancy.scope({}, "flows", user), {"_id": 0, "name": 1})
+            .to_list(flowlib.MAX_FLOWS)}
+    added, skipped = [], []
+    for spec in GO_LIVE_STARTER_FLOWS:
+        if spec["name"] in have:
+            skipped.append({"name": spec["name"], "reason": "already there"})
+            continue
+        stages = (await workflow_for(spec["entity"], user))[0]
+        try:
+            doc = flowlib.validate_flow({**copy.deepcopy(spec), "id": ""}, stages)
+        except ValueError as e:
+            skipped.append({"name": spec["name"], "reason": str(e)})
+            continue
+        if len(have) + len(added) >= flowlib.MAX_FLOWS:
+            skipped.append({"name": spec["name"], "reason": "flow limit reached"})
+            continue
+        doc.update(created_at=now_iso(), updated_at=now_iso(), created_by=user.get("name", ""),
+                   run_count=0, last_run_at="")
+        tenancy.stamp(doc, "flows", user)
+        await db.flows.insert_one(dict(doc))
+        added.append(doc["name"])
+    return {"added": added, "skipped": skipped}
 
 
 app.include_router(api)
