@@ -6,7 +6,7 @@ import api from "@/lib/api";
 import useWorkflow from "@/hooks/useWorkflow";
 import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
-import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers } from "lucide-react";
+import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers, ChevronUp, ChevronDown } from "lucide-react";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 import WhatsAppButton from "@/components/WhatsAppButton";
 import { useAuth } from "@/context/AuthContext";
@@ -51,6 +51,7 @@ export default function Quotes() {
     bank: 0,
     mode: "Walk-in",
     remarks: "",
+    terms: [],
     line_items: [],
   };
 
@@ -109,7 +110,9 @@ export default function Quotes() {
 
   const openEdit = (r) => {
     setEditing(r);
-    setForm({ ...r, line_items: r.line_items || [] });
+    // Older quotes have one remarks block: show it as one point per line.
+    const terms = r.terms?.length ? r.terms : String(r.remarks || "").split("\n").map((t) => t.trim()).filter(Boolean);
+    setForm({ ...r, line_items: r.line_items || [], terms });
     setShowForm(true);
   };
 
@@ -159,12 +162,14 @@ export default function Quotes() {
       return;
     }
     setSaving(true);
+    const terms = (form.terms || []).map((t) => t.trim()).filter(Boolean);
+    const payload = { ...form, terms, remarks: terms.join("\n") };
     try {
       if (editing) {
-        await api.put(`/quotes/${editing.id}`, form);
+        await api.put(`/quotes/${editing.id}`, payload);
         toast.success("Quotation updated");
       } else {
-        await api.post("/quotes", form);
+        await api.post("/quotes", payload);
         toast.success("Quotation created");
       }
       setShowForm(false);
@@ -483,17 +488,8 @@ export default function Quotes() {
                 </div>
               </div>
 
-              {/* Remarks */}
-              <div>
-                <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Remarks & Terms</label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Standard 1 year warranty included. 50% advance."
-                  value={form.remarks}
-                  onChange={(e) => setForm({ ...form, remarks: e.target.value })}
-                  className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)]"
-                />
-              </div>
+              {/* Remarks & terms: one point per line, printed numbered on the quotation */}
+              <TermsEditor terms={form.terms || []} onChange={(terms) => setForm((f) => ({ ...f, terms }))} />
             </div>
 
             {/* Modal Footer with Grand Total */}
@@ -536,4 +532,70 @@ function isExpired(q) {
   const closed = CLOSED_QUOTE.includes(String(q.status || "").toLowerCase())
     || CLOSED_QUOTE.includes(String(q.stage || "").toLowerCase());
   return !closed && q.valid_until < todayIST();
+}
+
+// Common points to add with one click; each stays editable once added.
+const COMMON_TERMS = [
+  "50% advance with order, balance before delivery",
+  "Prices are inclusive of GST",
+  "Delivery within 30–45 days of advance and drawing approval",
+  "Installation included",
+  "Transport and unloading extra at actuals",
+  "1 year warranty against manufacturing defects",
+  "Quotation valid for 30 days",
+];
+
+function TermsEditor({ terms, onChange }) {
+  const set = (i, v) => onChange(terms.map((t, j) => (j === i ? v : t)));
+  const remove = (i) => onChange(terms.filter((_, j) => j !== i));
+  const move = (i, by) => {
+    const j = i + by;
+    if (j < 0 || j >= terms.length) return;
+    const next = [...terms];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  const add = (text = "") => onChange([...terms, text]);
+  const unused = COMMON_TERMS.filter((c) => !terms.some((t) => t.trim().toLowerCase() === c.toLowerCase()));
+  return (
+    <div data-testid="quote-terms">
+      <div className="flex items-center justify-between mb-1">
+        <label className="block text-xs font-semibold text-[var(--color-text-muted)]">Remarks & Terms</label>
+        <span className="text-[11px] text-[var(--color-text-muted)]">{terms.length ? `${terms.length} point${terms.length === 1 ? "" : "s"}` : "Printed as a numbered list"}</span>
+      </div>
+      <ol className="space-y-2">
+        {terms.map((t, i) => (
+          <li key={i} className="flex items-start gap-2" data-testid={`quote-term-${i}`}>
+            <span className="mt-2 w-5 text-right text-xs font-mono text-[var(--color-text-muted)]">{i + 1}.</span>
+            <textarea
+              rows={1}
+              value={t}
+              autoFocus={t === "" && i === terms.length - 1}
+              onChange={(e) => set(i, e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(); } }}
+              placeholder="e.g. 1 year warranty against manufacturing defects"
+              aria-label={`Remark ${i + 1}`}
+              className="flex-1 px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)] resize-y min-h-[38px]"
+            />
+            <div className="flex flex-col">
+              <button type="button" aria-label="Move up" onClick={() => move(i, -1)} disabled={i === 0} className="p-0.5 disabled:opacity-30"><ChevronUp size={14} /></button>
+              <button type="button" aria-label="Move down" onClick={() => move(i, 1)} disabled={i === terms.length - 1} className="p-0.5 disabled:opacity-30"><ChevronDown size={14} /></button>
+            </div>
+            <button type="button" aria-label={`Remove remark ${i + 1}`} onClick={() => remove(i)} className="mt-1.5 p-1 rounded text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"><Trash2 size={14} /></button>
+          </li>
+        ))}
+      </ol>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => add()} className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-[var(--color-border)] hover:bg-[var(--color-surface-muted)]" data-testid="quote-term-add">
+          <Plus size={13} /> Add remark
+        </button>
+        {unused.map((c) => (
+          <button key={c} type="button" onClick={() => add(c)} title="Add this point"
+                  className="px-2.5 py-1 text-[11px] rounded-full bg-[var(--color-primary-soft)] text-[var(--color-primary)] hover:opacity-80">
+            + {c}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }

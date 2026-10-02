@@ -81,3 +81,21 @@ def test_quote_expiry():
 def test_lost_stage_reads_as_lost_and_never_expires():
     assert lc.quote_status({"stage": "Lost"}) == "Lost"
     assert not lc.quote_expired({"stage": "Lost", "valid_until": "2026-01-01"}, today="2026-09-02")
+
+
+def test_terms_list_and_remarks_stay_in_step():
+    async def go():
+        out = await create_quote(QuoteCreate(**BASE, terms=["  50% advance ", "", "1 year warranty"]), user=REP)
+        assert out["terms"] == ["50% advance", "1 year warranty"]
+        assert out["remarks"] == "50% advance\n1 year warranty"
+        # An older screen sending only a remarks block is read as one term per line.
+        upd = await update_quote(out["id"], {"remarks": "Delivery in 30 days\n- Prices incl. GST"}, user=REP)
+        assert upd["terms"] == ["Delivery in 30 days", "Prices incl. GST"]
+        cleared = await update_quote(out["id"], {"terms": [], "remarks": ""}, user=REP)
+        assert cleared["terms"] == [] and cleared["remarks"] == ""
+    asyncio.run(go())
+
+
+def test_quote_pdf_prints_numbered_terms():
+    pdf = server._render_quote_pdf({"quote_no": "Q-1", "customer": "X", "terms": ["50% advance", "Warranty <1 yr>"]}, {})
+    assert pdf.startswith(b"%PDF")

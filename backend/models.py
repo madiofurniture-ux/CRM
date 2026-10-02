@@ -304,6 +304,10 @@ class QuoteBase(BaseModel):
     bank: Optional[float] = 0
     mode: Optional[str] = "Walk-in"
     remarks: Optional[str] = ""
+    # Remarks & terms as separate points (warranty, payment, delivery…), in
+    # print order. `remarks` mirrors them as one text block for older
+    # screens, exports and lists; see lifecycle.quote_terms.
+    terms: List[str] = Field(default_factory=list)
     line_items: Optional[List[dict]] = []
     subtotal: Optional[float] = 0
     tax_pct: Optional[float] = GST_DOC_DEFAULT

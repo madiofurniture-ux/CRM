@@ -368,6 +368,20 @@ def quote_status(q: dict) -> str:
     return "Sent"
 
 
+MAX_QUOTE_TERMS = 30
+
+
+def quote_terms(terms: Any, remarks: Any = "") -> tuple[list[str], str]:
+    """(terms list, remarks text) kept in step. A list wins; an old quote
+    with only a remarks block is read as one term per line."""
+    if isinstance(terms, list):
+        items = [re.sub(r"\s+", " ", str(t)).strip()[:500] for t in terms]
+    else:
+        items = [ln.strip(" •-\t") for ln in str(remarks or "").splitlines()]
+    items = [t for t in items if t][:MAX_QUOTE_TERMS]
+    return items, "\n".join(items)
+
+
 QUOTE_VALIDITY_DAYS = 30
 
 

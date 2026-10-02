@@ -2412,6 +2412,9 @@ async def normalize_quote_template(doc: dict, existing: dict | None, user: dict)
     then recomputes financial_summary from whatever sections the write
     carries, so every save's totals are server-derived."""
     _guard_quote_approval(doc, existing)
+    if "terms" in doc or "remarks" in doc:
+        doc["terms"], doc["remarks"] = lc.quote_terms(
+            doc["terms"] if doc.get("terms") or "remarks" not in doc else None, doc.get("remarks"))
     if existing is None and not doc.get("valid_until"):
         doc["valid_until"] = lc.quote_valid_until(doc.get("date"))
     if existing is None and doc.get("template_id") and not doc.get("sections"):
@@ -2568,6 +2571,15 @@ def _render_quote_pdf(quote: dict, tenant: dict) -> bytes:
             story.append(Spacer(1, 15 * mm))
             story.append(Paragraph("_" * 30, styles["Normal"]))
             story.append(Paragraph("Authorized Signatory", styles["Normal"]))
+
+    has_terms_section = any(s.get("type") == "TERMS_CONDITIONS" for s in (quote.get("sections") or []))
+    terms, _ = lc.quote_terms(quote.get("terms") or None, quote.get("remarks"))
+    if terms and not has_terms_section:
+        from xml.sax.saxutils import escape as _esc
+        story.append(Paragraph("Remarks &amp; Terms", styles["Heading3"]))
+        for n, t in enumerate(terms, 1):
+            story.append(Paragraph(f"{n}. {_esc(t)}", styles["Normal"]))
+        story.append(Spacer(1, 6 * mm))
 
     fs = quote.get("financial_summary") or {}
     story.append(Spacer(1, 6 * mm))
