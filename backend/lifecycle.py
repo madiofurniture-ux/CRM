@@ -382,6 +382,18 @@ def quote_terms(terms: Any, remarks: Any = "") -> tuple[list[str], str]:
     return items, "\n".join(items)
 
 
+def removed_terms(saved: list, new: list) -> list:
+    """Saved points no longer present (each counted as often as it appears)."""
+    left = list(new)
+    missing = []
+    for t in saved:
+        if t in left:
+            left.remove(t)
+        else:
+            missing.append(t)
+    return missing
+
+
 QUOTE_VALIDITY_DAYS = 30
 
 

@@ -2415,6 +2415,15 @@ async def normalize_quote_template(doc: dict, existing: dict | None, user: dict)
     if "terms" in doc or "remarks" in doc:
         doc["terms"], doc["remarks"] = lc.quote_terms(
             doc["terms"] if doc.get("terms") or "remarks" not in doc else None, doc.get("remarks"))
+        # Saved remarks are part of what the customer was offered: only an
+        # admin may remove or reword one. Anyone may add points or reorder.
+        if existing is not None and (user or {}).get("role") != "admin":
+            saved, _ = lc.quote_terms(existing.get("terms") or None, existing.get("remarks"))
+            missing = lc.removed_terms(saved, doc["terms"])
+            if missing:
+                raise HTTPException(status_code=403, detail=(
+                    "Only an admin can remove or change a saved remark: "
+                    + "; ".join(f'"{t[:60]}"' for t in missing[:3])))
     if existing is None and not doc.get("valid_until"):
         doc["valid_until"] = lc.quote_valid_until(doc.get("date"))
     if existing is None and doc.get("template_id") and not doc.get("sections"):

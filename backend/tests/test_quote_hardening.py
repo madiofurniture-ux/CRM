@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from mongomock_motor import AsyncMongoMockClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -88,10 +89,12 @@ def test_terms_list_and_remarks_stay_in_step():
         out = await create_quote(QuoteCreate(**BASE, terms=["  50% advance ", "", "1 year warranty"]), user=REP)
         assert out["terms"] == ["50% advance", "1 year warranty"]
         assert out["remarks"] == "50% advance\n1 year warranty"
-        # An older screen sending only a remarks block is read as one term per line.
-        upd = await update_quote(out["id"], {"remarks": "Delivery in 30 days\n- Prices incl. GST"}, user=REP)
+        # An older screen sending only a remarks block is read as one term per line
+        # (replacing saved points is an admin's call).
+        admin = {**REP, "id": "a1", "role": "admin", "name": "Boss"}
+        upd = await update_quote(out["id"], {"remarks": "Delivery in 30 days\n- Prices incl. GST"}, user=admin)
         assert upd["terms"] == ["Delivery in 30 days", "Prices incl. GST"]
-        cleared = await update_quote(out["id"], {"terms": [], "remarks": ""}, user=REP)
+        cleared = await update_quote(out["id"], {"terms": [], "remarks": ""}, user=admin)
         assert cleared["terms"] == [] and cleared["remarks"] == ""
     asyncio.run(go())
 
@@ -99,3 +102,22 @@ def test_terms_list_and_remarks_stay_in_step():
 def test_quote_pdf_prints_numbered_terms():
     pdf = server._render_quote_pdf({"quote_no": "Q-1", "customer": "X", "terms": ["50% advance", "Warranty <1 yr>"]}, {})
     assert pdf.startswith(b"%PDF")
+
+
+def test_only_an_admin_can_remove_or_reword_a_saved_remark():
+    async def go():
+        q = await create_quote(QuoteCreate(**BASE, terms=["50% advance", "1 year warranty"]), user=REP)
+        # A rep may add points and reorder them...
+        out = await update_quote(q["id"], {"terms": ["1 year warranty", "50% advance", "Installation included"]}, user=REP)
+        assert out["terms"] == ["1 year warranty", "50% advance", "Installation included"]
+        # ...but not remove or reword one, through either field.
+        for payload in ({"terms": ["1 year warranty", "Installation included"]},
+                        {"terms": ["1 year warranty", "40% advance", "Installation included"]},
+                        {"remarks": "1 year warranty"}):
+            with pytest.raises(HTTPException) as e:
+                await update_quote(q["id"], payload, user=REP)
+            assert e.value.status_code == 403 and "admin" in e.value.detail
+        admin = {**REP, "id": "a1", "role": "admin", "name": "Boss"}
+        out = await update_quote(q["id"], {"terms": ["Installation included"]}, user=admin)
+        assert out["terms"] == ["Installation included"]
+    asyncio.run(go())

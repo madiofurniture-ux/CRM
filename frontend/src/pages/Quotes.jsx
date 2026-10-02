@@ -6,7 +6,7 @@ import api from "@/lib/api";
 import useWorkflow from "@/hooks/useWorkflow";
 import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
-import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers, ChevronUp, ChevronDown } from "lucide-react";
+import { Trash2, Edit2, X, Plus, Package, FileCheck, Layers, ChevronUp, ChevronDown, Lock } from "lucide-react";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 import WhatsAppButton from "@/components/WhatsAppButton";
 import { useAuth } from "@/context/AuthContext";
@@ -28,7 +28,8 @@ export default function Quotes() {
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const { divisions } = useTenantConfig();
-  const { canDo } = useAuth();
+  const { canDo, user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const canCreate = canDo("quotes", "create");
   const canEdit = canDo("quotes", "edit");
   const canDelete = canDo("quotes", "delete");
@@ -174,8 +175,9 @@ export default function Quotes() {
       }
       setShowForm(false);
       loadData();
-    } catch {
-      toast.error("Save failed");
+    } catch (e) {
+      const detail = e?.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "Save failed");
     } finally {
       setSaving(false);
     }
@@ -489,7 +491,9 @@ export default function Quotes() {
               </div>
 
               {/* Remarks & terms: one point per line, printed numbered on the quotation */}
-              <TermsEditor terms={form.terms || []} onChange={(terms) => setForm((f) => ({ ...f, terms }))} />
+              <TermsEditor terms={form.terms || []} onChange={(terms) => setForm((f) => ({ ...f, terms }))}
+                           locked={isAdmin || !editing ? [] : (editing.terms?.length ? editing.terms
+                             : String(editing.remarks || "").split("\n").map((t) => t.trim()).filter(Boolean))} />
             </div>
 
             {/* Modal Footer with Grand Total */}
@@ -545,7 +549,19 @@ const COMMON_TERMS = [
   "Quotation valid for 30 days",
 ];
 
-function TermsEditor({ terms, onChange }) {
+// `locked`: points already saved on this quotation. Only an admin may
+// remove or reword them (the server enforces the same rule); for everyone
+// else they're read-only, though they can still be reordered.
+function TermsEditor({ terms, onChange, locked = [] }) {
+  const lockedFlags = (() => {
+    const left = [...locked];
+    return terms.map((t) => {
+      const k = left.indexOf(t);
+      if (k === -1) return false;
+      left.splice(k, 1);
+      return true;
+    });
+  })();
   const set = (i, v) => onChange(terms.map((t, j) => (j === i ? v : t)));
   const remove = (i) => onChange(terms.filter((_, j) => j !== i));
   const move = (i, by) => {
@@ -561,7 +577,10 @@ function TermsEditor({ terms, onChange }) {
     <div data-testid="quote-terms">
       <div className="flex items-center justify-between mb-1">
         <label className="block text-xs font-semibold text-[var(--color-text-muted)]">Remarks & Terms</label>
-        <span className="text-[11px] text-[var(--color-text-muted)]">{terms.length ? `${terms.length} point${terms.length === 1 ? "" : "s"}` : "Printed as a numbered list"}</span>
+        <span className="text-[11px] text-[var(--color-text-muted)]">
+          {terms.length ? `${terms.length} point${terms.length === 1 ? "" : "s"}` : "Printed as a numbered list"}
+          {lockedFlags.some(Boolean) && " · saved remarks can only be changed by an admin"}
+        </span>
       </div>
       <ol className="space-y-2">
         {terms.map((t, i) => (
@@ -570,18 +589,24 @@ function TermsEditor({ terms, onChange }) {
             <textarea
               rows={1}
               value={t}
+              readOnly={lockedFlags[i]}
+              title={lockedFlags[i] ? "Saved remark: only an admin can change or remove it" : undefined}
               autoFocus={t === "" && i === terms.length - 1}
               onChange={(e) => set(i, e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(); } }}
               placeholder="e.g. 1 year warranty against manufacturing defects"
               aria-label={`Remark ${i + 1}`}
-              className="flex-1 px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)] resize-y min-h-[38px]"
+              className={`flex-1 px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)] resize-y min-h-[38px] ${lockedFlags[i] ? "bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]" : ""}`}
             />
             <div className="flex flex-col">
               <button type="button" aria-label="Move up" onClick={() => move(i, -1)} disabled={i === 0} className="p-0.5 disabled:opacity-30"><ChevronUp size={14} /></button>
               <button type="button" aria-label="Move down" onClick={() => move(i, 1)} disabled={i === terms.length - 1} className="p-0.5 disabled:opacity-30"><ChevronDown size={14} /></button>
             </div>
-            <button type="button" aria-label={`Remove remark ${i + 1}`} onClick={() => remove(i)} className="mt-1.5 p-1 rounded text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"><Trash2 size={14} /></button>
+            {lockedFlags[i] ? (
+              <span className="mt-1.5 p-1 text-[var(--color-text-muted)]" title="Saved remark: only an admin can change or remove it" data-testid={`quote-term-locked-${i}`}><Lock size={14} /></span>
+            ) : (
+              <button type="button" aria-label={`Remove remark ${i + 1}`} onClick={() => remove(i)} className="mt-1.5 p-1 rounded text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"><Trash2 size={14} /></button>
+            )}
           </li>
         ))}
       </ol>
