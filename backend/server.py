@@ -14,7 +14,7 @@ import time
 import asyncio
 from typing import List, Optional
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form, Header
 from fastapi.responses import JSONResponse, StreamingResponse, Response, FileResponse
 from pydantic import ValidationError as PydanticValidationError
 from pymongo.errors import DuplicateKeyError
@@ -38,6 +38,9 @@ import quotation_templates
 import storage
 import tally
 import workflow_rules as wf
+import tally_import as ti
+import hashlib
+import secrets
 import flows as flowlib
 import analytics as an
 import expenses as ex
@@ -4238,6 +4241,311 @@ async def _tally_connection(user: dict) -> dict:
         "company": (conn or {}).get("company") or TALLY_COMPANY,
         "endpoint_url": (conn or {}).get("endpoint_url") or TALLY_URL,
     }
+
+
+# ═════════════ Tally → CRM: the MADIO Tally Connector (tools/tally_connector) ═════════════
+# A small program on the office computer that runs Tally reads Tally's own
+# XML export on localhost and posts it here. Tally is never exposed to the
+# internet. The connector authenticates with a per-company key; the company
+# comes from the stored key record, never from the request.
+def _connector_key_hash(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _tally_connector_user(tenant_id: str) -> dict:
+    return {"id": "tally-connector", "name": "Tally", "username": "tally-connector",
+            "tenant_id": tenant_id, "role": "admin"}
+
+
+@api.post("/finance/tally/connector-key")
+async def tally_connector_key_create(user: dict = Depends(get_current_user)):
+    """Issue a new connector key (shown once) and revoke the previous one."""
+    await _require_permission("cashbook", "approve", user)
+    if not tenancy.tenant_of(user):
+        raise HTTPException(status_code=403, detail="No company on this account")
+    key = "mtc_" + secrets.token_urlsafe(32)
+    await db.tally_connector_keys.update_many(tenancy.scope({"revoked": False}, "tally_connector_keys", user),
+                                              {"$set": {"revoked": True, "revoked_at": now_iso()}})
+    doc = {"id": new_id(), "key_hash": _connector_key_hash(key), "prefix": key[:10], "revoked": False,
+           "created_at": now_iso(), "created_by": user.get("name", ""), "last_used_at": ""}
+    tenancy.stamp(doc, "tally_connector_keys", user)
+    await db.tally_connector_keys.insert_one(dict(doc))
+    await _audit("tally_connector_key_issued", user, doc["prefix"])
+    return {"key": key, "prefix": doc["prefix"],
+            "note": "Copy this key into the connector's settings now; it is not shown again."}
+
+
+@api.get("/finance/tally/connector")
+async def tally_connector_status(user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    key = await db.tally_connector_keys.find_one(
+        tenancy.scope({"revoked": False}, "tally_connector_keys", user), {"_id": 0, "key_hash": 0})
+    last = {}
+    for kind in ti.KINDS:
+        row = await db.tally_imports.find_one(tenancy.scope({"kind": kind}, "tally_imports", user),
+                                              {"_id": 0}, sort=[("at", -1)])
+        if row:
+            last[kind] = row
+    newest = max((r["at"] for r in last.values()), default="")
+    return {"key": key, "last_imports": last, "last_import_at": newest,
+            "stale": bool(key) and ti.stale(newest)}
+
+
+@api.get("/finance/tally/imports")
+async def tally_imports_list(limit: int = 100, user: dict = Depends(get_current_user)):
+    await _require_permission("cashbook", "view", user)
+    return await db.tally_imports.find(tenancy.scope({}, "tally_imports", user), {"_id": 0}) \
+        .sort("at", -1).to_list(max(1, min(int(limit or 100), 500)))
+
+
+@api.post("/tally/ingest")
+async def tally_ingest(payload: dict, x_tally_key: str = Header(default="")):
+    """Where the connector posts {kind, items, company}. Authenticated by the
+    connector key only; acts inside that key's company."""
+    if not x_tally_key.startswith("mtc_"):
+        raise HTTPException(status_code=401, detail="Connector key missing")
+    rec = await db.tally_connector_keys.find_one({"key_hash": _connector_key_hash(x_tally_key), "revoked": False},
+                                                 {"_id": 0})
+    if not rec or not rec.get("tenant_id"):
+        raise HTTPException(status_code=401, detail="Connector key not recognised or revoked")
+    user = _tally_connector_user(rec["tenant_id"])
+    kind = str((payload or {}).get("kind") or "")
+    try:
+        records, errors = ti.validate_batch(kind, (payload or {}).get("items"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    handler = {"stock_items": _ingest_stock_items, "ledgers": _ingest_ledgers,
+               "sales_vouchers": _ingest_sales_vouchers, "receipts": _ingest_receipts}[kind]
+    counts = {"created": 0, "updated": 0, "skipped": 0}
+    await handler(records, user, counts, errors)
+    at = now_iso()
+    log = {"id": new_id(), "kind": kind, "company": str((payload or {}).get("company") or "")[:120],
+           "received": len((payload or {}).get("items") or []), **counts,
+           "errors": errors[:50], "error_count": len(errors), "at": at}
+    tenancy.stamp(log, "tally_imports", user)
+    await db.tally_imports.insert_one(dict(log))
+    await db.tally_connector_keys.update_one({"id": rec["id"], "tenant_id": rec["tenant_id"]},
+                                             {"$set": {"last_used_at": at}})
+    log.pop("_id", None)
+    return log
+
+
+async def _ingest_stock_items(records: list, user: dict, counts: dict, errors: list) -> None:
+    items = await db.inventory.find(tenancy.scope({}, "inventory", user), {"_id": 0}).to_list(50000)
+    by_sku = {i.get("sku"): i for i in items if i.get("sku")}
+    by_name = {}
+    for i in items:
+        for n in (i.get("tally_name"), i.get("name")):
+            if n:
+                by_name.setdefault(ti.name_key(n), i)
+    now = now_iso()
+    for rec in records:
+        try:
+            tally_set = {"tally_name": rec["name"], "tally_qty": rec["closing_qty"], "tally_rate": rec["rate"],
+                         "tally_synced_at": now}
+            match = ti.match_item(rec, by_sku, by_name)
+            if match:
+                fill = {k: rec[k] for k in ("hsn", "unit") if rec.get(k) and not match.get(k)}
+                if rec.get("gst_pct") is not None and match.get("gst_pct") is None:
+                    fill["gst_pct"] = rec["gst_pct"]
+                await db.inventory.update_one(tenancy.scope({"id": match["id"]}, "inventory", user),
+                                              {"$set": {**tally_set, **fill}})
+                counts["updated"] += 1
+                continue
+            if not rec["sku"]:
+                raise ValueError(f"{rec['name']}: no part number or usable name for a SKU")
+            doc = {"id": new_id(), "created_at": now, "sku": rec["sku"], "name": rec["name"],
+                   "category": rec.get("category", ""), "qty": 0, "cost": 0, "mrp": rec["rate"], "margin": 0,
+                   "status": "In Stock", "location": "Warehouse", "hsn": rec["hsn"], "gst_pct": rec["gst_pct"],
+                   "unit": rec["unit"], "source": "tally", **tally_set}
+            tenancy.stamp(doc, "inventory", user)
+            await db.inventory.insert_one(dict(doc))
+            by_sku[doc["sku"]] = doc
+            by_name[ti.name_key(rec["name"])] = doc
+            counts["created"] += 1
+        except Exception as e:
+            errors.append(str(e)[:200])
+            counts["skipped"] += 1
+
+
+async def _customer_index(user: dict) -> tuple[dict, dict]:
+    rows = await db.customers.find(tenancy.scope({}, "customers", user), {"_id": 0}).to_list(50000)
+    by_name, by_gstin = {}, {}
+    for c in rows:
+        for n in (c.get("tally_ledger_name"), c.get("name")):
+            if n:
+                by_name.setdefault(ti.name_key(n), c)
+        if c.get("gstin"):
+            by_gstin.setdefault(str(c["gstin"]).upper(), c)
+    return by_name, by_gstin
+
+
+async def _ingest_ledgers(records: list, user: dict, counts: dict, errors: list) -> None:
+    by_name, by_gstin = await _customer_index(user)
+    now = now_iso()
+    for rec in records:
+        try:
+            tally_set = {"tally_ledger_name": rec["name"], "tally_outstanding": rec["outstanding"],
+                         "tally_synced_at": now}
+            match = ti.match_customer(rec["name"], rec["gstin"], by_name, by_gstin)
+            if match:
+                # Tally fills gaps; it never overwrites details the team keeps in the CRM.
+                fill = {k: rec[k] for k in ("gstin", "address", "email", "phone") if rec.get(k) and not match.get(k)}
+                await db.customers.update_one(tenancy.scope({"id": match["id"]}, "customers", user),
+                                              {"$set": {**tally_set, **fill}})
+                counts["updated"] += 1
+                continue
+            doc = {"id": new_id(), "created_at": now, "name": rec["name"], "phone": rec["phone"],
+                   "email": rec["email"], "address": rec["address"], "gstin": rec["gstin"],
+                   "division": "Furniture", "stage": "Active", "source": "tally", **tally_set}
+            tenancy.stamp(doc, "customers", user)
+            await db.customers.insert_one(dict(doc))
+            by_name[ti.name_key(rec["name"])] = doc
+            if rec["gstin"]:
+                by_gstin[rec["gstin"]] = doc
+            counts["created"] += 1
+        except Exception as e:
+            errors.append(f"{rec.get('name', '?')}: {str(e)[:160]}")
+            counts["skipped"] += 1
+
+
+async def _ingest_sales_vouchers(records: list, user: dict, counts: dict, errors: list) -> None:
+    by_name, by_gstin = await _customer_index(user)
+    items = await db.inventory.find(tenancy.scope({}, "inventory", user),
+                                    {"_id": 0, "sku": 1, "name": 1, "tally_name": 1}).to_list(50000)
+    item_by_name = {}
+    for i in items:
+        for n in (i.get("tally_name"), i.get("name")):
+            if n:
+                item_by_name.setdefault(ti.name_key(n), i.get("sku", ""))
+    for rec in records:
+        try:
+            owned_guid = tenancy.scope({"tally_guid": rec["guid"]}, "invoices", user)
+            existing = await db.invoices.find_one(owned_guid, {"_id": 0})
+            if not existing:
+                clash = await db.invoices.find_one(tenancy.scope(
+                    {"invoice_no": rec["invoice_no"], "source": {"$ne": "tally"}}, "invoices", user), {"_id": 1})
+                if clash:
+                    raise ValueError(f"{rec['invoice_no']}: number already used by an invoice raised in the CRM")
+            for ln in rec["line_items"]:
+                ln["sku"] = item_by_name.get(ti.name_key(ln["tally_item"]), "")
+            cust = ti.match_customer(rec["party"], rec["gstin"], by_name, by_gstin) or {}
+            fields = {
+                "invoice_no": rec["invoice_no"], "date": rec["date"], "customer": rec["party"],
+                "customer_id": cust.get("id", ""), "phone": cust.get("phone", ""),
+                "billing_address": cust.get("address", ""), "gstin": rec["gstin"] or cust.get("gstin", ""),
+                "place_of_supply": rec["place_of_supply"], "is_igst": rec["is_igst"],
+                "line_items": rec["line_items"], "subtotal": rec["subtotal"], "discount_total": 0,
+                "cgst": rec["cgst"], "sgst": rec["sgst"], "igst": rec["igst"], "round_off": 0,
+                "total": rec["total"], "notes": rec["narration"], "by_user": "Tally",
+                "status": "Cancelled" if rec["cancelled"] else (existing or {}).get("status") or "Sent",
+                "source": "tally", "tally_guid": rec["guid"], "tally_synced_at": now_iso(),
+            }
+            if existing:
+                if existing.get("status") == "Paid" and not rec["cancelled"]:
+                    fields["status"] = "Sent"       # re-derived from payments just below
+                await db.invoices.update_one(owned_guid, {"$set": fields})
+                counts["updated"] += 1
+                inv_id = existing["id"]
+            else:
+                doc = {"id": new_id(), "created_at": now_iso(), "paid": 0, "balance": rec["total"],
+                       "stock_posted": False, **fields}
+                stamp_fy(doc, "invoices")
+                tenancy.stamp(doc, "invoices", user)
+                await db.invoices.insert_one(dict(doc))
+                counts["created"] += 1
+                inv_id = doc["id"]
+            await _sync_invoices(user, invoice_id=inv_id)
+        except Exception as e:
+            errors.append(str(e)[:200])
+            counts["skipped"] += 1
+
+
+async def _ingest_receipts(records: list, user: dict, counts: dict, errors: list) -> None:
+    touched: set = set()
+    existing_ids = await db.payments.find(tenancy.scope({}, "payments", user),
+                                          {"payment_id": 1, "_id": 0}).to_list(50000)
+    for rec in records:
+        try:
+            owned = tenancy.scope({"tally_row_key": rec["row_key"]}, "payments", user)
+            prior = await db.payments.find_one(owned, {"_id": 0})
+            if rec["cancelled"]:
+                if prior:
+                    await db.payments.delete_one(owned)
+                    if prior.get("against_invoice_id"):
+                        touched.add(prior["against_invoice_id"])
+                    counts["updated"] += 1
+                else:
+                    counts["skipped"] += 1
+                continue
+            invoice_id, note = "", ""
+            if rec["bill_ref"]:
+                inv = await db.invoices.find_one(tenancy.scope({"invoice_no": rec["bill_ref"]}, "invoices", user),
+                                                 {"_id": 0, "id": 1, "source": 1})
+                if inv and inv.get("source") == "tally":
+                    invoice_id = inv["id"]
+                elif inv:
+                    # Money for a CRM invoice may already be recorded in the CRM;
+                    # linking it again would count it twice.
+                    note = f" · matches CRM invoice {rec['bill_ref']}: record it in one place only"
+                    errors.append(f"Receipt {rec['voucher_no']}: bill {rec['bill_ref']} is a CRM invoice; "
+                                  "kept unlinked so it isn't counted twice")
+            fields = {"date": rec["date"], "direction": "In", "amount": rec["amount"], "mode": rec["mode"],
+                      "kind": "Part", "received_by": "Tally", "against_invoice_id": invoice_id,
+                      "against_sale_id": "", "remarks": f"Tally receipt {rec['voucher_no']} · {rec['party']}{note}",
+                      "party": rec["party"], "source": "tally", "tally_row_key": rec["row_key"],
+                      "division": "Furniture"}
+            if prior:
+                await db.payments.update_one(owned, {"$set": fields})
+                if prior.get("against_invoice_id"):
+                    touched.add(prior["against_invoice_id"])
+                counts["updated"] += 1
+            else:
+                doc = {"id": new_id(), "created_at": now_iso(),
+                       "payment_id": lc.next_payment_id(existing_ids), **fields}
+                existing_ids.append({"payment_id": doc["payment_id"]})
+                stamp_fy(doc, "payments")
+                tenancy.stamp(doc, "payments", user)
+                await db.payments.insert_one(dict(doc))
+                counts["created"] += 1
+            if invoice_id:
+                touched.add(invoice_id)
+        except Exception as e:
+            errors.append(str(e)[:200])
+            counts["skipped"] += 1
+    for inv_id in touched:
+        await _sync_invoices(user, invoice_id=inv_id)
+
+
+@api.get("/inventory/tally-compare")
+async def inventory_tally_compare(user: dict = Depends(get_current_user)):
+    """Items whose CRM stock differs from Tally's closing stock."""
+    await _require_permission("inventory", "view", user)
+    rows = await db.inventory.find(tenancy.scope({"tally_qty": {"$ne": None}}, "inventory", user),
+                                   {"_id": 0, "sku": 1, "name": 1, "qty": 1, "tally_qty": 1, "tally_name": 1,
+                                    "tally_synced_at": 1}).to_list(50000)
+    out = []
+    for r in rows:
+        diff = round(lc.money(r.get("tally_qty")) - lc.money(r.get("qty")), 3)
+        if abs(diff) > 0.0005:
+            out.append({**r, "difference": diff})
+    return sorted(out, key=lambda r: -abs(r["difference"]))
+
+
+@api.post("/inventory/{sku}/accept-tally-qty")
+async def inventory_accept_tally_qty(sku: str, user: dict = Depends(get_current_user)):
+    """Set the CRM's stock to Tally's figure, as an audited Adjustment."""
+    await _require_permission("inventory", "edit", user)
+    item = await db.inventory.find_one(tenancy.scope({"sku": sku}, "inventory", user), {"_id": 0})
+    if not item or item.get("tally_qty") is None:
+        raise HTTPException(status_code=404, detail="No Tally stock figure for this item")
+    diff = round(lc.money(item["tally_qty"]) - lc.money(item.get("qty")), 3)
+    if abs(diff) < 0.0005:
+        return {"ok": True, "adjusted": 0}
+    move = await _post_stock_move({"type": "Adjustment", "product_id": sku, "qty": diff, "warehouse": "Main",
+                                   "reason": f"Matched to Tally closing stock ({item['tally_qty']:g})"}, user)
+    await record_activity("stock_movement", move["id"], "create", user, after=move)
+    return {"ok": True, "adjusted": diff}
 
 
 @api.get("/finance/tally/connection")
