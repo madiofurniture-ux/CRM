@@ -230,6 +230,22 @@ def sharepoint_read(file_url: str) -> bytes:
                               headers=_headers(), timeout=120), "Reading from SharePoint").content
 
 
+def sharepoint_list_folder(subfolder: str) -> list[dict]:
+    """Files directly inside <SHAREPOINT_FOLDER>/<subfolder>: [{name, id, size, ref}].
+    `ref` is a sharepoint: reference sharepoint_read() accepts. Empty when the
+    folder doesn't exist."""
+    cfg = sharepoint_config()
+    _, drive_id = _site_and_drive()
+    path = "/".join(_segment(p) for p in (*cfg["folder"].split("/"), *subfolder.split("/")) if p)
+    resp = _http().get(f"{GRAPH}/drives/{drive_id}/root:/{quote(path)}:/children",
+                       headers=_headers(), timeout=30)
+    if resp.status_code == 404:
+        return []
+    items = _check(resp, "Listing a SharePoint folder").json().get("value", [])
+    return [{"name": i.get("name", ""), "id": i["id"], "size": i.get("size", 0),
+             "ref": f"{SHAREPOINT_PREFIX}{drive_id}/{i['id']}"} for i in items if "file" in i]
+
+
 def sharepoint_delete(file_url: str) -> None:
     drive_id, item_id = _parse(file_url)
     resp = _http().delete(f"{GRAPH}/drives/{quote(drive_id)}/items/{quote(item_id)}", headers=_headers(), timeout=30)

@@ -27,7 +27,8 @@ function FilePicker({ files, setFiles }) {
       <span className="text-xs text-[var(--ink-3)] text-center">
         Enquiry book (Visitors, MF Quotes, MF Sale, Arch, Navaki), Purchase Order book, MIS (Closing Stock)
       </span>
-      <input type="file" accept=".xlsx" multiple className="hidden"
+      <input type="file" multiple className="sr-only"
+             accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
              onChange={(e) => setFiles(Array.from(e.target.files || []))} data-testid="golive-file-input" />
       {files.length > 0 && (
         <ul className="mt-2 text-xs text-[var(--ink-2)]">
@@ -76,12 +77,20 @@ export default function GoLiveData() {
   const [busy, setBusy] = useState("");
   const [result, setResult] = useState(null);
   const [resets, setResets] = useState([]);
+  const [source, setSource] = useState("upload");          // "upload" | "sharepoint"
+  const [sp, setSp] = useState(null);                      // {folder, files, error}
 
   const loadResets = useCallback(() => {
     api.get("/admin/go-live/resets", { skipCache: true }).then(({ data }) => setResets(data || [])).catch(() => setResets([]));
   }, []);
   useEffect(() => { loadResets(); }, [loadResets]);
-  useEffect(() => { setPreview(null); setResult(null); setConfirm(""); }, [files, includeHr]);
+  useEffect(() => { setPreview(null); setResult(null); setConfirm(""); }, [files, includeHr, source]);
+  const loadSp = useCallback(() => {
+    api.get("/admin/go-live/sharepoint", { skipCache: true }).then(({ data }) => setSp(data))
+      .catch((e) => setSp({ files: [], error: formatApiError(e.response?.data?.detail) || "Couldn't reach SharePoint" }));
+  }, []);
+  useEffect(() => { if (source === "sharepoint") loadSp(); }, [source, loadSp]);
+  const ready = source === "upload" ? files.length > 0 : (sp?.files || []).length > 0;
 
   const form = () => {
     const fd = new FormData();
@@ -93,7 +102,9 @@ export default function GoLiveData() {
   const doPreview = async () => {
     setBusy("preview");
     try {
-      const { data } = await api.post("/admin/go-live/preview", form());
+      const { data } = source === "upload"
+        ? await api.post("/admin/go-live/preview", form(), { timeout: 300000 })
+        : await api.post("/admin/go-live/sharepoint/preview", { include_hr: includeHr }, { timeout: 300000 });
       setPreview(data);
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail) || "Couldn't read the workbooks"); }
     finally { setBusy(""); }
@@ -102,10 +113,16 @@ export default function GoLiveData() {
   const doLoad = async () => {
     setBusy("load");
     try {
-      const fd = form();
-      fd.append("confirm", confirm);
-      fd.append("apply_office", "true");
-      const { data } = await api.post("/admin/go-live/load", fd, { timeout: 300000 });
+      let data;
+      if (source === "upload") {
+        const fd = form();
+        fd.append("confirm", confirm);
+        fd.append("apply_office", "true");
+        ({ data } = await api.post("/admin/go-live/load", fd, { timeout: 300000 }));
+      } else {
+        ({ data } = await api.post("/admin/go-live/sharepoint/load",
+          { confirm, include_hr: includeHr, apply_office: true }, { timeout: 300000 }));
+      }
       setResult(data);
       setPreview(null);
       setConfirm("");
@@ -146,13 +163,36 @@ export default function GoLiveData() {
       <Topbar title="Go-live data" subtitle="Replace test data with the business's own records" />
       <div className="p-4 md:p-6 max-w-5xl w-full space-y-4">
         <section className="bg-[var(--surface)] border border-[var(--border-light)] rounded-2xl p-4 space-y-3">
-          <h2 className="font-heading font-semibold">1. Upload and preview</h2>
-          <FilePicker files={files} setFiles={setFiles} />
+          <h2 className="font-heading font-semibold">1. Choose the spreadsheets and preview</h2>
+          <div className="flex gap-2 text-sm" role="tablist">
+            {[["upload", "Upload from this device"], ["sharepoint", "From SharePoint folder"]].map(([k, label]) => (
+              <button key={k} type="button" role="tab" aria-selected={source === k} onClick={() => setSource(k)}
+                      data-testid={`golive-source-${k}`}
+                      className={`px-3 py-1.5 rounded-lg border ${source === k ? "border-[var(--brand)] bg-[var(--brand-soft)] font-medium" : "border-[var(--border)]"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {source === "upload" ? <FilePicker files={files} setFiles={setFiles} /> : (
+            <div className="rounded-xl border border-[var(--border)] p-4 text-sm space-y-1" data-testid="golive-sharepoint">
+              {!sp ? <span className="text-[var(--ink-3)]">Looking in SharePoint…</span> : sp.error ? (
+                <span className="text-[var(--danger)]">{sp.error}</span>
+              ) : (
+                <>
+                  <div>Folder: <b>{sp.folder}</b></div>
+                  {sp.files.length === 0
+                    ? <div className="text-[var(--ink-3)]">No .xlsx files there yet. Put the workbooks in that folder, then refresh.</div>
+                    : sp.files.map((f) => <div key={f.name} className="flex items-center gap-1"><FileSpreadsheet size={12} /> {f.name}</div>)}
+                </>
+              )}
+              <button type="button" className="btn-ghost text-xs mt-1" onClick={loadSp}>Refresh</button>
+            </div>
+          )}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={includeHr} onChange={(e) => setIncludeHr(e.target.checked)} data-testid="golive-include-hr" />
             Also clear staff attendance, leave and payroll records
           </label>
-          <button type="button" className="btn-primary text-sm disabled:opacity-60" disabled={!files.length || !!busy}
+          <button type="button" className="btn-primary text-sm disabled:opacity-60" disabled={!ready || !!busy}
                   onClick={doPreview} data-testid="golive-preview">
             {busy === "preview" ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />} Preview
           </button>

@@ -277,6 +277,49 @@ def load_workbooks(files: list[tuple[str, bytes]]) -> dict:
     return sheets
 
 
+def pack_sheets(sheets: dict) -> str:
+    """Sheets → compact text (JSON, xz, base64) for handing a workbook's
+    values to the server without a file upload (GO_LIVE_DATA). Real dates
+    keep their type, so the day/month repair still applies."""
+    import base64
+    import json
+    import lzma
+
+    def enc(v):
+        if isinstance(v, datetime):
+            return {"d": v.isoformat()}
+        if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
+            return int(v)
+        return v
+
+    rows = {name: [[enc(v) for v in r] for r in body] for name, body in sheets.items()}
+    raw = json.dumps(rows, separators=(",", ":"), default=str).encode()
+    return base64.b64encode(lzma.compress(raw, preset=9 | lzma.PRESET_EXTREME)).decode()
+
+
+def unpack_sheets(text_value: str) -> dict:
+    """pack_sheets() reversed. Raises ValueError on anything malformed."""
+    import base64
+    import binascii
+    import json
+    import lzma
+
+    try:
+        raw = lzma.decompress(base64.b64decode("".join(str(text_value or "").split()), validate=True))
+        data = json.loads(raw)
+    except (binascii.Error, lzma.LZMAError, ValueError) as e:
+        raise ValueError(f"GO_LIVE_DATA isn't a packed workbook ({e})")
+    if not isinstance(data, dict):
+        raise ValueError("GO_LIVE_DATA isn't a packed workbook")
+
+    def dec(v):
+        if isinstance(v, dict) and set(v) == {"d"}:
+            return datetime.fromisoformat(v["d"])
+        return v
+
+    return {str(name): [tuple(dec(v) for v in (r or [])) for r in body] for name, body in data.items()}
+
+
 def _find(sheets: dict, *names: str) -> Optional[str]:
     lower = {k.lower(): k for k in sheets}
     for n in names:
@@ -912,5 +955,5 @@ def _office(sheets) -> dict:
     return {}
 
 
-__all__ = ["build", "load_workbooks", "WIPE_COLLECTIONS", "HR_COLLECTIONS", "CONFIRM_PHRASE",
+__all__ = ["build", "load_workbooks", "pack_sheets", "unpack_sheets", "WIPE_COLLECTIONS", "HR_COLLECTIONS", "CONFIRM_PHRASE",
            "sheet_date", "phone", "amount", "name_location", "quote_no", "division_of"]

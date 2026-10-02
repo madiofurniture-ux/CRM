@@ -274,3 +274,96 @@ def test_starter_flows_install_once():
         assert all(f["tenant_id"] == "madio" for f in flows)
         assert await server.flows_list(user=OTHER) == []
     run(go())
+
+
+# ── from a SharePoint folder, and the one-time automatic load ──────────────
+def _fake_sharepoint(monkeypatch, files=None):
+    books = files if files is not None else {f.filename: f.file.getvalue() for f in _files()}
+    items = [{"name": n, "id": f"i{k}", "size": len(b), "ref": f"sharepoint:d/i{k}"}
+             for k, (n, b) in enumerate(books.items())] + [
+        {"name": "notes.txt", "id": "t", "size": 3, "ref": "sharepoint:d/t"}]
+    by_ref = {i["ref"]: books.get(i["name"], b"txt") for i in items}
+    seen = []
+    monkeypatch.setattr(server.storage, "sharepoint_list_folder", lambda sub: (seen.append(sub), items)[1])
+    monkeypatch.setattr(server.storage, "sharepoint_read", lambda ref: by_ref[ref])
+    return seen
+
+
+def test_sharepoint_folder_lists_previews_and_loads(monkeypatch):
+    seen = _fake_sharepoint(monkeypatch)
+
+    async def go():
+        listing = await server.go_live_sharepoint_list(user=ADMIN)
+        assert [f["name"] for f in listing["files"]] == ["AF_Sheet.xlsx", "Purchase_Order.xlsx", "MIS.xlsx"]
+        p = await server.go_live_sharepoint_preview({"include_hr": False}, user=ADMIN)
+        assert p["counts"]["quotes"] == 3 and p["files"] == ["AF_Sheet.xlsx", "Purchase_Order.xlsx", "MIS.xlsx"]
+        with pytest.raises(HTTPException):
+            await server.go_live_sharepoint_load({"confirm": "no"}, user=ADMIN)
+        res = await server.go_live_sharepoint_load({"confirm": gl.CONFIRM_PHRASE}, user=ADMIN)
+        assert res["loaded"]["sales"] == 2
+        assert (await server.go_live_resets(user=ADMIN))[0]["source"] == "sharepoint"
+    run(go())
+    assert seen and all(s == "go-live" for s in seen)
+
+
+def test_empty_sharepoint_folder_is_reported(monkeypatch):
+    _fake_sharepoint(monkeypatch, files={})
+
+    async def go():
+        with pytest.raises(HTTPException) as e:
+            await server.go_live_sharepoint_preview({}, user=ADMIN)
+        assert e.value.status_code == 400 and "No .xlsx" in e.value.detail
+    run(go())
+
+
+def test_auto_load_runs_once_per_run_key_for_the_default_company(monkeypatch):
+    _fake_sharepoint(monkeypatch)
+    monkeypatch.setenv("GO_LIVE_SHAREPOINT_RUN", "golive-1")
+
+    async def go():
+        await server.db.visitors.insert_one({"id": "old", "tenant_id": server.DEFAULT_TENANT, "name": "T",
+                                             "date": "2026-01-01"})
+        await server.db.visitors.insert_one({"id": "theirs", "tenant_id": "studio", "name": "O", "date": "2026-01-01"})
+        first = await server.go_live_auto_load()
+        assert first["loaded"]["visitors"] == 3 and first["archived"] == {"visitors": 1}
+        again = await server.go_live_auto_load()
+        assert "already" in again["skipped"]
+        assert await server.db.visitors.count_documents({"tenant_id": server.DEFAULT_TENANT}) == 3
+        assert await server.db.visitors.count_documents({"tenant_id": "studio"}) == 1
+        resets = await server.db.data_resets.find({}, {"_id": 0}).to_list(10)
+        assert len(resets) == 1 and resets[0]["status"] == "loaded" and resets[0]["run_key"] == "golive-1"
+        # It can be undone like any other load.
+        admin = {**ADMIN, "tenant_id": server.DEFAULT_TENANT}
+        out = await server.go_live_restore(resets[0]["id"], {"confirm": "RESTORE"}, user=admin)
+        assert out["restored"] == {"visitors": 1}
+    run(go())
+
+
+def test_auto_load_does_nothing_without_the_setting(monkeypatch):
+    monkeypatch.delenv("GO_LIVE_SHAREPOINT_RUN", raising=False)
+    assert run(server.go_live_auto_load()) is None
+
+
+def test_auto_load_from_packed_data(monkeypatch):
+    files = [(f.filename, f.file.getvalue()) for f in _files()]
+    packed = gl.pack_sheets(gl.load_workbooks(files))
+    monkeypatch.setenv("GO_LIVE_SHAREPOINT_RUN", "packed-1")
+    monkeypatch.setenv("GO_LIVE_DATA", packed)
+    monkeypatch.setattr(server.storage, "sharepoint_list_folder",
+                        lambda sub: (_ for _ in ()).throw(AssertionError("SharePoint not used")))
+
+    async def go():
+        out = await server.go_live_auto_load()
+        assert out["loaded"]["quotes"] == 3 and out["loaded"]["inventory"] == 3
+        v = await server.db.visitors.find_one({"name": "Kiran"}, {"_id": 0})
+        assert v["date"] == "2026-01-04" and v["tenant_id"] == server.DEFAULT_TENANT   # real dates survive packing
+        assert (await server.db.data_resets.find_one({}, {"_id": 0}))["source"] == "packed-auto"
+        assert "already" in (await server.go_live_auto_load())["skipped"]
+    run(go())
+
+
+def test_bad_packed_data_is_logged_not_raised(monkeypatch):
+    monkeypatch.setenv("GO_LIVE_SHAREPOINT_RUN", "bad-1")
+    monkeypatch.setenv("GO_LIVE_DATA", "not-base64!!")
+    assert run(server.go_live_auto_load()) is None
+    assert run(server.db.data_resets.count_documents({})) == 0

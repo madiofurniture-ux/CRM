@@ -8644,9 +8644,14 @@ async def _go_live_files(files: List[UploadFile]) -> list:
     return out
 
 
-async def _go_live_build(files: List[UploadFile], user: dict) -> dict:
+async def _go_live_build(named_files: list, user: dict) -> dict:
+    """named_files: [(filename, bytes)], or [(label, {sheet: rows})] for
+    already-read sheets (the packed GO_LIVE_DATA)."""
     try:
-        sheets = await asyncio.to_thread(gl.load_workbooks, await _go_live_files(files))
+        if named_files and isinstance(named_files[0][1], dict):
+            sheets = {k: v for _, d in named_files for k, v in d.items()}
+        else:
+            sheets = await asyncio.to_thread(gl.load_workbooks, named_files)
         result = await asyncio.to_thread(gl.build, sheets)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -8673,6 +8678,7 @@ async def _go_live_build(files: List[UploadFile], user: dict) -> dict:
             warnings.append(f"{n} {tenancy.ENTITY_LABELS.get(entity, coll).lower()} at stage '{label}', "
                             f"which your {entity} workflow doesn't have")
     result["warnings"] = warnings
+    result["files"] = [name for name, _ in named_files]
     return result
 
 
@@ -8690,28 +8696,31 @@ def _go_live_view(result: dict) -> dict:
     return {k: v for k, v in result.items() if k != "records"}
 
 
-@api.post("/admin/go-live/preview")
-async def go_live_preview(files: List[UploadFile] = File(...), include_hr: bool = Form(False),
-                          user: dict = Depends(require_admin)):
-    """What a load would do: records per type, rows skipped and why, and
-    what currently exists that would be archived and cleared. Writes nothing."""
-    result = await _go_live_build(files, user)
+async def _go_live_preview(named_files: list, include_hr: bool, user: dict) -> dict:
+    result = await _go_live_build(named_files, user)
     return {**_go_live_view(result), "will_clear": await _go_live_current_counts(user, include_hr),
             "confirm_phrase": gl.CONFIRM_PHRASE,
             "samples": {k: v[:3] for k, v in result["records"].items()}}
 
 
-@api.post("/admin/go-live/load")
-async def go_live_load(files: List[UploadFile] = File(...), confirm: str = Form(""),
-                       include_hr: bool = Form(False), apply_office: bool = Form(True),
-                       user: dict = Depends(require_admin)):
-    if str(confirm or "").strip().upper() != gl.CONFIRM_PHRASE:
-        raise HTTPException(status_code=400, detail=f"Type {gl.CONFIRM_PHRASE} to confirm")
+async def _go_live_apply(named_files: list, user: dict, *, include_hr: bool, apply_office: bool,
+                         run_key: str = "", source: str = "upload") -> dict:
+    """Archive the company's business data, clear it and load the workbooks.
+    `run_key` (the SharePoint auto-load's) makes a load happen at most once."""
     tid = tenancy.tenant_of(user)
     if not tid:
         raise HTTPException(status_code=403, detail="No company on this account")
-    result = await _go_live_build(files, user)
+    result = await _go_live_build(named_files, user)
     reset_id = new_id()
+    if run_key:
+        # Claim the run before touching anything: a second instance or a
+        # restart finds the claim and stops.
+        claim = await db.data_resets.update_one(
+            {"tenant_id": tid, "run_key": run_key},
+            {"$setOnInsert": {"id": reset_id, "tenant_id": tid, "run_key": run_key, "at": now_iso(),
+                              "status": "claimed"}}, upsert=True)
+        if not claim.upserted_id:
+            return {"skipped": f"run '{run_key}' already happened"}
     colls = list(gl.WIPE_COLLECTIONS) + (list(gl.HR_COLLECTIONS) if include_hr else [])
 
     # 1. Archive everything that is about to go, one archive row per record.
@@ -8730,9 +8739,13 @@ async def go_live_load(files: List[UploadFile] = File(...), confirm: str = Form(
             archived[c] = archived.get(c, 0) + len(batch)
     reset = tenancy.stamp({
         "id": reset_id, "at": now_iso(), "by_user": user.get("name", ""), "by_id": user.get("id", ""),
-        "status": "archived", "archived": archived, "loaded": {}, "files": [f.filename for f in files],
-        "include_hr": bool(include_hr)}, "data_resets", user)
-    await db.data_resets.insert_one(dict(reset))
+        "status": "archived", "archived": archived, "loaded": {}, "files": result["files"],
+        "include_hr": bool(include_hr), "source": source, **({"run_key": run_key} if run_key else {})},
+        "data_resets", user)
+    if run_key:
+        await db.data_resets.update_one({"tenant_id": tid, "run_key": run_key}, {"$set": reset})
+    else:
+        await db.data_resets.insert_one(dict(reset))
 
     # 2. Clear, then 3. load.
     for c in colls:
@@ -8775,9 +8788,116 @@ async def go_live_load(files: List[UploadFile] = File(...), confirm: str = Form(
     await db.data_resets.update_one(tenancy.scope({"id": reset_id}, "data_resets", user),
                                     {"$set": {"status": "loaded", "loaded": loaded, "office": office_applied}})
     await _audit("go_live_load", user, f"Reset {reset_id}: archived {sum(archived.values())} records, "
-                                      f"loaded {sum(loaded.values())} from {', '.join(f.filename for f in files)}")
+                                      f"loaded {sum(loaded.values())} from {', '.join(result['files'])}")
     return {"reset_id": reset_id, "archived": archived, "loaded": loaded, "office": office_applied,
             "report": result["report"], "warnings": result["warnings"]}
+
+
+def _go_live_confirmed(confirm: str):
+    if str(confirm or "").strip().upper() != gl.CONFIRM_PHRASE:
+        raise HTTPException(status_code=400, detail=f"Type {gl.CONFIRM_PHRASE} to confirm")
+
+
+@api.post("/admin/go-live/preview")
+async def go_live_preview(files: List[UploadFile] = File(...), include_hr: bool = Form(False),
+                          user: dict = Depends(require_admin)):
+    """What a load would do: records per type, rows skipped and why, and
+    what currently exists that would be archived and cleared. Writes nothing."""
+    return await _go_live_preview(await _go_live_files(files), include_hr, user)
+
+
+@api.post("/admin/go-live/load")
+async def go_live_load(files: List[UploadFile] = File(...), confirm: str = Form(""),
+                       include_hr: bool = Form(False), apply_office: bool = Form(True),
+                       user: dict = Depends(require_admin)):
+    _go_live_confirmed(confirm)
+    return await _go_live_apply(await _go_live_files(files), user,
+                                include_hr=include_hr, apply_office=apply_office)
+
+
+# ── The same load from a SharePoint folder (<SHAREPOINT_FOLDER>/go-live) ──
+# For when picking files in the browser isn't practical (phones), and for the
+# one-time automatic load at startup (GO_LIVE_SHAREPOINT_RUN).
+GO_LIVE_SP_SUBFOLDER = os.environ.get("GO_LIVE_SHAREPOINT_SUBFOLDER", "go-live").strip("/") or "go-live"
+
+
+async def _go_live_sharepoint_files() -> list:
+    try:
+        items = await asyncio.to_thread(storage.sharepoint_list_folder, GO_LIVE_SP_SUBFOLDER)
+        items = [i for i in items if i["name"].lower().endswith(".xlsx")]
+        if not items:
+            raise HTTPException(status_code=400, detail=f"No .xlsx files in SharePoint folder "
+                                                        f"'{storage.sharepoint_config()['folder']}/{GO_LIVE_SP_SUBFOLDER}'")
+        out = []
+        for i in items:
+            if i["size"] > gl.MAX_FILE_BYTES:
+                raise HTTPException(status_code=400, detail=f"{i['name']} is larger than "
+                                                            f"{gl.MAX_FILE_BYTES // (1024 * 1024)} MB")
+            out.append((i["name"], await asyncio.to_thread(storage.sharepoint_read, i["ref"])))
+        return out
+    except storage.SharePointError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@api.get("/admin/go-live/sharepoint")
+async def go_live_sharepoint_list(user: dict = Depends(require_admin)):
+    try:
+        items = await asyncio.to_thread(storage.sharepoint_list_folder, GO_LIVE_SP_SUBFOLDER)
+    except storage.SharePointError as e:
+        return {"folder": GO_LIVE_SP_SUBFOLDER, "files": [], "error": str(e)}
+    return {"folder": f"{storage.sharepoint_config()['folder']}/{GO_LIVE_SP_SUBFOLDER}",
+            "files": [{"name": i["name"], "size": i["size"]} for i in items if i["name"].lower().endswith(".xlsx")]}
+
+
+@api.post("/admin/go-live/sharepoint/preview")
+async def go_live_sharepoint_preview(payload: dict = None, user: dict = Depends(require_admin)):
+    return await _go_live_preview(await _go_live_sharepoint_files(),
+                                  bool((payload or {}).get("include_hr")), user)
+
+
+@api.post("/admin/go-live/sharepoint/load")
+async def go_live_sharepoint_load(payload: dict, user: dict = Depends(require_admin)):
+    payload = payload or {}
+    _go_live_confirmed(payload.get("confirm"))
+    return await _go_live_apply(await _go_live_sharepoint_files(), user,
+                                include_hr=bool(payload.get("include_hr")),
+                                apply_office=payload.get("apply_office", True) is not False,
+                                source="sharepoint")
+
+
+async def go_live_auto_load():
+    """One-time load at startup when GO_LIVE_SHAREPOINT_RUN is set (its value
+    names the run; each value runs once per company, recorded in data_resets).
+    Loads the default company from GO_LIVE_DATA (workbook values packed by
+    go_live_import.pack_sheets) when that is set, else from the SharePoint
+    go-live folder."""
+    run_key = os.environ.get("GO_LIVE_SHAREPOINT_RUN", "").strip()
+    if not run_key:
+        return None
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    if await db.data_resets.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    system_user = {"id": "system-go-live", "name": "Go-live import (SharePoint)", "role": "admin", "tenant_id": tid}
+    try:
+        packed = os.environ.get("GO_LIVE_DATA", "").strip()
+        if packed:
+            try:
+                named = [("GO_LIVE_DATA", await asyncio.to_thread(gl.unpack_sheets, packed))]
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            source = "packed-auto"
+        else:
+            named, source = await _go_live_sharepoint_files(), "sharepoint-auto"
+        out = await _go_live_apply(named, system_user, include_hr=False,
+                                   apply_office=True, run_key=run_key, source=source)
+        logger.info("Go-live auto-load %s for %s: %s", run_key, tid,
+                    out.get("skipped") or f"loaded {out['loaded']}, archived {sum(out['archived'].values())}")
+        return out
+    except HTTPException as e:
+        logger.warning("Go-live auto-load %s failed: %s", run_key, e.detail)
+    except Exception as e:  # never take the server down over this
+        logger.exception("Go-live auto-load %s failed: %s", run_key, e)
+    return None
 
 
 @api.get("/admin/go-live/resets")
@@ -8976,6 +9096,11 @@ async def startup():
         await db.cashbook_transactions.create_index([("tenant_id", 1), ("needs_review", 1), ("tally_synced", 1)])
     except Exception as e:
         logger.warning(f"Dashboard/session indexes not created: {e}")
+
+    # One-time go-live load from SharePoint, in the background so a slow
+    # download never delays the server answering health checks.
+    if os.environ.get("GO_LIVE_SHAREPOINT_RUN", "").strip():
+        asyncio.create_task(go_live_auto_load())
 
 
 @app.on_event("shutdown")

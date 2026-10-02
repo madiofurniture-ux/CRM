@@ -69,6 +69,21 @@ Imported records have no `stage_entered_at`, so "stuck in stage" flows only
 start counting once a record moves; loading history never floods anyone with
 tasks.
 
+## Other ways in
+
+- **From SharePoint:** on the Go-live Data screen pick "From SharePoint folder".
+  It reads every `.xlsx` in `<SHAREPOINT_FOLDER>/go-live` (MADIO: `CRM Images
+  and content/go-live`) and does the same preview and load. Useful on a phone,
+  where picking files can be awkward.
+- **One-time automatic load at startup** (for operators): set
+  `GO_LIVE_SHAREPOINT_RUN` on the backend to a run name (e.g. `golive-2026-10-02`).
+  On the next start the server loads the default company once from
+  `GO_LIVE_DATA` if set (workbook values packed with
+  `go_live_import.pack_sheets`), else from the SharePoint go-live folder.
+  A run name is claimed in `data_resets` before anything is touched, so it
+  never runs twice; it is archived and undoable like any other load. Clear
+  both settings afterwards.
+
 ## Starter flows
 
 "Add starter flows" installs MADIO's follow-ups (skipping any already there by
