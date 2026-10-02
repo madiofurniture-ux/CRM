@@ -88,6 +88,21 @@ def test_pipeline_by_unit_groups_open_quotes_by_division_descending():
     ]
 
 
+def test_revenue_by_unit_sums_booked_sales_per_division_without_cancelled():
+    sales = [
+        {"value": 300, "division": "MAP", "stage": "Completed"},
+        {"value": 1000, "division": "Furniture", "stage": "Confirmed"},
+        {"value": 500, "division": "Furniture", "stage": "Cancelled"},
+        {"value": 50, "stage": "Delivered"},
+    ]
+    out = lc.command_centre_overview(quotes=[], sales=sales, projects=[], tasks=[], today=TODAY)
+    assert out["revenue_by_unit"] == [
+        {"division": "Furniture", "value": 1000},
+        {"division": "MAP", "value": 300},
+        {"division": "Other", "value": 50},
+    ]
+
+
 def test_pending_approvals_only_lists_quotes_flagged_pending_newest_first():
     quotes = [
         {"quote_no": "OLD", "customer": "A", "subtotal": 1000, "discount": 140,

@@ -1422,6 +1422,15 @@ def command_centre_overview(*, quotes: Iterable[dict], sales: Iterable[dict],
         div = str(q.get("division") or "Other")
         division_split[div] = division_split.get(div, 0) + money(q.get("value"))
 
+    # Booked sales per division, cancelled orders left out — what each unit
+    # actually sold, next to what it still has in the pipeline.
+    revenue_split: dict = {}
+    for s in sales:
+        if str(s.get("stage") or "").lower() == "cancelled":
+            continue
+        div = str(s.get("division") or "Other")
+        revenue_split[div] = revenue_split.get(div, 0) + money(s.get("value"))
+
     pending = sorted(
         (q for q in quotes if q.get("approval") == "pending"),
         key=lambda q: str(parse_date(q.get("date")) or ""), reverse=True,
@@ -1438,6 +1447,10 @@ def command_centre_overview(*, quotes: Iterable[dict], sales: Iterable[dict],
         "pipeline_by_unit": [
             {"division": k, "value": v}
             for k, v in sorted(division_split.items(), key=lambda kv: -kv[1])
+        ],
+        "revenue_by_unit": [
+            {"division": k, "value": v}
+            for k, v in sorted(revenue_split.items(), key=lambda kv: -kv[1])
         ],
         "today": {
             "follow_ups_due": len(follow_ups),

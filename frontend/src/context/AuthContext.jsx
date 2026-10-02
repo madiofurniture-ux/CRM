@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import api from "@/lib/api";
+import { applyTenantTheme } from "@/lib/theme";
 
 const AuthContext = createContext(null);
 
@@ -31,6 +32,9 @@ export function AuthProvider({ children }) {
   const [roles, setRoles] = useState([]);
 
   const loadTenant = () => api.get("/tenants/me").then((r) => setTenant(r.data)).catch(() => setTenant(null));
+
+  // Business Settings' brand colours drive the theme, not just the record.
+  useEffect(() => { applyTenantTheme(tenant); }, [tenant]);
   const loadRoles = () => api.get("/roles").then((r) => setRoles(r.data)).catch(() => setRoles([]));
 
   useEffect(() => {

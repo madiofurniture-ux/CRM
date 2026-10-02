@@ -37,6 +37,28 @@ function TodayRow({ to, label, count, tone = "default" }) {
   );
 }
 
+/** Vertical bars, one per division, scaled to the largest. */
+function DivisionBars({ bars, loading, empty, label }) {
+  if (!loading && bars.length === 0) return <EmptyState title={empty} />;
+  const max = Math.max(...bars.map((b) => b.value), 1);
+  return (
+    <div className="flex items-end gap-6 h-48" role="img" aria-label={`${label} bar chart`}>
+      {(loading ? Array.from({ length: 3 }) : bars).map((b, i) => (
+        <div key={b?.division || i} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
+          {b && <div className="text-xs font-mono font-semibold text-[var(--color-text)]">{inr(b.value)}</div>}
+          <div
+            className={`w-full rounded-t-[var(--radius-sm)] ${b ? "" : "bg-[var(--color-surface-muted)] animate-pulse"}`}
+            style={b ? { height: `${Math.max((b.value / max) * 100, 2)}%`, background: "var(--color-primary)" } : { height: "30%" }}
+          />
+          <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-muted)] text-center">
+            {b ? b.division : ""}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Home screen: live KPIs, open pipeline by division, and what needs you
  * today. Everything here comes from GET /overview/command-centre (plus the
  * money-request summary when the Expenses module is on). */
@@ -93,7 +115,7 @@ export default function CommandCentre() {
   ];
 
   const pipelineBars = (overview?.pipeline_by_unit || []).map((b) => ({ ...b, value: num(b.value) }));
-  const pipelineMax = Math.max(...pipelineBars.map((b) => b.value), 1);
+  const revenueBars = (overview?.revenue_by_unit || []).map((b) => ({ ...b, value: num(b.value) }));
   const pendingApprovals = overview?.pending_approvals || [];
   const today = overview?.today || {};
   const moneyForYou = num(moneySummary?.assigned_to_me);
@@ -146,26 +168,14 @@ export default function CommandCentre() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              <SectionCard className="lg:col-span-8" title="Pipeline by division" subtitle="Open quotation value">
-                {!loading && pipelineBars.length === 0 ? (
-                  <EmptyState title="No open pipeline right now." />
-                ) : (
-                  <div className="flex items-end gap-6 h-48" role="img" aria-label="Pipeline by division bar chart">
-                    {(loading && !overview ? Array.from({ length: 3 }) : pipelineBars).map((b, i) => (
-                      <div key={b?.division || i} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
-                        {b && <div className="text-xs font-mono font-semibold text-[var(--color-text)]">{inr(b.value)}</div>}
-                        <div
-                          className={`w-full rounded-t-[var(--radius-sm)] ${b ? "" : "bg-[var(--color-surface-muted)] animate-pulse"}`}
-                          style={b ? { height: `${Math.max((b.value / pipelineMax) * 100, 2)}%`, background: "var(--color-primary)" } : { height: "30%" }}
-                        />
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--color-text-muted)] text-center">
-                          {b ? b.division : ""}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </SectionCard>
+              <div className="lg:col-span-8 space-y-6">
+                <SectionCard title="Pipeline by division" subtitle="Open quotation value">
+                  <DivisionBars bars={pipelineBars} loading={loading && !overview} empty="No open pipeline right now." label="Pipeline by division" />
+                </SectionCard>
+                <SectionCard title="Revenue by division" subtitle="Booked sales, cancelled orders excluded">
+                  <DivisionBars bars={revenueBars} loading={loading && !overview} empty="No sales booked yet." label="Revenue by division" />
+                </SectionCard>
+              </div>
 
               <div className="lg:col-span-4 space-y-6">
                 <SectionCard title="Today">

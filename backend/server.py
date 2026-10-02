@@ -5633,7 +5633,7 @@ async def command_centre_overview_route(user: dict = Depends(get_current_user)):
                         "division": 1, "subtotal": 1, "discount": 1, "approval": 1, "date": 1}
                        ).to_list(5000),
         db.sales.find(tenancy.scope({}, "sales", user),
-                      {"_id": 0, "value": 1, "balance": 1, "date": 1}).to_list(5000),
+                      {"_id": 0, "value": 1, "balance": 1, "date": 1, "division": 1, "stage": 1}).to_list(5000),
         db.projects.find(tenancy.scope({}, "projects", user),
                          {"_id": 0, "id": 1, "stage": 1, "target_date": 1}).to_list(5000),
         db.tasks.find(tenancy.scope({}, "tasks", user),

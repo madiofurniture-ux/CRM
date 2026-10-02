@@ -14,15 +14,24 @@ const BUCKETS = [
   { key: "upcoming", label: "Upcoming" },
 ];
 
+const EMPTY_BUCKETS = { overdue: [], today: [], tomorrow: [], this_week: [], upcoming: [] };
+
 export default function QuoteFollowups() {
   const nav = useNavigate();
   const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState(false);
   const [tab, setTab] = useState("overdue");
   const [fAssigned, setFAssigned] = useState("All");
   const [fMinConfidence, setFMinConfidence] = useState("All");
 
   useEffect(() => {
-    api.get("/quotes/followups").then((r) => setData(r.data)).catch(() => toast.error("Couldn't load follow-ups"));
+    api.get("/quotes/followups").then((r) => setData(r.data)).catch(() => {
+      // Leaving `data` null here would pin the "Loading…" subtitle forever
+      // on a failed fetch — fall back to empty buckets so the page settles.
+      setLoadError(true);
+      setData(EMPTY_BUCKETS);
+      toast.error("Couldn't load follow-ups");
+    });
   }, []);
 
   const rows = data?.[tab] || [];
@@ -101,7 +110,11 @@ export default function QuoteFollowups() {
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && <tr><td colSpan="8" className="text-center py-12 text-[var(--ink-3)]">No quotes in this bucket</td></tr>}
+                {filtered.length === 0 && (
+                  <tr><td colSpan="8" className="text-center py-12 text-[var(--ink-3)]">
+                    {loadError ? "Couldn't load follow-ups — check your connection and refresh." : "No quotes in this bucket"}
+                  </td></tr>
+                )}
               </tbody>
             </table>
           </div>
