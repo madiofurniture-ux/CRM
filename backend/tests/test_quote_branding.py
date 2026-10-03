@@ -152,3 +152,36 @@ def test_groups_and_builder_quotes_print_in_the_branded_format(monkeypatch):
         assert titles == ["Payment", "Terms & Scope"] and seen["extras"][1]["items"] == [
             "Quote valid for 15 days.", "Site to be ready."]
     run(go())
+
+
+def test_survey_to_quote_converts_inches_to_mm_and_groups_by_room():
+    async def go():
+        db = server.db
+        await db.dw_surveys.insert_one({"id": "sv1", "tenant_id": ADMIN["tenant_id"], "survey_id": "DWS-1",
+                                        "customer": "Naveen", "phone": "9000000001"})
+        await db.dw_openings.insert_many([
+            {"id": "o1", "tenant_id": ADMIN["tenant_id"], "survey_id": "sv1", "room": "Living", "type": "Window",
+             "w": 48, "h": 60, "qty": 2, "frame": "uPVC", "glass": "Double", "mesh": True},
+            {"id": "o2", "tenant_id": ADMIN["tenant_id"], "survey_id": "sv1", "room": "Bedroom", "type": "Door",
+             "w": 36, "h": 84, "qty": 1}])
+        q = await server.survey_to_quote("sv1", user=ADMIN)
+        assert q["division"] == "D&W" and q["terms"] and q["tax_pct"] == 18 and q["valid_until"]
+        assert not q.get("remarks") or "survey" not in q["remarks"].lower()
+        lines = {l["group"]: l async for l in db.quote_lines.find({"quote_id": q["id"]}, {"_id": 0})}
+        living = lines["Living"]
+        assert (living["dim_unit"], living["w"], living["h"]) == ("mm", 1219, 1524)
+        assert living["sft"] == round(round(1219 * 1524 / 90000, 2) * 2, 2)            # ≈ 41 sft, not 5,760
+        assert living["specs"]["glass"] == "Double" and living["specs"]["location"] == "Living"
+        assert "With mesh" in living["description"]
+    run(go())
+
+
+def test_lead_requirement_goes_to_the_timeline_not_the_terms():
+    async def go():
+        await server.db.leads.insert_one({"id": "l1", "tenant_id": ADMIN["tenant_id"], "name": "Ravi",
+                                          "phone": "9000000002", "division": "Furniture",
+                                          "requirement": "3BHK wardrobes"})
+        q = await server.lead_to_quote("l1", user=ADMIN)
+        assert all("wardrobe" not in t.lower() for t in q.get("terms") or [])
+        assert q["terms"] and q["log"][0]["text"] == "Requirement: 3BHK wardrobes"
+    run(go())

@@ -35,6 +35,8 @@ from typing import Any, Iterable, Optional
 import lifecycle as lc
 from models import new_id, now_iso
 
+# Log entries carried over from the spreadsheets (a row's remark / status).
+IMPORTED_NOTE = "imported-note"
 MAX_FILE_BYTES = 40 * 1024 * 1024   # the Receipts & Payments book is ~30 MB (pictures)
 DIVISIONS = ("Furniture", "MAP", "D&W")
 
@@ -768,15 +770,18 @@ def _quotes(sheets, rep, out) -> dict:
             req = text(_cell(r, c["req"]), 200)
             remark = text(_cell(r, c["rem"]), 400)
             status_txt = "" if is_number(status_cell) else text(status_cell, 200)
-            terms = [t for t in (remark, status_txt) if t]
+            # The sheet's remark and status are follow-up notes, not terms:
+            # terms print on the customer's quotation.
+            notes = [{"at": d + "T10:00:00+05:30", "by": text(_cell(r, c["att"]), 80), "kind": IMPORTED_NOTE,
+                      "text": t} for t in (remark, f"Status: {status_txt}" if status_txt else "") if t]
             q = _stamp({
                 "quote_no": qno, "date": d, "customer": cust, "reference": text(_cell(r, c["ref"]), 120),
                 "phone": phone(_cell(r, c["phone"])), "division": division_of(req),
                 "by_user": text(_cell(r, c["att"]), 80), "mode": text(_cell(r, c["through"]), 40) or "Walk-in",
                 "value": value, "grand_total": value, "subtotal": value, "other": cash, "bank": bank,
                 "stage": quote_stage(cash + bank, remark, status_txt),
-                "remarks": "\n".join(terms), "terms": terms, "line_items": [], "version": 1,
-                "approval": "", "log": [], "lead_id": "", "location": loc, "requirement": req,
+                "remarks": "", "terms": [], "line_items": [], "version": 1,
+                "approval": "", "log": notes, "lead_id": "", "location": loc, "requirement": req,
                 "valid_until": "", "tax_pct": 18, "tax_total": 0, "discount": 0,
             }, d)
             by_no[qno] = q

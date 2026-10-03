@@ -449,7 +449,8 @@ def tracker_category(q: dict, won_quote_ids: set) -> str:
     if status in ("Lost", "Expired"):
         return "Lost"
     stage = str(q.get("stage") or "").lower()
-    if status == "Negotiation" or any(w in stage for w in _ACTIVE_WORDS) or q.get("log"):
+    followed_up = any((e or {}).get("kind") != "imported-note" for e in q.get("log") or [])
+    if status == "Negotiation" or any(w in stage for w in _ACTIVE_WORDS) or followed_up:
         return "Active"
     return "Pending"
 

@@ -559,3 +559,24 @@ def test_open_orders_get_delivery_projects_once():
         assert "skipped" in await server.go_live_auto_projects()
         assert (await server.go_live_projects(user=ADMIN)) == {"created": 0}
     run(go())
+
+
+def test_imported_quote_remarks_are_notes_not_terms():
+    res = gl.build(gl.load_workbooks([("AF.xlsx", _book(ENQUIRY))]))
+    q = next(x for x in res["records"]["quotes"] if x["log"])
+    assert q["terms"] == [] and q["remarks"] == ""
+    assert all(e["kind"] == gl.IMPORTED_NOTE for e in q["log"])
+
+    async def go():
+        db = server.db
+        await db.quotes.insert_many([
+            {"id": "a", "tenant_id": "madio", "source": "go-live import", "division": "MAP", "date": "2026-02-01",
+             "terms": ["Confirm expected Feb", "Out of station"], "remarks": "Confirm expected Feb\nOut of station"},
+            {"id": "b", "tenant_id": "madio", "source": "go-live import", "division": "MAP",
+             "terms": [server.quotation_templates.division_preset("madio", "MAP")["terms"][0]]}])
+        assert await server.go_live_auto_quote_notes() == {"moved": 1}
+        a = await db.quotes.find_one({"id": "a"})
+        assert a["terms"] == [] and [e["text"] for e in a["log"]] == ["Confirm expected Feb", "Out of station"]
+        assert (await db.quotes.find_one({"id": "b"}))["terms"]                      # real terms kept
+        assert "skipped" in await server.go_live_auto_quote_notes()
+    run(go())

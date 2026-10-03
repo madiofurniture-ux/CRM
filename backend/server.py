@@ -8402,9 +8402,16 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
         "customer": lead.get("name", ""), "phone": lead.get("phone", ""),
         "reference": lead.get("source", ""), "division": (lead.get("division") or "Furniture"),
         "by_user": user.get("name", ""), "stage": "Quoted", "status": "Sent",
-        "value": 0, "remarks": lead.get("requirement", ""), "version": 1,
-        "lead_id": lead_id,
+        "value": 0, "version": 1, "lead_id": lead_id,
     }
+    # The lead's requirement goes on the quote's timeline, not into remarks:
+    # remarks are the quotation's terms and print on the customer's PDF.
+    if str(lead.get("requirement") or "").strip():
+        quote["log"] = [{"at": now_iso(), "by": user.get("name", ""), "by_id": user.get("id", ""),
+                         "text": f"Requirement: {str(lead['requirement']).strip()[:1000]}", "kind": "note"}]
+    # Same defaults as a quote created on its own screen: the division's
+    # terms and GST rate, and the validity date.
+    await normalize_quote_template(quote, None, user)
     stamp_fy(quote, "quotes")
     tenancy.stamp(quote, "quotes", user)
     await db.quotes.insert_one(dict(quote))
@@ -8491,26 +8498,37 @@ async def survey_to_quote(survey_id: str, user: dict = Depends(get_current_user)
         "customer": survey.get("customer", ""), "phone": survey.get("phone", ""),
         "division": "D&W", "by_user": user.get("name", ""),
         "stage": "Quoted", "status": "Sent", "value": 0, "version": 1,
-        "remarks": f"From survey {survey.get('survey_id')} · "
-                   f"{len(openings)} openings · {total_area} sqft",
+        "log": [{"at": now_iso(), "by": user.get("name", ""), "by_id": user.get("id", ""), "kind": "note",
+                 "text": f"From survey {survey.get('survey_id')} · {len(openings)} openings · {total_area} sqft"}],
     }
+    await normalize_quote_template(quote, None, user)
     stamp_fy(quote, "quotes")
     tenancy.stamp(quote, "quotes", user)
     await db.quotes.insert_one(dict(quote))
-    # One quote_line per opening so the quotation actually itemizes what was
-    # surveyed — previously only an aggregate summary landed in remarks and
-    # the openings themselves were never carried into the quotation.
+    # One quote_line per opening, in the D&W quotation's own terms: the survey
+    # measures in inches, the quotation in millimetres (sft = W×H/90,000), so
+    # W/H are converted rather than copied — copied inches were read as feet
+    # and priced a 48×60 window as 2,880 sft. Each room becomes a group.
+    preset = _quote_preset(quote, user)
     for o in openings:
-        calc = lc.calc_opening(dict(o))
-        desc = f"{o.get('type', 'Window')} — {o.get('room', '')}".strip(" —")
-        if o.get("handle_position"):
-            desc += f" · Handle Position: {o['handle_position']}"
-        line = {
+        desc = str(o.get("type") or "Window")
+        extras = [x for x in (f"Frame: {o['frame']}" if o.get("frame") else "",
+                              "With mesh" if o.get("mesh") else "",
+                              f"Hardware: {o['hardware_finish']}" if o.get("hardware_finish") else "",
+                              f"Handle: {o['handle_position']}" if o.get("handle_position") else "") if x]
+        if extras:
+            desc += " · " + " · ".join(extras)
+        specs = {**(preset.get("spec_defaults") or {})}
+        if o.get("glass"):
+            specs["glass"] = o["glass"]
+        if o.get("room"):
+            specs["location"] = o["room"]
+        line = lc.calc_line({
             "id": new_id(), "created_at": now_iso(), "quote_id": quote["id"], "version": 1,
-            "description": desc, "w": lc.money(o.get("w")), "h": lc.money(o.get("h")),
+            "description": desc, "dim_unit": "mm", "specs": specs, "group": str(o.get("room") or "").strip(),
+            "w": round(lc.money(o.get("w")) * 25.4), "h": round(lc.money(o.get("h")) * 25.4),
             "qty": lc.money(o.get("qty")) or 1, "rate": 0,
-            "sft": calc.get("area", 0), "amount": 0,
-        }
+        })
         tenancy.stamp(line, "quote_lines", user)
         await db.quote_lines.insert_one(line)
     await db.dw_surveys.update_one(
@@ -9219,6 +9237,49 @@ async def go_live_auto_projects():
     return None
 
 
+async def _imported_quote_notes_off_terms(user: dict) -> int:
+    """Quotes loaded before the fix carried their spreadsheet remark/status
+    as terms, which print on the customer's quotation. Move those onto the
+    quote's timeline as imported notes; terms the user has since given the
+    quote (anything from the division's standard list) are left alone."""
+    moved = 0
+    quotes = await db.quotes.find(
+        tenancy.scope({"source": "go-live import", "terms.0": {"$exists": True}}, "quotes", user),
+        {"_id": 0, "id": 1, "terms": 1, "log": 1, "date": 1, "by_user": 1, "division": 1}).to_list(20000)
+    for q in quotes:
+        standard = set(quotation_templates.division_preset(tenancy.tenant_of(user), q.get("division")).get("terms") or [])
+        if any(t in standard for t in q.get("terms") or []):
+            continue
+        at = f"{str(q.get('date') or '')[:10]}T10:00:00+05:30"
+        notes = [{"at": at, "by": q.get("by_user", ""), "kind": gl.IMPORTED_NOTE, "text": t}
+                 for t in q.get("terms") or [] if str(t).strip()]
+        await db.quotes.update_one(tenancy.scope({"id": q["id"]}, "quotes", user),
+                                   {"$set": {"terms": [], "remarks": "", "log": notes + list(q.get("log") or [])}})
+        moved += 1
+    return moved
+
+
+async def go_live_auto_quote_notes():
+    """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set)."""
+    run_key = "quote-notes-1"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
+    if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    await db.go_live_picture_runs.insert_one(
+        tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
+    try:
+        moved = await _imported_quote_notes_off_terms(system_user)
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
+                                                 {"$set": {"result": {"moved": moved}}})
+        logger.info("Go-live quote notes for %s: %s quotes moved off terms", tid, moved)
+        return {"moved": moved}
+    except Exception as e:  # never take the server down over this
+        logger.exception("Go-live quote notes failed: %s", e)
+        await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key})
+    return None
+
+
 async def go_live_auto_pictures():
     """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set): stock loaded
     before pictures were read gets them from the SharePoint books."""
@@ -9483,6 +9544,7 @@ async def startup():
             await go_live_auto_load()
             await go_live_auto_pictures()
             await go_live_auto_projects()
+            await go_live_auto_quote_notes()
         asyncio.create_task(_auto())
 
 
