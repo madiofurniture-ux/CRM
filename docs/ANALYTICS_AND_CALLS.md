@@ -65,3 +65,23 @@ ordinal ramp for the funnel, and a table view on every chart.
   older records also show correct hours.
 - **Removed:** the Requirements → Configurator screens. Old documents in the
   `requirements` and `product_configs` collections are left in Mongo, unused.
+
+## Sales Tracker (division tracker)
+
+MADIO's *Paints Sales Tracker* workbook, rebuilt from CRM records for any
+division (MAP first): Overview → **Sales Tracker** (`/sales-tracker`,
+`frontend/src/pages/SalesTracker.jsx`), `GET /api/analytics/tracker?division=&start=&end=`
+(defaults to the current financial year), aggregation in
+`analytics.division_tracker`. It rides the `analytics` grant and its
+visibility (admins: everything; others: their own / team's records).
+
+| Workbook sheet | CRM source |
+|---|---|
+| Dashboard KPIs | Total pipeline = open quotes (Pending + Active); confirmed revenue, advance, balance, collection rate from sales; total sft from the sold quotes' lines |
+| Pipeline | quotes dated in range. Category: Won (has a sale, or a won stage), Lost (Lost/Expired), Active (Negotiation, a follow-up/visit/sample/design stage, or any follow-up log), else Pending. Next step = latest follow-up note; priority = confidence |
+| MAP Sales register | sales dated in range (Cancelled excluded): value, sft, advance, balance, collected % |
+| Site Schedule | projects running in range: applicator = `assigned_engineer`, start/target (or completion) date, days, sft, stage; overdue flagged |
+| Weekly Log | quotes sent, quote follow-ups, orders confirmed and calls, with ISO week number; weekly roll-up |
+| Monthly Summary / Quarterly Report | quoted vs confirmed, conversion, advance, balance, collection rate, sft by month and by FY quarter (Apr–Jun = Q1); top open prospects |
+
+Every table downloads as CSV.

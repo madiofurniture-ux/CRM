@@ -434,3 +434,189 @@ def vendors_summary(orders: list[dict], projects: list[dict], start: date, end: 
     return {"granularity": granularity(start, end), "kpis": kpis, "series": {},
             "tables": {"orders_by_status": by_status, "top_vendors": vendors,
                        "projects_by_stage": by_stage, "overdue_projects": overdue_rows}}
+
+
+# ── division sales tracker (the Paints Sales Tracker, for any division) ────
+TRACKER_CATEGORIES = ("Pending", "Active", "Won", "Lost")
+_ACTIVE_WORDS = ("negot", "follow", "visit", "sample", "design", "site", "revis", "active", "discuss")
+
+
+def tracker_category(q: dict, won_quote_ids: set) -> str:
+    """Pending → Active → Won / Lost, as the tracker's Category column."""
+    status = lc.quote_status(q)
+    if q.get("id") in won_quote_ids or status == "Won":
+        return "Won"
+    if status in ("Lost", "Expired"):
+        return "Lost"
+    stage = str(q.get("stage") or "").lower()
+    if status == "Negotiation" or any(w in stage for w in _ACTIVE_WORDS) or q.get("log"):
+        return "Active"
+    return "Pending"
+
+
+def _quarter(d: date) -> str:
+    """Indian financial-year quarter: Apr–Jun is Q1."""
+    fy = d.year if d.month >= 4 else d.year - 1
+    return f"FY{str(fy + 1)[-2:]} Q{(d.month - 4) % 12 // 3 + 1}"
+
+
+def _last_note(q: dict) -> str:
+    log = q.get("log") or []
+    for e in reversed(log):
+        text = str((e or {}).get("text") or (e or {}).get("note") or (e or {}).get("message") or "").strip()
+        if text:
+            return text[:160]
+    return str(q.get("remarks") or "").strip()[:160]
+
+
+def division_tracker(quotes: list[dict], sales: list[dict], projects: list[dict], calls: list[dict],
+                     sft_by_quote: dict, start: date, end: date, *, division: str = "",
+                     today: Optional[date] = None) -> dict:
+    """Every sheet of the Paints Sales Tracker from CRM records.
+
+    quotes / sales / calls are counted when dated inside [start, end];
+    projects (the applicator / site schedule) when they overlap it or are
+    still running. sft_by_quote: {quote id: total sft of its lines}."""
+    today = today or date.today()
+    quotes = [q for q in quotes if _division_ok(q, division)]
+    sales = [s for s in sales if _division_ok(s, division)
+             and str(s.get("status") or s.get("stage") or "") != "Cancelled"]
+    projects = [p for p in projects if _division_ok(p, division)]
+    calls = [c for c in calls if _division_ok(c, division)]
+    won_ids = {s.get("quote_id") for s in sales if s.get("quote_id")}
+    quote_no = {q.get("id"): q.get("quote_no") for q in quotes if q.get("id")}
+
+    def q_value(q):
+        return lc.money(q.get("grand_total")) or lc.money(q.get("value"))
+
+    def sft_of(doc):
+        return round(lc.money(sft_by_quote.get(doc.get("quote_id") or doc.get("id"))), 2)
+
+    cur_q = within(quotes, "date", start, end)
+    cur_s = within(sales, "date", start, end)
+
+    # Pipeline (prospects)
+    pipeline, cats = [], {c: {"category": c, "count": 0, "value": 0.0, "sft": 0.0} for c in TRACKER_CATEGORIES}
+    for d, q in sorted(cur_q, key=lambda x: -q_value(x[1])):
+        cat = tracker_category(q, won_ids)
+        val, sft = q_value(q), sft_of(q)
+        c = cats[cat]
+        c["count"] += 1
+        c["value"] += val
+        c["sft"] += sft
+        pipeline.append({"id": q.get("id"), "quote_no": q.get("quote_no") or "", "client": _name(q.get("customer"), "—"),
+                         "reference": q.get("reference") or "", "next_step": _last_note(q),
+                         "next_follow_up": q.get("next_follow_up") or "", "value": round(val), "sft": sft,
+                         "stage": q.get("stage") or "", "category": cat, "month": d.strftime("%b %Y"),
+                         "priority": q.get("confidence_level") or "", "date": d.isoformat()})
+    total_q = sum(c["value"] for c in cats.values())
+    breakdown = [{**c, "value": round(c["value"]), "sft": round(c["sft"], 2),
+                  "share": pct(c["value"], total_q)} for c in cats.values()]
+    open_value = cats["Pending"]["value"] + cats["Active"]["value"]
+
+    # Sales register (confirmed orders)
+    register = []
+    for d, s in sorted(cur_s, key=lambda x: x[0], reverse=True):
+        value, paid = lc.money(s.get("value")), lc.money(s.get("paid"))
+        balance = lc.money(s.get("balance")) if s.get("balance") not in (None, "") else max(value - paid, 0)
+        register.append({"id": s.get("id"), "sale_no": s.get("sale_no") or "", "client": _name(s.get("customer"), "—"),
+                         "quote_no": s.get("quote_ref") or quote_no.get(s.get("quote_id")) or "",
+                         "date": d.isoformat(), "value": round(value),
+                         "sft": sft_of(s), "advance": round(paid), "balance": round(balance),
+                         "collected_pct": pct(paid, value), "status": s.get("stage") or s.get("status") or ""})
+    revenue = sum(r["value"] for r in register)
+    advance = sum(r["advance"] for r in register)
+    balance = sum(r["balance"] for r in register)
+    sft_total = round(sum(r["sft"] for r in register), 2)
+
+    # Applicator / site schedule
+    schedule = []
+    for p in projects:
+        s_d = lc.parse_date(p.get("start_date"))
+        e_d = lc.parse_date(p.get("completion_date")) or lc.parse_date(p.get("target_date"))
+        done = str(p.get("stage") or "") in ("Completed", "Closure")
+        if s_d and s_d > end:
+            continue
+        if e_d and e_d < start and done:
+            continue
+        if not s_d and done:
+            continue
+        days = (e_d - s_d).days + 1 if s_d and e_d and e_d >= s_d else None
+        schedule.append({"id": p.get("id"), "site": _name(p.get("project_name") or p.get("customer"), "—"),
+                         "applicator": p.get("assigned_engineer") or p.get("project_manager") or "",
+                         "start": s_d.isoformat() if s_d else "", "end": e_d.isoformat() if e_d else "",
+                         "days": days, "sft": sft_of(p), "status": p.get("stage") or "",
+                         "overdue": bool(e_d and e_d < today and not done)})
+    schedule.sort(key=lambda r: (r["start"] or "9999", r["site"]))
+
+    # Weekly activity log
+    log = []
+    for d, q in cur_q:
+        log.append({"date": d.isoformat(), "client": _name(q.get("customer"), "—"), "activity": "Quotation sent",
+                    "quote_value": round(q_value(q)), "order_value": 0, "advance": 0,
+                    "status": q.get("stage") or "", "notes": q.get("quote_no") or ""})
+        for e in q.get("log") or []:
+            ed = lc.parse_date((e or {}).get("at") or (e or {}).get("date"))
+            if ed and start <= ed <= end:
+                log.append({"date": ed.isoformat(), "client": _name(q.get("customer"), "—"), "activity": "Follow-up",
+                            "quote_value": round(q_value(q)), "order_value": 0, "advance": 0,
+                            "status": q.get("stage") or "", "notes": _last_note({"log": [e]})})
+    for d, s in cur_s:
+        log.append({"date": d.isoformat(), "client": _name(s.get("customer"), "—"), "activity": "Order confirmed",
+                    "quote_value": 0, "order_value": round(lc.money(s.get("value"))),
+                    "advance": round(lc.money(s.get("paid"))), "status": s.get("stage") or s.get("status") or "",
+                    "notes": s.get("sale_no") or ""})
+    for d, c in within(calls, "date", start, end):
+        log.append({"date": d.isoformat(), "client": _name(c.get("name") or c.get("company"), c.get("phone") or "—"),
+                    "activity": c.get("call_type") or "Call", "quote_value": 0, "order_value": 0, "advance": 0,
+                    "status": c.get("outcome") or "", "notes": str(c.get("notes") or "")[:160]})
+    log.sort(key=lambda r: r["date"], reverse=True)
+    for r in log:
+        r["week"] = date.fromisoformat(r["date"]).isocalendar()[1]
+    weeks = defaultdict(lambda: {"activities": 0, "quote_value": 0, "order_value": 0, "advance": 0})
+    for r in log:
+        y, w, _ = date.fromisoformat(r["date"]).isocalendar()
+        k = weeks[f"{y}-W{w:02d}"]
+        k["activities"] += 1
+        for f in ("quote_value", "order_value", "advance"):
+            k[f] += r[f]
+    weekly = [{"week": k, **v} for k, v in sorted(weeks.items(), reverse=True)]
+
+    # Monthly and quarterly summaries
+    def roll(keyf):
+        out = defaultdict(lambda: {"quotes": 0, "quote_value": 0, "orders": 0, "order_value": 0,
+                                   "advance": 0, "balance": 0, "sft": 0.0})
+        for d, q in cur_q:
+            o = out[keyf(d)]
+            o["quotes"] += 1
+            o["quote_value"] += round(q_value(q))
+        for r in register:
+            o = out[keyf(date.fromisoformat(r["date"]))]
+            o["orders"] += 1
+            o["order_value"] += r["value"]
+            o["advance"] += r["advance"]
+            o["balance"] += r["balance"]
+            o["sft"] = round(o["sft"] + r["sft"], 2)
+        rows = []
+        for k, v in sorted(out.items()):
+            rows.append({"period": k, **v, "conversion": pct(v["order_value"], v["quote_value"]),
+                         "collection_rate": pct(v["advance"], v["order_value"])})
+        return rows
+
+    monthly = roll(lambda d: d.strftime("%Y-%m"))
+    for m in monthly:
+        m["label"] = datetime.strptime(m["period"], "%Y-%m").strftime("%b %Y")
+    quarterly = roll(_quarter)
+    top = [r for r in pipeline if r["category"] in ("Pending", "Active")][:10]
+
+    kpis = [
+        kpi("pipeline", "Total pipeline", round(open_value), None, "money"),
+        kpi("revenue", "Confirmed revenue", round(revenue), None, "money"),
+        kpi("advance", "Advance collected", round(advance), None, "money"),
+        kpi("balance", "Balance outstanding", round(balance), None, "money"),
+        kpi("collection", "Collection rate", pct(advance, revenue), None, "percent"),
+        kpi("sft", "Total sft", sft_total, None, "number"),
+    ]
+    return {"kpis": kpis, "tables": {"breakdown": breakdown, "pipeline": pipeline, "register": register,
+                                     "schedule": schedule, "log": log[:500], "weekly": weekly,
+                                     "monthly": monthly, "quarterly": quarterly, "top_prospects": top}}

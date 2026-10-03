@@ -18,6 +18,7 @@ export const NAV = [
   // Overview (pinned — always shown above the app switcher)
   { app: "overview", id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, pinned: true },
   { app: "overview", id: "analytics", to: "/analytics", label: "Analytics", icon: BarChart3, pinned: true },
+  { app: "overview", id: "sales-tracker", perm: "analytics", to: "/sales-tracker", label: "Sales Tracker", icon: TrendingUp, pinned: true },
   { app: "overview", id: "alerts", to: "/alerts", label: "Follow-Up Alerts", icon: Bell, pinned: true },
 
   // Sell

@@ -23,6 +23,7 @@ const Sales = lazy(() => import("@/pages/Sales"));
 const Visitors = lazy(() => import("@/pages/Visitors"));
 const Calls = lazy(() => import("@/pages/Calls"));
 const Analytics = lazy(() => import("@/pages/Analytics"));
+const SalesTracker = lazy(() => import("@/pages/SalesTracker"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const Architects = lazy(() => import("@/pages/Architects"));
 const Inventory = lazy(() => import("@/pages/Inventory"));
@@ -132,6 +133,7 @@ function App() {
           <Route path="/visitors" element={<ProtectedRoute page="visitors"><Layout><Visitors /></Layout></ProtectedRoute>} />
           <Route path="/calls" element={<ProtectedRoute page="calls"><Layout><Calls /></Layout></ProtectedRoute>} />
           <Route path="/analytics" element={<ProtectedRoute page="analytics"><Layout><Analytics /></Layout></ProtectedRoute>} />
+          <Route path="/sales-tracker" element={<ProtectedRoute page="analytics"><Layout><SalesTracker /></Layout></ProtectedRoute>} />
           <Route path="/leads" element={<ProtectedRoute page="leads"><Layout><Leads /></Layout></ProtectedRoute>} />
           <Route path="/architects" element={<ProtectedRoute page="architects"><Layout><Architects /></Layout></ProtectedRoute>} />
           <Route path="/inventory" element={<ProtectedRoute page="inventory"><Layout><Inventory /></Layout></ProtectedRoute>} />

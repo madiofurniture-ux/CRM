@@ -222,3 +222,56 @@ def test_attendance_tab_never_returns_location_or_selfie(db):
         assert "SELFIE" not in blob and "78.4" not in blob
         assert out["tables"]["by_person"][0]["days"] == 1
     asyncio.run(go())
+
+
+# ── division sales tracker (Paints Sales Tracker) ──────────────────────────
+def test_tracker_sheets_from_crm_records():
+    quotes = [
+        {"id": "q1", "date": "2026-02-03", "customer": "Srihari", "division": "MAP", "value": 957450,
+         "stage": "Adv Received", "quote_no": "AF-1"},
+        {"id": "q2", "date": "2026-02-10", "customer": "Deepak", "division": "MAP", "value": 73160,
+         "stage": "Quoted", "quote_no": "AF-2"},
+        {"id": "q3", "date": "2026-03-05", "customer": "Basha", "division": "MAP", "value": 48231,
+         "stage": "Quoted", "log": [{"at": "2026-03-06T10:00:00", "text": "Site visit done"}]},
+        {"id": "q4", "date": "2026-03-07", "customer": "Lost one", "division": "MAP", "value": 10000, "stage": "Lost"},
+        {"id": "q5", "date": "2026-03-07", "customer": "Sofa", "division": "Furniture", "value": 999999},
+    ]
+    sales = [{"id": "s1", "quote_id": "q1", "date": "2026-03-01", "customer": "Srihari", "division": "MAP",
+              "value": 957450, "paid": 500000, "balance": 457450, "stage": "In Progress", "sale_no": "SO-1"}]
+    # quote_ref missing: the register falls back to the linked quote's number
+    projects = [{"id": "p1", "quote_id": "q1", "customer": "Srihari", "division": "MAP", "assigned_engineer": "Sunil",
+                 "start_date": "2026-03-02", "target_date": "2026-03-10", "stage": "Execution"}]
+    calls = [{"date": "2026-03-04", "name": "Ravi", "division": "MAP", "call_type": "Inbound", "outcome": "Interested"}]
+    out = an.division_tracker(quotes, sales, projects, calls, {"q1": 4081, "q2": 400}, D("2026-02-01"),
+                              D("2026-03-31"), division="MAP", today=D("2026-03-20"))
+    k = {x["key"]: x["value"] for x in out["kpis"]}
+    assert k == {"pipeline": 73160 + 48231, "revenue": 957450, "advance": 500000, "balance": 457450,
+                 "collection": 52.2, "sft": 4081}
+    cats = {b["category"]: b["count"] for b in out["tables"]["breakdown"]}
+    assert cats == {"Pending": 1, "Active": 1, "Won": 1, "Lost": 1}
+    sched = out["tables"]["schedule"][0]
+    assert (sched["applicator"], sched["days"], sched["sft"], sched["overdue"]) == ("Sunil", 9, 4081, True)
+    acts = {r["activity"] for r in out["tables"]["log"]}
+    assert acts == {"Quotation sent", "Follow-up", "Order confirmed", "Inbound"}
+    assert [m["label"] for m in out["tables"]["monthly"]] == ["Feb 2026", "Mar 2026"]
+    assert out["tables"]["quarterly"][0]["period"] == "FY26 Q4"
+    assert out["tables"]["top_prospects"][0]["client"] == "Deepak"
+
+
+def test_tracker_endpoint_is_tenant_scoped(db):
+    _seed(db, "quotes", [{"id": "a", "date": "2026-09-10", "division": "MAP", "value": 1000, "customer": "X"}])
+    _seed(db, "quotes", [{"id": "b", "date": "2026-09-10", "division": "MAP", "value": 5000, "customer": "Y"}], OTHER)
+
+    async def go():
+        out = await server.analytics_tracker("MAP", start="2026-09-01", end="2026-09-30", user=ADMIN)
+        assert [r["client"] for r in out["tables"]["pipeline"]] == ["X"]
+        with pytest.raises(HTTPException):
+            await server.analytics_tracker("Paints", user=ADMIN)
+    asyncio.run(go())
+
+
+def test_tracker_register_takes_the_quote_number_from_the_linked_quote():
+    out = an.division_tracker([{"id": "q1", "date": "2026-02-03", "division": "MAP", "quote_no": "AF-9", "value": 10}],
+                              [{"id": "s1", "quote_id": "q1", "date": "2026-02-04", "division": "MAP", "value": 10}],
+                              [], [], {}, D("2026-02-01"), D("2026-02-28"), division="MAP")
+    assert out["tables"]["register"][0]["quote_no"] == "AF-9"

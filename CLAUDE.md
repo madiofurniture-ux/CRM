@@ -33,7 +33,9 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   `docs/WORKFLOWS.md`.
 - Call Log (`calls` collection, `frontend/src/pages/Calls.jsx`) and the
   Analytics hub (`backend/analytics.py`, `GET /api/analytics/hub/{tab}`,
-  `frontend/src/pages/Analytics.jsx`). See `docs/ANALYTICS_AND_CALLS.md`.
+  `frontend/src/pages/Analytics.jsx`), and the division Sales Tracker
+  (`GET /api/analytics/tracker`, `analytics.division_tracker`,
+  `frontend/src/pages/SalesTracker.jsx`). See `docs/ANALYTICS_AND_CALLS.md`.
 - Finance: money requests (`backend/expenses.py`,
   `frontend/src/pages/MoneyRequests.jsx`) paid out of Cashbook wallets;
   visitor-to-profit lineage, Deal P&L and Company P&L

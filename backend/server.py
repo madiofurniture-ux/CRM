@@ -5889,6 +5889,47 @@ async def analytics_hub(tab: str, start: str = "", end: str = "", division: str 
             "scope": scope, **out}
 
 
+@api.get("/analytics/tracker")
+async def analytics_tracker(division: str = "MAP", start: str = "", end: str = "",
+                            user: dict = Depends(get_current_user)):
+    """The division sales tracker (MADIO's Paints Sales Tracker): KPIs,
+    pipeline by Pending / Active / Won / Lost, sales register, applicator site
+    schedule, weekly activity log, monthly and quarterly summaries. Defaults
+    to the current financial year (April onwards)."""
+    roles = await _require_permission("analytics", "view", user)
+    today = _ist_today()
+    if not start and not end:
+        fy = today.year if today.month >= 4 else today.year - 1
+        start, end = f"{fy}-04-01", today.isoformat()
+    try:
+        s, e = an.parse_range(start, end, today=today)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    if division and division not in lc.DIVISIONS:
+        raise HTTPException(status_code=400, detail=f"Unknown division '{division}'")
+    owners = await _scope_owners(user, roles, "analytics")
+    mine = None if owners is None else {"by_user": {"$in": owners}}
+
+    async def fetch(coll: str, query: dict = None) -> list:
+        return await db[coll].find(tenancy.scope(query or {}, coll, user), {"_id": 0}).to_list(50000)
+
+    quotes, sales, calls = await fetch("quotes", mine), await fetch("sales", mine), await fetch("calls", mine)
+    projects = await fetch("projects")
+    if owners is not None:      # someone else's site isn't theirs to see
+        sale_ids = {x.get("id") for x in sales}
+        projects = [p for p in projects if p.get("sale_id") in sale_ids]
+    want = {q["id"]: int(q.get("version") or 1) for q in quotes if q.get("id")}
+    sft: dict = {}
+    if want:
+        async for ln in db.quote_lines.find(tenancy.scope({"quote_id": {"$in": list(want)}}, "quote_lines", user),
+                                            {"_id": 0, "quote_id": 1, "version": 1, "sft": 1}):
+            if int(ln.get("version") or 1) == want.get(ln.get("quote_id")):
+                sft[ln["quote_id"]] = sft.get(ln["quote_id"], 0) + lc.money(ln.get("sft"))
+    out = an.division_tracker(quotes, sales, projects, calls, sft, s, e, division=division, today=today)
+    return {"division": division, "start": s.isoformat(), "end": e.isoformat(),
+            "scope": "all" if owners is None else ("mine" if len(owners) == 1 else "team"), **out}
+
+
 @api.get("/analytics/pipeline")
 async def analytics_pipeline(user: dict = Depends(get_current_user)):
     """Stage-by-stage quote funnel. `conversion_rate` is each stage's share

@@ -31,7 +31,7 @@ const ITEM_FLAG = {
 // "Reports" is exactly what the header pill nav already exposes/gates,
 // just grouped for a left sidebar instead of a top pill bar.
 const SECTIONS = [
-  { label: "Overview", ids: ["dashboard", "analytics", "alerts"] },
+  { label: "Overview", ids: ["dashboard", "analytics", "sales-tracker", "alerts"] },
   { label: "Pipeline", ids: ["leads", "followups", "calls", "pipeline", "quotes",
     "quote-builder", "quote-followups", "sales", "visitors"] },
   { label: "Contacts / Clients", ids: ["customers", "architects", "meetplan"] },
