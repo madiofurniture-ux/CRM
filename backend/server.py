@@ -8778,6 +8778,8 @@ async def _go_live_apply(named_files: list, user: dict, *, include_hr: bool, app
             await db[coll].insert_many([dict(x) for x in docs[i:i + 500]])
         loaded[coll] = len(docs)
 
+    floors_note = await _go_live_floors(user, result["records"].get("inventory") or [])
+
     office_applied = {}
     if apply_office and result.get("office"):
         current = await _get_settings(user)
@@ -8790,7 +8792,38 @@ async def _go_live_apply(named_files: list, user: dict, *, include_hr: bool, app
     await _audit("go_live_load", user, f"Reset {reset_id}: archived {sum(archived.values())} records, "
                                       f"loaded {sum(loaded.values())} from {', '.join(result['files'])}")
     return {"reset_id": reset_id, "archived": archived, "loaded": loaded, "office": office_applied,
-            "report": result["report"], "warnings": result["warnings"]}
+            "floors": floors_note, "report": result["report"], "warnings": result["warnings"]}
+
+
+async def _go_live_floors(user: dict, inventory: list) -> dict:
+    """Floors are configuration and survive a load. A company whose floors an
+    earlier load cleared gets them back from that load's archive; any stock
+    location without a floor of the same name gets one, so Stock and Stock
+    Ledger can group by it."""
+    tid = tenancy.tenant_of(user)
+    restored = 0
+    if not await db.floors.count_documents(tenancy.scope({}, "floors", user)):
+        latest = await db.data_reset_archive.find(
+            {"tenant_id": tid, "collection": "floors"}, {"_id": 0, "reset_id": 1}).sort("_id", -1).to_list(1)
+        if latest:
+            docs = [a["doc"] async for a in db.data_reset_archive.find(
+                {"tenant_id": tid, "collection": "floors", "reset_id": latest[0]["reset_id"]}, {"_id": 0})]
+            if docs:
+                await db.floors.insert_many([dict(d) for d in docs])
+                restored = len(docs)
+    have = {str(f.get("name") or "").strip().lower()
+            async for f in db.floors.find(tenancy.scope({}, "floors", user), {"_id": 0, "name": 1})}
+    added = []
+    for loc in sorted({str(i.get("location") or "").strip() for i in inventory} - {""}):
+        if loc.lower() in have:
+            continue
+        count = await db.floors.count_documents(tenancy.scope({}, "floors", user))
+        doc = tenancy.stamp({"id": new_id(), "name": loc, "color": PALETTE_KEYS[count % len(PALETTE_KEYS)],
+                             "created_at": now_iso()}, "floors", user)
+        await db.floors.insert_one(dict(doc))
+        have.add(loc.lower())
+        added.append(loc)
+    return {"restored": restored, "added": added}
 
 
 def _go_live_confirmed(confirm: str):

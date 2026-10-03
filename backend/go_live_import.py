@@ -40,14 +40,15 @@ DIVISIONS = ("Furniture", "MAP", "D&W")
 
 # Business collections a go-live reset clears for the tenant. Configuration
 # (users, roles, teams, settings, workflows, flows, custom fields, saved
-# views, business profile, Tally connection/key) and the audit log are kept.
+# views, business profile, floors, Tally connection/key) and the audit log
+# are kept.
 WIPE_COLLECTIONS = (
     "visitors", "leads", "architects", "quotes", "quote_lines", "sales", "customers",
     "inventory", "stock_movements", "vendors", "purchase_orders", "manufacturer_orders",
     "invoices", "payments", "finance_payments", "projects", "project_daily_logs",
     "tasks", "meets", "calls", "activities", "record_contacts", "documents", "discussions",
     "whatsapp_messages", "notification_logs", "flow_runs", "service_tickets",
-    "site_surveys", "dw_openings", "dw_surveys", "sites", "floors",
+    "site_surveys", "dw_openings", "dw_surveys", "sites",
     "commission_payouts", "money_requests", "petty_cash", "cashbooks", "cashbook_entries",
     "cashbook_transactions", "wallets", "wallet_transactions",
     "budgets", "budget_lines", "budget_overrides", "budget_transactions",
@@ -396,7 +397,8 @@ def build(sheets: dict, today: Optional[str] = None) -> dict:
     """All records from the recognised sheets plus a per-sheet report."""
     rep = Report()
     out: dict[str, list] = {k: [] for k in ("visitors", "leads", "architects", "quotes", "sales",
-                                            "customers", "vendors", "purchase_orders", "inventory")}
+                                            "customers", "vendors", "purchase_orders", "inventory",
+                                            "stock_movements")}
     vendors: dict[str, dict] = {}
 
     def vendor(raw_name: Any, code: str = "") -> Optional[dict]:
@@ -423,6 +425,7 @@ def build(sheets: dict, today: Optional[str] = None) -> dict:
     _purchase_orders(sheets, rep, out, quotes_by_no, vendor)
     _closing_stock(sheets, rep, out, vendor)
     _map_stock(sheets, rep, out)
+    _opening_stock(out)
 
     # Vendor codes: keep the stock book's V-numbers, number the rest after them.
     top = max([int(m.group(1)) for v in vendors.values()
@@ -916,8 +919,22 @@ def _closing_stock(sheets, rep, out, vendor):
             "location": "Showroom" if status == "Display" else ("Godown" if status.startswith("Godown") else "Warehouse"),
             "division": "Furniture", "gst_pct": 18, "unit": "pcs", "hsn": "", "image_url": "",
             "purchase_date": sheet_date(_cell(r, c["pdate"])), "dimension_unit": "mm",
-        }))
+        }, sheet_date(_cell(r, c["pdate"])) or "2024-03-31"))
         rep.sheet(name)["loaded"] += 1
+
+
+def _opening_stock(out):
+    """One opening Receipt per item with stock, so the Stock Ledger (which
+    counts movements) agrees with each item's qty. The load writes these
+    straight to the ledger: item qty is already the opening figure."""
+    for n, item in enumerate((i for i in out["inventory"] if i.get("qty", 0) > 0), 1):
+        d = item.get("purchase_date") or today_iso()
+        out["stock_movements"].append(_stamp({
+            "movement_no": f"MV-OPEN-{n:04d}", "date": d, "type": "Receipt", "product_id": item["sku"],
+            "qty": item["qty"], "unit": item.get("unit") or "pcs", "warehouse": item.get("location") or "Main",
+            "to_warehouse": "", "source_doc": "Opening stock (go-live)",
+            "reason": "Opening stock from the stock list", "by_user": "Go-live import",
+        }, d))
 
 
 def _map_stock(sheets, rep, out):
@@ -949,7 +966,7 @@ def _map_stock(sheets, rep, out):
             "qty": int(amount(_cell(r, cc))), "cost": 0, "mrp": 0, "margin": 0, "status": "In Stock",
             "location": "Warehouse", "division": "MAP", "gst_pct": 18, "unit": "cont", "hsn": "",
             "image_url": "", "dimension_unit": "mm",
-        }))
+        }, "2024-01-01"))
         rep.sheet("MAP stock list")["loaded"] += 1
 
 

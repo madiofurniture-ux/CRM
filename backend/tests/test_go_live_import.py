@@ -402,3 +402,37 @@ def test_same_sheet_name_in_two_books_and_invoice_gstin_ignored():
     chair = inv["Dining chair"]                                          # code in PRODUCT, vendor in VENDOR
     assert (chair["model_no"], chair["vendor"], chair["mrp"]) == ("10211934", "Novanthe Mobila Pvt Ltd", 180)
     assert res["office"] == {}                                          # the invoice's GSTIN is a customer's
+
+
+def test_floors_survive_and_stock_ledger_has_opening_stock():
+    async def go():
+        db = server.db
+        await db.floors.insert_one({"id": "f1", "tenant_id": "madio", "name": "Showroom", "color": "blue"})
+        res = await server.go_live_load(files=_files(), confirm=gl.CONFIRM_PHRASE, include_hr=False,
+                                       apply_office=False, user=ADMIN)
+        names = sorted([f["name"] async for f in db.floors.find({"tenant_id": "madio"})])
+        assert names == ["Godown", "Showroom", "Warehouse"]                 # kept + one per stock location
+        assert res["floors"]["added"] == ["Godown", "Warehouse"]
+        moves = await db.stock_movements.find({"tenant_id": "madio"}, {"_id": 0}).to_list(50)
+        inv = await db.inventory.find({"tenant_id": "madio"}, {"_id": 0}).to_list(50)
+        assert {m["product_id"] for m in moves} == {i["sku"] for i in inv if i["qty"] > 0}
+        summary = await server.stock_summary(user=ADMIN)
+        assert summary                                                       # the ledger now has products
+        # Stock screen lists newest first: furniture (dated by purchase) before MAP.
+        newest = sorted(inv, key=lambda i: i["created_at"], reverse=True)
+        assert newest[0]["division"] == "Furniture" and newest[-1]["division"] == "MAP"
+    run(go())
+
+
+def test_floors_cleared_by_an_earlier_load_come_back_from_its_archive():
+    async def go():
+        db = server.db
+        await db.data_reset_archive.insert_one({"reset_id": "r0", "tenant_id": "madio", "collection": "floors",
+                                                "doc": {"id": "f9", "tenant_id": "madio", "name": "Factory Unit",
+                                                        "color": "moss"}})
+        res = await server.go_live_load(files=_files(), confirm=gl.CONFIRM_PHRASE, include_hr=False,
+                                       apply_office=False, user=ADMIN)
+        assert res["floors"]["restored"] == 1
+        assert "Factory Unit" in [f["name"] async for f in db.floors.find({"tenant_id": "madio"})]
+        assert await db.floors.count_documents({"tenant_id": "studio"}) == 0
+    run(go())

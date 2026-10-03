@@ -58,12 +58,15 @@ cleaned up, before anything is written.
    `data_resets`.
 2. Clears `go_live_import.WIPE_COLLECTIONS` for the company. Kept: users,
    roles, teams, settings, workflows, flows, custom fields, saved views,
-   business profile, Tally connection/key, audit log. Staff attendance, leave
+   business profile, floors, Tally connection/key, audit log. Staff attendance, leave
    and payroll are cleared only when the box is ticked.
 3. Inserts the records with `tenant_id`, `division`, `fy` and
    `source: "go-live import"`. Visitors' "Attend person" is linked to a user
    with the same (first) name.
-4. Sets the office name, address and GSTIN (geofence, prefix and home state stay).
+4. Writes one opening-stock Receipt per item with stock (`MV-OPEN-NNNN`),
+   so the Stock Ledger agrees with each item's qty; restores floors an
+   earlier load cleared and adds a floor for each stock location.
+5. Sets the office name, address and GSTIN (geofence, prefix and home state stay).
 
 It needs the admin to type `DELETE AND LOAD`. Any load can be undone from
 "Previous loads" (type `RESTORE`): the archived records come back and
