@@ -574,9 +574,21 @@ def test_imported_quote_remarks_are_notes_not_terms():
              "terms": ["Confirm expected Feb", "Out of station"], "remarks": "Confirm expected Feb\nOut of station"},
             {"id": "b", "tenant_id": "madio", "source": "go-live import", "division": "MAP",
              "terms": [server.quotation_templates.division_preset("madio", "MAP")["terms"][0]]}])
-        assert await server.go_live_auto_quote_notes() == {"moved": 1}
+        await db.purchase_orders.insert_one({"id": "p1", "tenant_id": "madio", "source": "go-live import",
+                                             "approval": "", "grand_total": 250000, "status": "Issued"})
+        assert await server.go_live_auto_quote_notes() == {"moved": 1, "pos_signed_off": 1}
+        assert (await db.purchase_orders.find_one({"id": "p1"}))["approval"] == "approved"
         a = await db.quotes.find_one({"id": "a"})
         assert a["terms"] == [] and [e["text"] for e in a["log"]] == ["Confirm expected Feb", "Out of station"]
         assert (await db.quotes.find_one({"id": "b"}))["terms"]                      # real terms kept
         assert "skipped" in await server.go_live_auto_quote_notes()
     run(go())
+
+
+def test_large_imported_pos_arrive_signed_off():
+    res = gl.build(gl.load_workbooks([("PO.xlsx", _book(PURCHASES))]))
+    for po in res["records"]["purchase_orders"]:
+        if po["grand_total"] > server.lc.PO_APPROVAL_AMOUNT:
+            assert po["approval"] == "approved" and po["approved_by"] == gl.IMPORT_APPROVER
+        else:
+            assert po["approval"] == ""

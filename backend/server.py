@@ -9259,6 +9259,20 @@ async def _imported_quote_notes_off_terms(user: dict) -> int:
     return moved
 
 
+async def _imported_pos_signed_off(user: dict) -> int:
+    """Imported POs over the approval threshold were issued before the CRM;
+    record that sign-off so they can be edited (data loaded before the fix)."""
+    res = await db.purchase_orders.update_many(
+        tenancy.scope({"source": "go-live import", "approval": "pending",
+                       "grand_total": {"$gt": lc.PO_APPROVAL_AMOUNT}}, "purchase_orders", user),
+        {"$set": {"approval": "approved", "approved_by": gl.IMPORT_APPROVER, "approved_at": now_iso()}})
+    res2 = await db.purchase_orders.update_many(
+        tenancy.scope({"source": "go-live import", "approval": {"$in": ["", None]},
+                       "grand_total": {"$gt": lc.PO_APPROVAL_AMOUNT}}, "purchase_orders", user),
+        {"$set": {"approval": "approved", "approved_by": gl.IMPORT_APPROVER, "approved_at": now_iso()}})
+    return res.modified_count + res2.modified_count
+
+
 async def go_live_auto_quote_notes():
     """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set)."""
     run_key = "quote-notes-1"
@@ -9270,10 +9284,12 @@ async def go_live_auto_quote_notes():
         tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
     try:
         moved = await _imported_quote_notes_off_terms(system_user)
+        signed = await _imported_pos_signed_off(system_user)
         await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
-                                                 {"$set": {"result": {"moved": moved}}})
-        logger.info("Go-live quote notes for %s: %s quotes moved off terms", tid, moved)
-        return {"moved": moved}
+                                                 {"$set": {"result": {"moved": moved, "pos_signed_off": signed}}})
+        logger.info("Go-live quote notes for %s: %s quotes moved off terms, %s imported POs signed off",
+                    tid, moved, signed)
+        return {"moved": moved, "pos_signed_off": signed}
     except Exception as e:  # never take the server down over this
         logger.exception("Go-live quote notes failed: %s", e)
         await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key})

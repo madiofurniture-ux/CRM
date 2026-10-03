@@ -37,6 +37,7 @@ from models import new_id, now_iso
 
 # Log entries carried over from the spreadsheets (a row's remark / status).
 IMPORTED_NOTE = "imported-note"
+IMPORT_APPROVER = "Go-live import (issued before the CRM)"
 MAX_FILE_BYTES = 40 * 1024 * 1024   # the Receipts & Payments book is ~30 MB (pictures)
 DIVISIONS = ("Furniture", "MAP", "D&W")
 
@@ -999,6 +1000,11 @@ def _purchase_orders(sheets, rep, out, quotes_by_no, vendor):
         totals = lc.po_totals(po["line_items"])
         po.update(subtotal=totals["subtotal"], tax_total=totals["tax_total"], grand_total=totals["grand_total"])
         po["received_qty"] = [ln["qty"] for ln in po["line_items"]] if po["status"] == "Received" else []
+        if lc.po_needs_approval(po["grand_total"]):
+            # Placed before the CRM: already issued, so already signed off.
+            # Without this, editing one is refused as "needs sign-off".
+            po.update(approval="approved", approved_by=IMPORT_APPROVER,
+                      approved_at=f"{po.get('date') or ''}T10:00:00+05:30")
         po["remarks"] = " · ".join(x for x in (
             f"For: {po['for_customer']}" if po["for_customer"] else "",
             f"Quotation {po['quote_ref']}" if po["quote_ref"] else "",
