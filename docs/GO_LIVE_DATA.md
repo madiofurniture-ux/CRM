@@ -120,3 +120,13 @@ archived or replaced; items that already have a picture keep it. Routes:
 `POST /api/admin/go-live/sharepoint/pictures`. When `GO_LIVE_SHAREPOINT_RUN`
 is set, the server also does this once per company at startup (claimed in
 `go_live_picture_runs`; a failed run is retried on the next start).
+
+## Delivery projects for open orders
+
+Every order still open after a load (sale stage Confirmed, In Progress or
+Delivered) gets the delivery project a quote conversion would create: the
+division's checklist, an Installation task, stage Execution (Delivered →
+Review), value and paid from the sale. Stage automations are not run.
+`POST /api/admin/go-live/projects` does the same for any open order without a
+project; with `GO_LIVE_SHAREPOINT_RUN` set it also runs once at startup
+(claimed in `go_live_picture_runs` as `projects-1`).

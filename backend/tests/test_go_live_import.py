@@ -538,3 +538,24 @@ def test_pictures_added_to_already_loaded_stock_once(monkeypatch):
         again = await server.go_live_sharepoint_pictures({}, user=ADMIN)
         assert (again["added"], again["kept"]) == (0, 1)
     run(go())
+
+
+def test_open_orders_get_delivery_projects_once():
+    async def go():
+        db = server.db
+        await db.sales.insert_many([
+            {"id": "s1", "tenant_id": "madio", "stage": "Confirmed", "date": "2026-08-01", "customer": "A",
+             "division": "MAP", "value": 1000, "paid": 400},
+            {"id": "s2", "tenant_id": "madio", "stage": "Delivered", "date": "2026-07-01", "customer": "B",
+             "division": "Furniture", "value": 500},
+            {"id": "s3", "tenant_id": "madio", "stage": "Completed", "date": "2026-07-01", "customer": "C"},
+            {"id": "s4", "tenant_id": "other", "stage": "Confirmed", "date": "2026-07-01", "customer": "D"}])
+        assert (await server.go_live_auto_projects()) == {"created": 2}
+        projects = {p["sale_id"]: p async for p in db.projects.find({}, {"_id": 0})}
+        assert set(projects) == {"s1", "s2"}
+        assert (projects["s1"]["stage"], projects["s1"]["paid"], projects["s2"]["stage"]) == ("Execution", 400, "Review")
+        assert projects["s1"]["milestones"] and projects["s1"]["tenant_id"] == "madio"
+        assert await db.tasks.count_documents({"category": "Installation"}) == 2
+        assert "skipped" in await server.go_live_auto_projects()
+        assert (await server.go_live_projects(user=ADMIN)) == {"created": 0}
+    run(go())

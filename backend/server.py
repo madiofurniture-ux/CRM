@@ -8954,6 +8954,9 @@ async def _go_live_apply(named_files: list, user: dict, *, include_hr: bool, app
         loaded[coll] = len(docs)
 
     floors_note = await _go_live_floors(user, result["records"].get("inventory") or [])
+    made = await _projects_for_open_sales(user)
+    if made:
+        loaded["projects"] = made
 
     office_applied = {}
     if apply_office and result.get("office"):
@@ -9126,6 +9129,75 @@ async def go_live_pictures(files: List[UploadFile] = File(...), replace: bool = 
 async def go_live_sharepoint_pictures(payload: dict = None, user: dict = Depends(require_admin)):
     return await _go_live_pictures(await _go_live_sharepoint_files(), user,
                                    replace=bool((payload or {}).get("replace")))
+
+
+OPEN_SALE_STAGES = ("Confirmed", "In Progress", "Delivered")
+
+
+async def _projects_for_open_sales(user: dict) -> int:
+    """A delivery project for every open order that has none — what
+    converting a quote creates — so loaded orders can be tracked through
+    production and installation. Delivered orders start at Review, the rest
+    at Execution. Stage automations are not run: these orders are not new."""
+    sales = await db.sales.find(tenancy.scope({"stage": {"$in": list(OPEN_SALE_STAGES)}}, "sales", user),
+                                {"_id": 0}).to_list(20000)
+    if not sales:
+        return 0
+    projects = await db.projects.find(tenancy.scope({}, "projects", user),
+                                      {"_id": 0, "project_no": 1, "sale_id": 1}).to_list(20000)
+    have = {p.get("sale_id") for p in projects if p.get("sale_id")}
+    made = 0
+    for sale in sorted(sales, key=lambda x: str(x.get("date") or "")):
+        if sale.get("id") in have:
+            continue
+        value = lc.money(sale.get("value"))
+        project = {
+            "id": new_id(), "created_at": now_iso(), "project_no": lc.next_project_no(projects),
+            "customer": sale.get("customer", ""), "phone": sale.get("phone", ""),
+            "division": sale.get("division") or "Furniture", "value": value, "paid": lc.money(sale.get("paid")),
+            "stage": "Review" if sale.get("stage") == "Delivered" else "Execution",
+            "site_address": "", "assigned_engineer": "", "start_date": str(sale.get("date") or "")[:10],
+            "target_date": "", "remarks": "", "quote_ref": sale.get("quote_ref", ""),
+            "quote_id": sale.get("quote_id", ""), "sale_id": sale.get("id", ""), "lead_id": sale.get("lead_id", ""),
+            "customer_id": sale.get("customer_id", ""), "milestones": ops.division_milestones(sale.get("division")),
+        }
+        stamp_fy(project, "projects")
+        tenancy.stamp(project, "projects", user)
+        await db.projects.insert_one(dict(project))
+        project.pop("_id", None)
+        projects.append({"project_no": project["project_no"], "sale_id": project["sale_id"]})
+        await _ensure_project_artifacts(project, user)
+        made += 1
+    if made:
+        await _audit("go_live_projects", user, f"Created {made} delivery projects for open orders")
+    return made
+
+
+@api.post("/admin/go-live/projects")
+async def go_live_projects(user: dict = Depends(require_admin)):
+    return {"created": await _projects_for_open_sales(user)}
+
+
+async def go_live_auto_projects():
+    """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set): orders
+    loaded before projects were created for them get their projects."""
+    run_key = "projects-1"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
+    if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    await db.go_live_picture_runs.insert_one(
+        tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
+    try:
+        made = await _projects_for_open_sales(system_user)
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
+                                                 {"$set": {"result": {"created": made}}})
+        logger.info("Go-live projects for %s: %s created", tid, made)
+        return {"created": made}
+    except Exception as e:  # never take the server down over this
+        logger.exception("Go-live projects failed: %s", e)
+        await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key})
+    return None
 
 
 async def go_live_auto_pictures():
@@ -9391,6 +9463,7 @@ async def startup():
         async def _auto():
             await go_live_auto_load()
             await go_live_auto_pictures()
+            await go_live_auto_projects()
         asyncio.create_task(_auto())
 
 
