@@ -115,6 +115,17 @@ function locationBadge(location) {
   return <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full shrink-0" style={{ background: hit.color }} />{loc} <span className="text-[10px] text-[var(--ink-3)]">({hit.code})</span></span>;
 }
 
+function EmptyNote({ total, filtersOn, onClear }) {
+  if (!total) return "No inventory items";
+  if (!filtersOn) return "No inventory items";
+  return (
+    <span>
+      None of the {total} items match these filters.{" "}
+      <button type="button" onClick={onClear} className="text-[var(--brand)] underline" data-testid="inv-empty-clear">Clear filters</button>
+    </span>
+  );
+}
+
 export default function Inventory() {
   const { user: authUser } = useAuth();
   const isAdmin = authUser?.role === "admin";
@@ -228,6 +239,17 @@ export default function Inventory() {
     );
   }, [rows, search, fStatus, fCat, fLoc]);
 
+  // Filters are remembered between visits, so a stale pair (say In Stock +
+  // a category whose items are all on Display) can hide every item. Say so.
+  useEffect(() => {
+    if (!rows.length) return;
+    if (fCat !== "All" && !categories.includes(fCat)) setFCat("All");
+    if (fLoc !== "All" && !locations.includes(fLoc)) setFLoc("All");
+  }, [rows.length, categories, locations, fCat, fLoc, setFCat, setFLoc]);
+
+  const filtersOn = !!search || fStatus !== "All" || fCat !== "All" || fLoc !== "All";
+  const clearFilters = () => { setSearch(""); setFStatus("All"); setFCat("All"); setFLoc("All"); };
+
   // One signal for the whole page: whether the API is sending cost at all.
   // An empty inventory has nothing to reveal either way, so it falls through
   // as visible and the server still strips the field from every response.
@@ -288,7 +310,7 @@ export default function Inventory() {
     <>
       <Topbar
         title="Inventory"
-        subtitle={`${filtered.length} items · MRP ${inrFull(totalMrp)}${seesCost ? ` · Cost ${inrFull(totalCost)}` : ""}`}
+        subtitle={`${filtered.length === rows.length ? rows.length : `${filtered.length} of ${rows.length}`} items · MRP ${inrFull(totalMrp)}${seesCost ? ` · Cost ${inrFull(totalCost)}` : ""}`}
         onAdd={() => { setForm(empty); setEditingId(null); setShow(true); }}
         addLabel="Add Item"
         actions={
@@ -315,6 +337,11 @@ export default function Inventory() {
             <option value="All">All locations</option>
             {locations.map((l) => <option key={l} value={l}>{l}</option>)}
           </select>
+          {filtersOn && (
+            <button type="button" onClick={clearFilters} className="btn-ghost text-sm" data-testid="inv-clear-filters">
+              Clear filters
+            </button>
+          )}
         </div>
 
         {view === "grid" ? (
@@ -352,7 +379,7 @@ export default function Inventory() {
                 </div>
               </div>
             ))}
-            {filtered.length === 0 && <div className="col-span-full text-center py-12 text-[var(--ink-3)]">No inventory items</div>}
+            {filtered.length === 0 && <div className="col-span-full text-center py-12 text-[var(--ink-3)]"><EmptyNote total={rows.length} filtersOn={filtersOn} onClear={clearFilters} /></div>}
           </div>
         ) : (
           <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
@@ -406,7 +433,7 @@ export default function Inventory() {
                     </tr>
                   ))}
                   {filtered.length === 0 && (
-                    <tr><td colSpan={(seesCost ? 13 : 11) + (hasTally ? 1 : 0)} className="text-center py-12 text-[var(--ink-3)]">No inventory items</td></tr>
+                    <tr><td colSpan={(seesCost ? 13 : 11) + (hasTally ? 1 : 0)} className="text-center py-12 text-[var(--ink-3)]"><EmptyNote total={rows.length} filtersOn={filtersOn} onClear={clearFilters} /></td></tr>
                   )}
                 </tbody>
               </table>
