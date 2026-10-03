@@ -367,3 +367,38 @@ def test_bad_packed_data_is_logged_not_raised(monkeypatch):
     monkeypatch.setenv("GO_LIVE_DATA", "not-base64!!")
     assert run(server.go_live_auto_load()) is None
     assert run(server.db.data_resets.count_documents({})) == 0
+
+
+def test_sharepoint_falls_back_to_files_directly_in_the_crm_folder(monkeypatch):
+    books = {f.filename: f.file.getvalue() for f in _files()}
+    items = [{"name": n, "id": f"i{k}", "size": len(b), "ref": f"sharepoint:d/i{k}"}
+             for k, (n, b) in enumerate(books.items())]
+    monkeypatch.setattr(server.storage, "sharepoint_list_folder", lambda sub: [] if sub else items)
+    monkeypatch.setattr(server.storage, "sharepoint_read", lambda ref: books[items[int(ref[-1])]["name"]])
+
+    async def go():
+        listing = await server.go_live_sharepoint_list(user=ADMIN)
+        assert len(listing["files"]) == 3 and not listing["folder"].endswith("go-live")
+        assert (await server.go_live_sharepoint_preview({}, user=ADMIN))["counts"]["sales"] == 2
+    run(go())
+
+
+def test_same_sheet_name_in_two_books_and_invoice_gstin_ignored():
+    other = _book({"Sheet2": [("Random", "notes", "here")],
+                   "Tax Invoice": [("Furniture Sale",), ("Tax Invoice",), ("GSTIN 36BKHPC4545G1ZB",)],
+                   "Stock list": [("Sl.no", "DATE", "PICTURE", "PRODUCT", "VENDOR", "MODEL NO", "QTY", "cash", "Bank",
+                                   "RATE", "LP", "Taxable Value", "GST - 18%", "Purchase Cost", "Each cost",
+                                   "Total cost", "Status"),
+                                  (1, datetime(2024, 3, 31), None, "Ficus", "V1- ZHI RAN SHE", "Plants", 2, None, None,
+                                   100, 200, 169, 31, 200, 300, 600, "godown"),
+                                  (2, datetime(2026, 4, 19), None, "10211934", "Novanthe Mobila Pvt Ltd", "Dining chair",
+                                   4, None, None, 50, 200, 169, 31, 200, None, 720, "Display")]})
+    sheets = gl.load_workbooks([("PO.xlsx", _book(PURCHASES)), ("RP.xlsx", other)])
+    assert "Sheet2 [RP.xlsx]" in sheets
+    res = gl.build(sheets)
+    inv = {i["name"]: i for i in res["records"]["inventory"]}
+    assert inv["Cimento BD 5kg"]["division"] == "MAP"                     # the PO book's MAP list, not RP's Sheet2
+    assert (inv["Ficus"]["mrp"], inv["Ficus"]["cost"], inv["Ficus"]["location"]) == (300, 100, "Godown")
+    chair = inv["Dining chair"]                                          # code in PRODUCT, vendor in VENDOR
+    assert (chair["model_no"], chair["vendor"], chair["mrp"]) == ("10211934", "Novanthe Mobila Pvt Ltd", 180)
+    assert res["office"] == {}                                          # the invoice's GSTIN is a customer's

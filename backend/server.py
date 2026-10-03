@@ -8821,13 +8821,22 @@ async def go_live_load(files: List[UploadFile] = File(...), confirm: str = Form(
 GO_LIVE_SP_SUBFOLDER = os.environ.get("GO_LIVE_SHAREPOINT_SUBFOLDER", "go-live").strip("/") or "go-live"
 
 
+def _go_live_sharepoint_items() -> tuple[str, list]:
+    """(folder label, .xlsx items): the go-live subfolder, or — when that is
+    missing or empty — the .xlsx files sitting directly in the CRM folder."""
+    base = storage.sharepoint_config()["folder"]
+    for sub, label in ((GO_LIVE_SP_SUBFOLDER, f"{base}/{GO_LIVE_SP_SUBFOLDER}"), ("", base)):
+        items = [i for i in storage.sharepoint_list_folder(sub) if i["name"].lower().endswith(".xlsx")]
+        if items:
+            return label, items
+    return f"{base}/{GO_LIVE_SP_SUBFOLDER}", []
+
+
 async def _go_live_sharepoint_files() -> list:
     try:
-        items = await asyncio.to_thread(storage.sharepoint_list_folder, GO_LIVE_SP_SUBFOLDER)
-        items = [i for i in items if i["name"].lower().endswith(".xlsx")]
+        label, items = await asyncio.to_thread(_go_live_sharepoint_items)
         if not items:
-            raise HTTPException(status_code=400, detail=f"No .xlsx files in SharePoint folder "
-                                                        f"'{storage.sharepoint_config()['folder']}/{GO_LIVE_SP_SUBFOLDER}'")
+            raise HTTPException(status_code=400, detail=f"No .xlsx files in SharePoint folder '{label}'")
         out = []
         for i in items:
             if i["size"] > gl.MAX_FILE_BYTES:
@@ -8842,11 +8851,10 @@ async def _go_live_sharepoint_files() -> list:
 @api.get("/admin/go-live/sharepoint")
 async def go_live_sharepoint_list(user: dict = Depends(require_admin)):
     try:
-        items = await asyncio.to_thread(storage.sharepoint_list_folder, GO_LIVE_SP_SUBFOLDER)
+        label, items = await asyncio.to_thread(_go_live_sharepoint_items)
     except storage.SharePointError as e:
         return {"folder": GO_LIVE_SP_SUBFOLDER, "files": [], "error": str(e)}
-    return {"folder": f"{storage.sharepoint_config()['folder']}/{GO_LIVE_SP_SUBFOLDER}",
-            "files": [{"name": i["name"], "size": i["size"]} for i in items if i["name"].lower().endswith(".xlsx")]}
+    return {"folder": label, "files": [{"name": i["name"], "size": i["size"]} for i in items]}
 
 
 @api.post("/admin/go-live/sharepoint/preview")

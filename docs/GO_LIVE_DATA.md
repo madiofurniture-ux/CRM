@@ -18,12 +18,16 @@ Sheets are recognised by name, so file names and upload order don't matter.
 | | Arch | architects & partners |
 | Purchase Order book | Purchase Order | vendors + purchase orders (one PO per number; follow-on rows are its lines) |
 | | Sheet2 (MAP stock list) | MAP inventory items (`MAP-001`…), qty = containers |
-| MIS | Closing Stock | furniture inventory (`MF-0001`…), vendors keep their V-codes (V1, V2…) |
-| | ledger letterheads | office name, address and GSTIN for invoices |
+| Receipts and Payments | Stock list | furniture inventory (`MF-0001`…), preferred over the MIS Closing Stock; vendors keep their V-codes (V1, V2…) |
+| MIS | Closing Stock | furniture inventory when there is no Stock list |
+| | ledger letterheads (…Accounts / Indirect… sheets only) | office name, address and GSTIN for invoices |
 
 Customers are created from the sales book, one per phone number, with lifetime
 value and balance; quotes and visitors with the same phone are linked to them.
-The MIS income statement and "Form Responses 1" are not loaded.
+The MIS income statement, "Form Responses 1" and the monthly cash books, GST,
+salary, expense and vendor-payment sheets of Receipts and Payments are not
+loaded (finance ledgers need their own mapping). Two books can share a sheet
+name (both have a "Sheet2"); the second is kept as `Sheet2 [file name]`.
 
 ## Cleaning rules
 
@@ -73,7 +77,8 @@ tasks.
 
 - **From SharePoint:** on the Go-live Data screen pick "From SharePoint folder".
   It reads every `.xlsx` in `<SHAREPOINT_FOLDER>/go-live` (MADIO: `CRM Images
-  and content/go-live`) and does the same preview and load. Useful on a phone,
+  and content/go-live`), or the `.xlsx` files directly in `<SHAREPOINT_FOLDER>`
+  when that subfolder is missing or empty, and does the same preview and load. Useful on a phone,
   where picking files can be awkward.
 - **One-time automatic load at startup** (for operators): set
   `GO_LIVE_SHAREPOINT_RUN` on the backend to a run name (e.g. `golive-2026-10-02`).

@@ -1,6 +1,29 @@
 import { Component } from "react";
 import { AlertTriangle } from "lucide-react";
 
+// A tab left open across a deploy asks for code-split files the new deploy
+// replaced ("Loading chunk 8252 failed"). Reloading fetches the new
+// index.html and its files; the timestamp guard stops a reload loop if the
+// failure is real (e.g. offline).
+const STALE_CHUNK = /Loading (CSS )?chunk [\w-]+ failed|ChunkLoadError|Failed to fetch dynamically imported module|Importing a module script failed/i;
+const RELOAD_KEY = "madio_chunk_reload_at";
+
+export function isStaleChunkError(error) {
+  return STALE_CHUNK.test(`${error?.name || ""} ${error?.message || error || ""}`);
+}
+
+function reloadOnceForNewDeploy() {
+  try {
+    const last = Number(sessionStorage.getItem(RELOAD_KEY) || 0);
+    if (Date.now() - last < 60000) return false;
+    sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+  } catch {
+    // storage blocked: still worth one reload attempt
+  }
+  window.location.reload();
+  return true;
+}
+
 /** Catches uncaught render/lifecycle exceptions from a page so one bad
  * screen degrades to a recoverable panel instead of unmounting the whole
  * app shell (sidebar, topbar and nav stay usable).
@@ -15,6 +38,7 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
+    if (isStaleChunkError(error) && reloadOnceForNewDeploy()) return;
     // No telemetry sink in this app yet; the console is what a support call
     // will actually ask the user to read back.
     console.error("Screen crashed:", error, info?.componentStack);
@@ -39,7 +63,7 @@ export default class ErrorBoundary extends Component {
             {String(error?.message || error)}
           </div>
           <button
-            onClick={() => this.setState({ error: null })}
+            onClick={() => (isStaleChunkError(error) ? window.location.reload() : this.setState({ error: null }))}
             className="btn-primary mt-4 px-4"
             data-testid="error-boundary-retry"
           >

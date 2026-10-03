@@ -35,7 +35,7 @@ from typing import Any, Iterable, Optional
 import lifecycle as lc
 from models import new_id, now_iso
 
-MAX_FILE_BYTES = 15 * 1024 * 1024
+MAX_FILE_BYTES = 40 * 1024 * 1024   # the Receipts & Payments book is ~30 MB (pictures)
 DIVISIONS = ("Furniture", "MAP", "D&W")
 
 # Business collections a go-live reset clears for the tenant. Configuration
@@ -272,7 +272,10 @@ def load_workbooks(files: list[tuple[str, bytes]]) -> dict:
         except Exception:
             raise ValueError(f"{name} isn't an Excel .xlsx workbook")
         for ws in wb.worksheets:
-            sheets[ws.title.strip()] = _rows(ws)
+            title = ws.title.strip()
+            if title in sheets:          # e.g. "Sheet2" in two books: keep both
+                title = f"{title} [{name}]"
+            sheets[title] = _rows(ws)
         wb.close()
     return sheets
 
@@ -858,16 +861,22 @@ def _purchase_orders(sheets, rep, out, quotes_by_no, vendor):
         rep.sheet(name)["loaded"] += 1
 
 
+_VENDORISH = re.compile(r"\bpvt\b|\bltd\b|\bllp\b|^\s*v\s*-?\d+|furniture|industr|mobila|casa|lifestyle|"
+                        r"\bcompany\b|\bco\b|traders|enterprise", re.I)
+
+
 def _closing_stock(sheets, rep, out, vendor):
-    name = _find(sheets, "Closing Stock")
+    """Furniture stock: the Receipts & Payments book's "Stock list" (current)
+    or else the MIS "Closing Stock"."""
+    name = _find(sheets, "Stock list", "Closing Stock")
     if not name:
         return
-    headers, rows, h = _table(sheets[name], ["Month"])
+    headers, rows, h = _table(sheets[name], ["Month", "Sl.no", "Sl. No"])
     col = _getter(headers)
     c = {k: col(*v) for k, v in {
-        "pdate": ["Purchase Date"], "product": ["PRODUCT"], "vendor": ["VENDOR"], "model": ["MODEL NO"],
+        "pdate": ["Purchase Date", "DATE"], "product": ["PRODUCT"], "vendor": ["VENDOR"], "model": ["MODEL NO"],
         "qty": ["QTY"], "rate": ["RATE"], "cost": ["Purchase Cost"], "sell": ["Selling Price"],
-        "status": ["Status"]}.items()}
+        "each": ["Each cost"], "sell_total": ["Total cost"], "status": ["Status"]}.items()}
     n = 0
     for i, r in enumerate(rows, h + 2):
         product, vend, model = text(_cell(r, c["product"]), 200), text(_cell(r, c["vendor"]), 120), \
@@ -876,9 +885,13 @@ def _closing_stock(sheets, rep, out, vendor):
             continue
         rep.sheet(name)["rows"] += 1
         if re.fullmatch(r"\d{5,}", product):
-            # Late rows were typed one column off: code | product | vendor.
-            product, vend, model = vend, model, product
-            rep.note(name, "row typed one column off, realigned")
+            # Late rows carry an item code in PRODUCT; the name and the vendor
+            # sit in VENDOR / MODEL NO, in either order depending on the book.
+            if _VENDORISH.search(model) and not _VENDORISH.search(vend):
+                product, vend, model = vend, model, product
+            else:
+                product, model = model, product
+            rep.note(name, "item code in the product column, realigned")
         if not product:
             rep.skip(name, "no product name", i)
             continue
@@ -889,7 +902,10 @@ def _closing_stock(sheets, rep, out, vendor):
         rate = amount(_cell(r, c["rate"]))
         cost_total = amount(_cell(r, c["cost"]))
         cost = round(cost_total / qty, 2) if cost_total else rate
-        mrp = round(amount(_cell(r, c["sell"])) / qty, 2)
+        # Selling price: per unit ("Each cost") or a line total ("Selling
+        # Price" in the MIS, "Total cost" in the Stock list).
+        each = amount(_cell(r, c["each"]))
+        mrp = each or round((amount(_cell(r, c["sell"])) or amount(_cell(r, c["sell_total"]))) / qty, 2)
         status = text(_cell(r, c["status"]), 40).title()
         n += 1
         out["inventory"].append(_stamp({
@@ -905,10 +921,18 @@ def _closing_stock(sheets, rep, out, vendor):
 
 
 def _map_stock(sheets, rep, out):
-    name = _find(sheets, "Sheet2", "MAP STOCK LIST", "MAP Stock")
+    """The MAP stock list: a sheet (usually "Sheet2" of the Purchase Order
+    book) whose header has Product Name and Cont columns."""
+    name = headers = None
+    for title in sheets:
+        if not re.match(r"(sheet2|map stock)", title, re.I):
+            continue
+        hdr, body, hh = _table(sheets[title], ["sl.No", "sl no"])
+        if "product name" in hdr and "cont" in hdr:
+            name, headers, rows, h = title, hdr, body, hh
+            break
     if not name:
         return
-    headers, rows, h = _table(sheets[name], ["sl.No", "sl no"])
     col = _getter(headers)
     cn, cq, cc, cb = col("Product Name"), col("Qty"), col("Cont"), col("Batch Number", "Batch")
     n = 0
@@ -934,8 +958,11 @@ _GSTIN = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]\b")
 
 def _office(sheets) -> dict:
     """Company name / address / GSTIN / e-mail from the letterhead block the
-    MIS ledgers carry: name, address lines, 'GST IN - …', 'E-Mail : …'."""
-    for rows in sheets.values():
+    MIS ledgers carry: name, address lines, 'GST IN - …', 'E-Mail : …'.
+    Only ledger sheets are read: invoice sheets carry the *customer's* GSTIN."""
+    for title, rows in sheets.items():
+        if not re.search(r"accounts|indirect|ledger|letterhead", title, re.I):
+            continue
         lines = [text(cell, 300) for r in rows[:12] for cell in (r or ()) if isinstance(cell, str) and text(cell)]
         for k, line in enumerate(lines):
             m = _GSTIN.search(line.upper())
