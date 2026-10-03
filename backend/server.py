@@ -2614,6 +2614,67 @@ def _render_quote_pdf(quote: dict, tenant: dict) -> bytes:
     return buf.getvalue()
 
 
+def _builder_lines(quote: dict) -> tuple[list, dict, list]:
+    """A Quote Builder quote as branded-PDF input: every item of an item table
+    is a line grouped under the table's title; totals are the ones saved on
+    the quote (what Convert to Sale uses); text, payment-schedule and terms
+    sections are carried over."""
+    lines, extras, terms_text = [], [], []
+    order = (quote.get("layout_config") or {}).get("section_order") or []
+    visible = (quote.get("layout_config") or {}).get("visible") or {}
+    sections = sorted(quote.get("sections") or [],
+                      key=lambda x: order.index(x.get("id")) if x.get("id") in order else len(order))
+    for sec in sections:
+        if visible.get(sec.get("id")) is False:
+            continue
+        kind = sec.get("type")
+        if kind == "ITEM_GRID":
+            for item in sec.get("items") or []:
+                _, sub, disc, _tax = _price_item(item)
+                lines.append({"group": sec.get("title") or "", "description": item.get("description", ""),
+                              "dimensions": item.get("dimensions", ""), "finish": item.get("finish", ""),
+                              "qty": item.get("qty", 1), "rate": item.get("unit_rate", 0),
+                              "discount_pct": item.get("discount_pct", 0), "gst_rate": item.get("gst_rate", 0),
+                              "amount": round(sub - disc, 2), "image_url": item.get("image_url", "")})
+        elif kind == "PAYMENT_MILESTONES":
+            extras.append({"title": sec.get("title") or "Payment Schedule", "numbered": True,
+                           "items": [f"{m.get('label', '')} — {lc.money(m.get('pct')):g}%"
+                                     for m in sec.get("milestones") or []]})
+        elif kind == "TEXT_BLOCK" and str(sec.get("text") or "").strip():
+            extras.append({"title": sec.get("title") or "", "numbered": False, "items": [sec["text"]]})
+        elif kind == "TERMS_CONDITIONS" and str(sec.get("text") or "").strip():
+            terms_text += [t.strip() for t in re.split(r"(?:\n+|(?<=\.)\s+(?=[A-Z]))", sec["text"]) if t.strip()]
+    fs = quote.get("financial_summary") or _compute_quote_financials(quote.get("sections") or [])
+    sub, disc = lc.money(fs.get("subtotal")), lc.money(fs.get("total_discount"))
+    totals = {"subtotal": sub, "discount": disc, "value": round(sub - disc, 2),
+              "tax_total": lc.money(fs.get("total_tax")), "transport": 0, "round_off": 0,
+              "grand_total": lc.money(fs.get("grand_total")), "tax_label": "GST (per item)"}
+    return lines, totals, extras + ([{"title": "Terms & Scope", "items": terms_text, "numbered": True}]
+                                   if terms_text else [])
+
+
+async def _branded_builder_pdf(quote: dict, user: dict) -> bytes:
+    preset = {**_quote_preset(quote, user), "layout": "builder", "spec_fields": []}
+    lines, totals, extras = _builder_lines(quote)
+    terms, _ = lc.quote_terms(quote.get("terms") or None, quote.get("remarks"))
+    office = await _get_settings(user)
+    customer = await _quote_customer(quote, user)
+    return await asyncio.to_thread(
+        qpdf.render, quote=quote, lines=lines, totals=totals, summary={}, preset=preset, office=office,
+        customer=customer, tenant_id=tenancy.tenant_of(user), terms=terms, extras=extras)
+
+
+async def _quote_customer(quote: dict, user: dict) -> dict | None:
+    customer = None
+    if quote.get("customer_id"):
+        customer = await db.customers.find_one(
+            tenancy.scope({"id": quote["customer_id"]}, "customers", user), {"_id": 0})
+    if not customer and quote.get("phone"):
+        customer = await db.customers.find_one(
+            tenancy.scope({"phone": lc.phone_key(quote["phone"])}, "customers", user), {"_id": 0})
+    return customer
+
+
 async def _branded_quote_pdf(quote: dict, lines: list, user: dict) -> bytes:
     preset = _quote_preset(quote, user)
     # Picture and model number from the stock item a line was picked from.
@@ -2626,13 +2687,7 @@ async def _branded_quote_pdf(quote: dict, lines: list, user: dict) -> bytes:
         l.setdefault("model_no", item.get("model_no") or "")
         if not l.get("image_url"):
             l["image_url"] = item.get("image_url") or ""
-    customer = None
-    if quote.get("customer_id"):
-        customer = await db.customers.find_one(
-            tenancy.scope({"id": quote["customer_id"]}, "customers", user), {"_id": 0})
-    if not customer and quote.get("phone"):
-        customer = await db.customers.find_one(
-            tenancy.scope({"phone": lc.phone_key(quote["phone"])}, "customers", user), {"_id": 0})
+    customer = await _quote_customer(quote, user)
     totals = _quote_totals(quote, lines, preset)
     view = _quote_view(quote, lines, preset)
     terms, _ = lc.quote_terms(quote.get("terms") or None, quote.get("remarks"))
@@ -2653,7 +2708,7 @@ async def quote_pdf(quote_id: str, user: dict = Depends(get_current_user)):
     lines = [lc.calc_line(dict(l)) for l in await _quote_lines(quote_id, user)
              if int(l.get("version") or 1) == version]
     if not lines and quote.get("sections"):
-        pdf_bytes = _render_quote_pdf(quote, tenant)          # Quote Builder sections keep their layout
+        pdf_bytes = await _branded_builder_pdf(quote, user)
     else:
         if not lines:
             lines = [lc.calc_line({"description": i.get("description", ""), "w": i.get("w", 0),
@@ -6995,6 +7050,13 @@ def _quote_view(q: dict, all_lines: list, preset: dict | None = None) -> dict:
     summary = {"openings": round(sum(lc.money(l.get("qty")) or 1 for l in lines if lc.money(l.get("sft")) > 0), 2),
                "sft": round(sum(lc.money(l.get("sft")) for l in lines), 2)}
     summary["avg_rate"] = round(subtotal / summary["sft"], 2) if summary["sft"] else 0
+    groups: dict = {}
+    for l in lines:
+        g = groups.setdefault(str(l.get("group") or "").strip(), {"subtotal": 0.0, "sft": 0.0, "count": 0})
+        g["subtotal"] = round(g["subtotal"] + lc.money(l.get("amount")), 2)
+        g["sft"] = round(g["sft"] + lc.money(l.get("sft")), 2)
+        g["count"] += 1
+    summary["groups"] = [{"name": k, **v} for k, v in groups.items()]
     return {"quote": q, "lines": lines, "subtotal": subtotal, "totals": totals, "versions": versions,
             "summary": summary,
             "preset": {k: preset.get(k) for k in ("division", "name", "dims", "round_to", "line_label",
@@ -8978,6 +9040,78 @@ async def go_live_sharepoint_load(payload: dict, user: dict = Depends(require_ad
                                 source="sharepoint")
 
 
+async def _go_live_pictures(named_files: list, user: dict, *, replace: bool = False) -> dict:
+    """Give already-loaded stock its pictures from the Stock list, without
+    reloading anything. An item is matched by its loaded SKU and name (or,
+    failing that, name + model no.); items that already have a picture keep
+    it unless `replace`."""
+    try:
+        sheets = await asyncio.to_thread(gl.load_workbooks, named_files)
+        result = await asyncio.to_thread(gl.build, sheets)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    found = [i for i in result["records"]["inventory"] if i.get("image_url")]
+    have = await db.inventory.find(tenancy.scope({}, "inventory", user),
+                                   {"_id": 0, "id": 1, "sku": 1, "name": 1, "model_no": 1, "image_url": 1}) \
+        .to_list(20000)
+    by_sku = {(h.get("sku"), h.get("name")): h for h in have}
+    by_name = {}
+    for h in have:
+        by_name.setdefault((h.get("name"), h.get("model_no") or ""), h)
+    added = kept = unmatched = 0
+    for item in found:
+        h = by_sku.get((item.get("sku"), item.get("name"))) or by_name.get((item.get("name"), item.get("model_no") or ""))
+        if not h:
+            unmatched += 1
+            continue
+        if h.get("image_url") and not replace:
+            kept += 1
+            continue
+        await db.inventory.update_one(tenancy.scope({"id": h["id"]}, "inventory", user),
+                                      {"$set": {"image_url": item["image_url"], "updated_at": now_iso()}})
+        h["image_url"] = item["image_url"]
+        added += 1
+    await _audit("go_live_pictures", user, f"Product pictures: {added} added, {kept} kept, {unmatched} unmatched")
+    return {"pictures": len(found), "added": added, "kept": kept, "unmatched": unmatched}
+
+
+@api.post("/admin/go-live/pictures")
+async def go_live_pictures(files: List[UploadFile] = File(...), replace: bool = Form(False),
+                           user: dict = Depends(require_admin)):
+    return await _go_live_pictures(await _go_live_files(files), user, replace=replace)
+
+
+@api.post("/admin/go-live/sharepoint/pictures")
+async def go_live_sharepoint_pictures(payload: dict = None, user: dict = Depends(require_admin)):
+    return await _go_live_pictures(await _go_live_sharepoint_files(), user,
+                                   replace=bool((payload or {}).get("replace")))
+
+
+async def go_live_auto_pictures():
+    """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set): stock loaded
+    before pictures were read gets them from the SharePoint books."""
+    run_key = "pictures-1"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import (SharePoint)", "role": "admin", "tenant_id": tid}
+    try:
+        claim = tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs",
+                              system_user)
+        if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+            return {"skipped": f"run '{run_key}' already happened"}
+        await db.go_live_picture_runs.insert_one(dict(claim))
+        out = await _go_live_pictures(await _go_live_sharepoint_files(), system_user)
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key}, {"$set": {"result": out}})
+        logger.info("Go-live pictures for %s: %s", tid, out)
+        return out
+    except HTTPException as e:
+        logger.warning("Go-live pictures failed: %s", e.detail)
+    except Exception as e:  # never take the server down over this
+        logger.exception("Go-live pictures failed: %s", e)
+    # Failed: let the next start try again.
+    await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key, "result": {"$exists": False}})
+    return None
+
+
 async def go_live_auto_load():
     """One-time load at startup when GO_LIVE_SHAREPOINT_RUN is set (its value
     names the run; each value runs once per company, recorded in data_resets).
@@ -9213,7 +9347,10 @@ async def startup():
     # One-time go-live load from SharePoint, in the background so a slow
     # download never delays the server answering health checks.
     if os.environ.get("GO_LIVE_SHAREPOINT_RUN", "").strip():
-        asyncio.create_task(go_live_auto_load())
+        async def _auto():
+            await go_live_auto_load()
+            await go_live_auto_pictures()
+        asyncio.create_task(_auto())
 
 
 @app.on_event("shutdown")

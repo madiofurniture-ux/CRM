@@ -272,13 +272,152 @@ def load_workbooks(files: list[tuple[str, bytes]]) -> dict:
             wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
         except Exception:
             raise ValueError(f"{name} isn't an Excel .xlsx workbook")
+        try:
+            pictures = sheet_images(data)
+        except Exception:                # pictures are a bonus; never fail the load
+            pictures = {}
         for ws in wb.worksheets:
             title = ws.title.strip()
             if title in sheets:          # e.g. "Sheet2" in two books: keep both
                 title = f"{title} [{name}]"
-            sheets[title] = _rows(ws)
+            rows = Rows(_rows(ws))
+            # Read-only iter_rows fills from row 1, so row n is index n - 1.
+            rows.images = {r - 1: img for r, img in pictures.get(ws.title, {}).items()}
+            sheets[title] = rows
         wb.close()
     return sheets
+
+
+class Rows(list):
+    """A sheet's rows plus the pictures sitting on them ({row index: bytes})."""
+    images: dict = {}
+
+
+_NS = {
+    "m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+    "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "pr": "http://schemas.openxmlformats.org/package/2006/relationships",
+    "xdr": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "rv": "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata",
+    "rvr": "http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel",
+    "xlrd": "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata",
+}
+
+
+def sheet_images(data: bytes) -> dict:
+    """{sheet title: {1-based row: image bytes}} for a workbook's pictures.
+
+    Two kinds are read: pictures floating over the sheet (anchored by their
+    top-left cell) and Excel's "Place in Cell" pictures (rich values). The
+    first picture on a row wins. openpyxl reads neither in read-only mode, so
+    the package XML is read directly."""
+    import posixpath
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    z = zipfile.ZipFile(io.BytesIO(data))
+    names = set(z.namelist())
+
+    def xml(path):
+        return ET.fromstring(z.read(path)) if path in names else None
+
+    def rels(path):
+        """Relationship id -> absolute part path for a part."""
+        d, f = posixpath.split(path)
+        root = xml(posixpath.join(d, "_rels", f + ".rels"))
+        out = {}
+        for r in (root if root is not None else []):
+            t = r.get("Target") or ""
+            if r.get("TargetMode") == "External":
+                continue
+            out[r.get("Id")] = t.lstrip("/") if t.startswith("/") else posixpath.normpath(posixpath.join(d, t))
+        return out
+
+    # In-cell pictures: vm index -> media part.
+    cell_pics: list = []
+    meta = xml("xl/metadata.xml")
+    rich = xml("xl/richData/rdrichvalue.xml")
+    relroot = xml("xl/richData/richValueRel.xml")
+    if meta is not None and rich is not None and relroot is not None:
+        rel_targets = rels("xl/richData/richValueRel.xml")
+        rel_ids = [e.get("{%s}id" % _NS["r"]) for e in relroot]
+        values = [rv for rv in rich if rv.tag.endswith("}rv")]
+        fut = [bk for fm in meta if fm.tag.endswith("futureMetadata") for bk in fm if bk.tag.endswith("}bk")]
+        vmeta = [bk for vm in meta if vm.tag.endswith("valueMetadata") for bk in vm if bk.tag.endswith("}bk")]
+        for bk in vmeta:
+            target = None
+            try:
+                rc = next(e for e in bk.iter() if e.tag.endswith("}rc"))
+                fbk = fut[int(rc.get("v"))]
+                rvb = next(e for e in fbk.iter() if e.tag.endswith("}rvb"))
+                rv = values[int(rvb.get("i"))]
+                first = next(e for e in rv if e.tag.endswith("}v"))
+                target = rel_targets.get(rel_ids[int(first.text)])
+            except (StopIteration, IndexError, ValueError, TypeError):
+                pass
+            cell_pics.append(target)
+
+    wb = xml("xl/workbook.xml")
+    wb_rels = rels("xl/workbook.xml")
+    out: dict = {}
+    for sh in wb.find("m:sheets", _NS) if wb is not None else []:
+        part = wb_rels.get(sh.get("{%s}id" % _NS["r"]))
+        if not part or part not in names:
+            continue
+        found: dict = {}
+        srels = rels(part)
+        root = xml(part)
+        for d in root.findall("m:drawing", _NS):
+            dpart = srels.get(d.get("{%s}id" % _NS["r"]))
+            droot = xml(dpart) if dpart else None
+            if droot is None:
+                continue
+            drels = rels(dpart)
+            for anchor in droot:
+                frm = anchor.find("xdr:from/xdr:row", _NS)
+                blip = anchor.find(".//a:blip", _NS)
+                if frm is None or blip is None:
+                    continue
+                media = drels.get(blip.get("{%s}embed" % _NS["r"]))
+                row = int(frm.text) + 1
+                if media in names and row not in found:
+                    found[row] = media
+        if cell_pics:
+            for c in root.iter("{%s}c" % _NS["m"]):
+                vm = c.get("vm")
+                if not vm:
+                    continue
+                m = re.match(r"[A-Z]+(\d+)$", c.get("r") or "")
+                try:
+                    media = cell_pics[int(vm) - 1]
+                except (IndexError, ValueError):
+                    continue
+                if m and media in names:
+                    found.setdefault(int(m.group(1)), media)
+        if found:
+            out[sh.get("name").strip()] = {r: z.read(p) for r, p in found.items()}
+    return out
+
+
+def picture_url(raw: bytes, max_px: int = 320) -> str:
+    """Picture bytes -> a small JPEG data URL, as the Stock screen stores them."""
+    import base64
+
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(raw))
+    img.thumbnail((max_px, max_px))
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=68, optimize=True)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 def pack_sheets(sheets: dict) -> str:
@@ -880,6 +1019,7 @@ def _closing_stock(sheets, rep, out, vendor):
         "pdate": ["Purchase Date", "DATE"], "product": ["PRODUCT"], "vendor": ["VENDOR"], "model": ["MODEL NO"],
         "qty": ["QTY"], "rate": ["RATE"], "cost": ["Purchase Cost"], "sell": ["Selling Price"],
         "each": ["Each cost"], "sell_total": ["Total cost"], "status": ["Status"]}.items()}
+    pictures = getattr(sheets[name], "images", None) or {}
     n = 0
     for i, r in enumerate(rows, h + 2):
         product, vend, model = text(_cell(r, c["product"]), 200), text(_cell(r, c["vendor"]), 120), \
@@ -917,10 +1057,23 @@ def _closing_stock(sheets, rep, out, vendor):
             "margin": round((mrp - cost) / cost * 100, 2) if cost > 0 else 0,
             "status": "Display" if status == "Display" else ("Sold" if status == "Sold" else "In Stock"),
             "location": "Showroom" if status == "Display" else ("Godown" if status.startswith("Godown") else "Warehouse"),
-            "division": "Furniture", "gst_pct": 18, "unit": "pcs", "hsn": "", "image_url": "",
+            "division": "Furniture", "gst_pct": 18, "unit": "pcs", "hsn": "",
+            "image_url": _picture(pictures.get(i - 1), rep, name),
             "purchase_date": sheet_date(_cell(r, c["pdate"])), "dimension_unit": "mm",
         }, sheet_date(_cell(r, c["pdate"])) or "2024-03-31"))
         rep.sheet(name)["loaded"] += 1
+
+
+def _picture(raw: Optional[bytes], rep, sheet: str) -> str:
+    if not raw:
+        return ""
+    try:
+        url = picture_url(raw)
+    except Exception:
+        rep.note(sheet, "a picture couldn't be read")
+        return ""
+    rep.note(sheet, "product pictures attached")
+    return url
 
 
 def _opening_stock(out):
@@ -999,5 +1152,5 @@ def _office(sheets) -> dict:
     return {}
 
 
-__all__ = ["build", "load_workbooks", "pack_sheets", "unpack_sheets", "WIPE_COLLECTIONS", "HR_COLLECTIONS", "CONFIRM_PHRASE",
+__all__ = ["build", "load_workbooks", "sheet_images", "picture_url", "pack_sheets", "unpack_sheets", "WIPE_COLLECTIONS", "HR_COLLECTIONS", "CONFIRM_PHRASE",
            "sheet_date", "phone", "amount", "name_location", "quote_no", "division_of"]

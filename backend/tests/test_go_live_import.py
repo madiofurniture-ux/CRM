@@ -436,3 +436,105 @@ def test_floors_cleared_by_an_earlier_load_come_back_from_its_archive():
         assert "Factory Unit" in [f["name"] async for f in db.floors.find({"tenant_id": "madio"})]
         assert await db.floors.count_documents({"tenant_id": "studio"}) == 0
     run(go())
+
+
+def _png(colour=(200, 30, 30)) -> bytes:
+    from PIL import Image as PILImage
+    buf = io.BytesIO()
+    PILImage.new("RGB", (60, 40), colour).save(buf, "PNG")
+    return buf.getvalue()
+
+
+STOCK_HDR = ("Sl.no", "DATE", "PICTURE", "PRODUCT", "VENDOR", "MODEL NO", "QTY", "RATE", "Purchase Cost",
+             "Each cost", "Status")
+
+
+def test_stock_list_pictures_floating_over_the_sheet_reach_inventory():
+    from openpyxl.drawing.image import Image as XLImage
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Stock list"
+    ws["A2"] = "Stock"                     # sheet starts below a blank first row
+    ws.append(STOCK_HDR)
+    ws.append((1, datetime(2024, 3, 31), None, "Ficus", "V1- ZHI RAN SHE", "Plants", 1, 100, 100, 300, "godown"))
+    ws.append((2, datetime(2024, 3, 31), None, "Sofa", "V2- Casa", "Sofa", 1, 100, 100, 300, "Display"))
+    img = XLImage(io.BytesIO(_png()))
+    ws.add_image(img, "C5")                # the Sofa row
+    buf = io.BytesIO()
+    wb.save(buf)
+    pics = gl.sheet_images(buf.getvalue())
+    assert list(pics["Stock list"]) == [5]
+    inv = {i["name"]: i for i in gl.build(gl.load_workbooks([("RP.xlsx", buf.getvalue())]))["records"]["inventory"]}
+    assert inv["Sofa"]["image_url"].startswith("data:image/jpeg;base64,")
+    assert inv["Ficus"]["image_url"] == ""
+
+
+def test_place_in_cell_pictures_are_read():
+    import zipfile
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Stock list"
+    ws.append(STOCK_HDR)
+    ws.append((1, datetime(2024, 3, 31), None, "Ficus", "V1- ZHI", "Plants", 1, 100, 100, 300, "godown"))
+    buf = io.BytesIO()
+    wb.save(buf)
+    src = zipfile.ZipFile(io.BytesIO(buf.getvalue()))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as z:
+        for n in src.namelist():
+            data = src.read(n)
+            if n == "xl/worksheets/sheet1.xml":    # C2 holds the picture as a rich value
+                data = data.replace(b'<c r="C2"', b'<c r="C2" vm="1"', 1) if b'<c r="C2"' in data else \
+                    data.replace(b'<c r="D2"', b'<c r="C2" t="e" vm="1"><v>#VALUE!</v></c><c r="D2"', 1)
+            z.writestr(n, data)
+        z.writestr("xl/metadata.xml",
+                   '<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                   '<futureMetadata name="XLRICHVALUE" count="1"><bk><extLst><ext uri="x">'
+                   '<xlrd:rvb xmlns:xlrd="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata" i="0"/>'
+                   '</ext></extLst></bk></futureMetadata>'
+                   '<valueMetadata count="1"><bk><rc t="1" v="0"/></bk></valueMetadata></metadata>')
+        z.writestr("xl/richData/rdrichvalue.xml",
+                   '<rvData xmlns="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata" count="1">'
+                   '<rv s="0"><v>0</v><v>5</v></rv></rvData>')
+        z.writestr("xl/richData/richValueRel.xml",
+                   '<richValueRels xmlns="http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel" '
+                   'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                   '<rel r:id="rId1"/></richValueRels>')
+        z.writestr("xl/richData/_rels/richValueRel.xml.rels",
+                   '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                   '<Relationship Id="rId1" Type="image" Target="../media/image1.png"/></Relationships>')
+        z.writestr("xl/media/image1.png", _png((20, 90, 200)))
+    pics = gl.sheet_images(out.getvalue())
+    assert list(pics["Stock list"]) == [2]
+    inv = gl.build(gl.load_workbooks([("RP.xlsx", out.getvalue())]))["records"]["inventory"]
+    assert inv[0]["image_url"].startswith("data:image/jpeg")
+
+
+def test_pictures_added_to_already_loaded_stock_once(monkeypatch):
+    from openpyxl.drawing.image import Image as XLImage
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Stock list"
+    ws.append(STOCK_HDR)
+    ws.append((1, datetime(2024, 3, 31), None, "Ficus", "V1- ZHI", "Plants", 1, 100, 100, 300, "godown"))
+    ws.append((2, datetime(2024, 3, 31), None, "Sofa", "V2- Casa", "Sofa", 1, 100, 100, 300, "Display"))
+    ws.add_image(XLImage(io.BytesIO(_png())), "C3")
+    buf = io.BytesIO()
+    wb.save(buf)
+    _fake_sharepoint(monkeypatch, files={"RP.xlsx": buf.getvalue()})
+
+    async def go():
+        db = server.db
+        await db.inventory.insert_many([
+            {"id": "a", "tenant_id": "madio", "sku": "MF-0001", "name": "Ficus", "image_url": ""},
+            {"id": "b", "tenant_id": "madio", "sku": "MF-0002", "name": "Sofa", "image_url": ""},
+            {"id": "c", "tenant_id": "other", "sku": "MF-0002", "name": "Sofa", "image_url": ""}])
+        out = await server.go_live_auto_pictures()
+        assert (out["pictures"], out["added"], out["unmatched"]) == (1, 1, 0)
+        assert (await db.inventory.find_one({"id": "b"}))["image_url"].startswith("data:image/jpeg")
+        assert (await db.inventory.find_one({"id": "a"}))["image_url"] == ""
+        assert (await db.inventory.find_one({"id": "c"}))["image_url"] == ""          # other company untouched
+        assert "skipped" in await server.go_live_auto_pictures()                       # once only
+        again = await server.go_live_sharepoint_pictures({}, user=ADMIN)
+        assert (again["added"], again["kept"]) == (0, 1)
+    run(go())

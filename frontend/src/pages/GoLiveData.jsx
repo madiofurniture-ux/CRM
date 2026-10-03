@@ -3,7 +3,7 @@ import Topbar from "@/components/Topbar";
 import api, { formatApiError } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
 import { toast } from "sonner";
-import { Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, Undo2, Zap, Loader2 } from "lucide-react";
+import { Upload, FileSpreadsheet, AlertTriangle, CheckCircle2, Undo2, Zap, Loader2, Image as ImageIcon } from "lucide-react";
 
 /**
  * Admin screen: Go-live data. Upload the working spreadsheets (enquiry book,
@@ -155,6 +155,26 @@ export default function GoLiveData() {
     finally { setBusy(""); }
   };
 
+  // Pictures only: fills in product pictures on the stock already loaded,
+  // from the Stock list in the chosen workbooks. Nothing is archived or replaced.
+  const addPictures = async () => {
+    setBusy("pictures");
+    try {
+      let data;
+      if (source === "upload") {
+        const fd = new FormData();
+        files.forEach((f) => fd.append("files", f));
+        ({ data } = await api.post("/admin/go-live/pictures", fd, { timeout: 300000 }));
+      } else {
+        ({ data } = await api.post("/admin/go-live/sharepoint/pictures", {}, { timeout: 300000 }));
+      }
+      if (!data.pictures) toast.warning("No product pictures found in the Stock list");
+      else toast.success(`${data.added} pictures added` + (data.kept ? `, ${data.kept} items already had one` : "")
+        + (data.unmatched ? `, ${data.unmatched} didn't match an item` : ""));
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail) || "Couldn't add the pictures"); }
+    finally { setBusy(""); }
+  };
+
   const willClear = preview ? Object.entries(preview.will_clear || {}) : [];
   const clearTotal = willClear.reduce((a, [, n]) => a + n, 0);
 
@@ -252,6 +272,18 @@ export default function GoLiveData() {
             </p>
           </section>
         )}
+
+        <section className="bg-[var(--surface)] border border-[var(--border-light)] rounded-2xl p-4 space-y-2">
+          <h2 className="font-heading font-semibold">Product pictures</h2>
+          <p className="text-sm text-[var(--ink-3)]">
+            Copies the pictures from the Stock list (the PICTURE column of the Receipts &amp; Payments book) onto the stock already
+            loaded, using the source chosen in step 1. Nothing else changes, and items that already have a picture keep it.
+          </p>
+          <button type="button" className="btn-ghost text-sm disabled:opacity-60" onClick={addPictures}
+                  disabled={!ready || !!busy} data-testid="golive-pictures">
+            {busy === "pictures" ? <Loader2 size={14} className="animate-spin" /> : <ImageIcon size={14} />} Add product pictures
+          </button>
+        </section>
 
         <section className="bg-[var(--surface)] border border-[var(--border-light)] rounded-2xl p-4 space-y-2">
           <h2 className="font-heading font-semibold">Follow-up flows</h2>

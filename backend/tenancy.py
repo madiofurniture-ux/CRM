@@ -116,6 +116,8 @@ TENANT_COLLECTIONS = {
     "service_tickets", "site_surveys",
     # Go-live data load (go_live_import.py): each load and the records it archived.
     "data_resets", "data_reset_archive",
+    # Product pictures added to already-loaded stock from the same books.
+    "go_live_picture_runs",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's

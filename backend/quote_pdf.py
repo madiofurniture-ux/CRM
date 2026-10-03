@@ -96,7 +96,9 @@ def _image(src: str, max_w: float, max_h: float):
 
 
 def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dict, office: dict,
-           customer: Optional[dict], tenant_id: str, terms: list) -> bytes:
+           customer: Optional[dict], tenant_id: str, terms: list, extras: Optional[list] = None) -> bytes:
+    """extras: [{"title", "items": [str], "numbered": bool}] printed after the
+    highlights (a builder quote's text blocks and payment schedule)."""
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER, TA_RIGHT
     from reportlab.lib.pagesizes import A4
@@ -179,7 +181,11 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
     catalogue = layout == "catalogue"
     spec_fields = preset.get("spec_fields") or []
     any_dims = dw or any(float(l.get("w") or 0) > 0 and float(l.get("h") or 0) > 0 for l in lines)
-    if catalogue:
+    builder = layout == "builder"
+    if builder:
+        hdr = ["S.No", "Description", "Dimensions", "Qty", "Rate (₹)", "Disc %", "GST %", "Amount (₹)"]
+        cw = [.06, .34, .14, .06, .12, .07, .07, .14]
+    elif catalogue:
         hdr = ["Sl No", "Product Picture", "Model Number", "Description", "Unit Price", "Qty", "Amount"]
         cw = [.06, .18, .12, .30, .13, .07, .14]
     elif dw:
@@ -192,42 +198,78 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
     else:
         hdr = ["S.No", "Description", "Qty", "Unit", "Rate (₹)", "Amount (₹)"]
         cw = [.07, .51, .08, .08, .12, .14]
-    rows = [[P(h.replace("\n", "<br/>"), head) for h in hdr]]
-    for n, l in enumerate(lines, 1):
+
+    def row_for(n: int, l: dict) -> list:
         desc = e(l.get("description"))
         specs = l.get("specs") or {}
         spec_lines = [f"{e(f['label'])}: {e(specs.get(f['key']))}" for f in spec_fields
                       if str(specs.get(f["key"]) or "").strip()]
+        if l.get("finish"):
+            spec_lines.append(f"Finish: {e(l['finish'])}")
         cell = "<br/>".join(x for x in [desc] + spec_lines if x) or "—"
+        if builder:
+            return [P(str(n), centre), P(cell, small), P(e(l.get("dimensions")), small),
+                    P(_num(l.get("qty"), 0), centre), P(inr(l.get("rate"), 2), right),
+                    P(f"{float(l.get('discount_pct') or 0):g}%", centre),
+                    P(f"{float(l.get('gst_rate') or 0):g}%", centre), P(inr(l.get("amount"), 2), right)]
         if catalogue:
             img = _image(l.get("image_url"), cw[1] * width - 4, 32 * mm)
-            rows.append([P(str(n), centre), img or P("", centre), P(e(l.get("model_no") or l.get("sku")), centre),
-                         P(cell, small), P(inr(l.get("rate"), 2), right), P(_num(l.get("qty"), 0), centre),
-                         P(inr(l.get("amount"), 2), right)])
-        elif dw:
+            return [P(str(n), centre), img or P("", centre), P(e(l.get("model_no") or l.get("sku")), centre),
+                    P(cell, small), P(inr(l.get("rate"), 2), right), P(_num(l.get("qty"), 0), centre),
+                    P(inr(l.get("amount"), 2), right)]
+        if dw:
             img = _image(l.get("image_url"), cw[1] * width - 4, 30 * mm)
-            rows.append([P(str(n), centre), img or P("", centre), P(cell, small),
-                         P(_num(l.get("w"), 0), right), P(_num(l.get("h"), 0), right),
-                         P(_num(l.get("sft_each")), right), P(_num(l.get("qty"), 0), right),
-                         P(_num(l.get("sft")), right), P(inr(l.get("rate")), right),
-                         P(inr(l.get("amount")), right)])
-        elif any_dims:
-            rows.append([P(str(n), centre), P(cell, small), P(_num(l.get("w")), right), P(_num(l.get("h")), right),
-                         P(_num(l.get("qty"), 0), right), P(_num(l.get("sft")), right),
-                         P(inr(l.get("rate")), right), P(inr(l.get("amount")), right)])
-        else:
-            rows.append([P(str(n), centre), P(cell, small), P(_num(l.get("qty"), 0), right),
-                         P(e(l.get("unit") or ""), centre), P(inr(l.get("rate")), right),
-                         P(inr(l.get("amount")), right)])
-    if not lines:
-        rows.append([P("—", centre)] + [P("", base)] * (len(hdr) - 1))
-    t = Table(rows, colWidths=[c * width for c in cw], repeatRows=1)
-    t.setStyle(TableStyle([
+            return [P(str(n), centre), img or P("", centre), P(cell, small),
+                    P(_num(l.get("w"), 0), right), P(_num(l.get("h"), 0), right),
+                    P(_num(l.get("sft_each")), right), P(_num(l.get("qty"), 0), right),
+                    P(_num(l.get("sft")), right), P(inr(l.get("rate")), right),
+                    P(inr(l.get("amount")), right)]
+        if any_dims:
+            return [P(str(n), centre), P(cell, small), P(_num(l.get("w")), right), P(_num(l.get("h")), right),
+                    P(_num(l.get("qty"), 0), right), P(_num(l.get("sft")), right),
+                    P(inr(l.get("rate")), right), P(inr(l.get("amount")), right)]
+        return [P(str(n), centre), P(cell, small), P(_num(l.get("qty"), 0), right),
+                P(e(l.get("unit") or ""), centre), P(inr(l.get("rate")), right),
+                P(inr(l.get("amount")), right)]
+
+    # Groups (floors, rooms, a builder section): a heading row, the group's
+    # lines, then its subtotal. Ungrouped quotes print as one list.
+    order, grouped = [], {}
+    for l in lines:
+        g = str(l.get("group") or "").strip()
+        if g not in grouped:
+            order.append(g)
+            grouped[g] = []
+        grouped[g].append(l)
+    use_groups = any(order) and (len(order) > 1 or order[0])
+    rows = [[P(h.replace("\n", "<br/>"), head) for h in hdr]]
+    style = [
         ("BACKGROUND", (0, 0), (-1, 0), navy), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("GRID", (0, 0), (-1, -1), .4, colors.HexColor("#BBB4A0")),
         ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
-    ]))
+    ]
+    n = 0
+    group_style = ParagraphStyle("g", parent=base, fontName=bold, fontSize=8.5, textColor=navy)
+    for g in order:
+        if use_groups:
+            rows.append([P(e(g or "Other items"), group_style)] + [""] * (len(hdr) - 1))
+            r = len(rows) - 1
+            style += [("SPAN", (0, r), (-1, r)), ("BACKGROUND", (0, r), (-1, r), pale)]
+        for l in grouped[g]:
+            n += 1
+            rows.append(row_for(n, l))
+        if use_groups:
+            sub = sum(float(l.get("amount") or 0) for l in grouped[g])
+            area = sum(float(l.get("sft") or 0) for l in grouped[g])
+            label = f"Subtotal — {e(g or 'Other items')}" + (f" ({_num(area)} sft)" if dw and area else "")
+            rows.append([P(label, right_b)] + [""] * (len(hdr) - 2) + [P(inr(sub, 0 if dw else 2), right_b)])
+            r = len(rows) - 1
+            style += [("SPAN", (0, r), (-2, r))]
+    if not lines:
+        rows.append([P("—", centre)] + [P("", base)] * (len(hdr) - 1))
+    t = Table(rows, colWidths=[c * width for c in cw], repeatRows=1)
+    t.setStyle(TableStyle(style))
     story.append(t)
 
     # ── totals ──
@@ -241,7 +283,7 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
         tot.append((f"Add : {e(preset.get('transport_label') or 'Transport / Handling')}",
                     inr(totals.get("transport")), False))
     tax_pct = quote.get("tax_pct") if quote.get("tax_pct") is not None else 18
-    tot.append((f"GST @ {float(tax_pct):g}%", inr(totals.get("tax_total")), False))
+    tot.append((totals.get("tax_label") or f"GST @ {float(tax_pct):g}%", inr(totals.get("tax_total")), False))
     if float(totals.get("round_off") or 0):
         tot.append(("Round Off", inr(totals.get("round_off")), False))
     trows = [[P(""), P(f"<b>{lab}</b>" if b else lab, right), P(f"<b>{val}</b>" if b else val, right)]
@@ -290,6 +332,8 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
             story.append(P(f"If you have any questions concerning this quotation, please contact: "
                            f"{e(preset['contact'])}", base))
     story += section("Executive Highlights", preset.get("highlights") or [], False)
+    for extra in extras or []:
+        story += section(extra.get("title") or "", extra.get("items") or [], bool(extra.get("numbered")))
     story += section("Terms & Conditions", terms, True)
     if preset.get("bank"):
         story += [Spacer(1, 3 * mm), P("<b>Bank details</b>", base)] + [P(e(b), base) for b in preset["bank"]]

@@ -1559,6 +1559,9 @@ class QuoteLineBase(BaseModel):
     dim_unit: Optional[str] = ""
     specs: Optional[dict] = None
     image_url: Optional[str] = ""
+    # Optional heading the line sits under on the quotation (a floor, a room,
+    # "Doors" / "Windows"); lines print grouped with a subtotal per group.
+    group: Optional[str] = ""
 
 class DWOpeningBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

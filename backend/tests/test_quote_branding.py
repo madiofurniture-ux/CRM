@@ -77,7 +77,8 @@ def test_new_quote_gets_its_divisions_terms_and_the_workspace_and_pdf_follow_the
                                                 "created_at": "2026-09-12"})
         ws = await server.quote_workspace("q1", user=ADMIN)
         assert ws["preset"]["dims"] == "mm" and ws["totals"]["grand_total"] == 160800
-        assert ws["summary"] == {"openings": 1, "sft": 34.5, "avg_rate": 3753.0}
+        assert ws["summary"] == {"openings": 1, "sft": 34.5, "avg_rate": 3753.0,
+                                 "groups": [{"name": "", "subtotal": 129478.5, "sft": 34.5, "count": 1}]}
         saved = await server.quote_save_total("q1", {"discount": 0, "transport": 9000}, user=ADMIN)
         assert saved["transport"] == 9000 and saved["grand_total"] == 161800
         resp = await server.quote_pdf("q1", user=ADMIN)
@@ -101,4 +102,50 @@ def test_new_madio_quote_starts_at_18_percent_and_gst_can_be_changed_on_save():
         assert (saved["tax_pct"], saved["tax_total"], saved["grand_total"]) == (5, 3700, 77700)
         with pytest.raises(server.HTTPException):
             await server.quote_save_total("q2", {"discount": 0, "tax_pct": 7}, user=ADMIN)
+    run(go())
+
+
+def test_groups_and_builder_quotes_print_in_the_branded_format(monkeypatch):
+    seen = {}
+    real = quote_pdf.render
+
+    def spy(**kw):
+        seen.update(kw)
+        return real(**kw)
+    monkeypatch.setattr(server.qpdf, "render", spy)
+
+    async def go():
+        await server.db.quotes.insert_one({"id": "q3", "tenant_id": "madio", "quote_no": "AF-3", "date": "2026-09-12",
+                                           "customer": "N", "division": "D&W", "version": 1, "tax_pct": 18})
+        for i, (g, w) in enumerate([("Ground floor", 1000), ("First floor", 1500), ("Ground floor", 900)]):
+            await server.db.quote_lines.insert_one({"id": f"g{i}", "tenant_id": "madio", "quote_id": "q3",
+                                                    "version": 1, "dim_unit": "mm", "w": w, "h": 900, "qty": 1,
+                                                    "rate": 1000, "group": g, "created_at": f"2026-09-12T0{i}"})
+        ws = await server.quote_workspace("q3", user=ADMIN)
+        assert [g["name"] for g in ws["summary"]["groups"]] == ["Ground floor", "First floor"]
+        assert ws["summary"]["groups"][0]["sft"] == 19.0
+        resp = await server.quote_pdf("q3", user=ADMIN)
+        assert resp.body[:4] == b"%PDF"
+
+        builder = {"id": "q4", "tenant_id": "madio", "quote_no": "AF-4", "date": "2026-09-12", "customer": "N",
+                   "division": "Furniture", "version": 1, "sections": [
+                       {"id": "s1", "type": "ITEM_GRID", "title": "Living Room",
+                        "items": [{"description": "Sofa", "dimensions": "8ft", "qty": 1, "unit_rate": 100000,
+                                   "discount_pct": 10, "gst_rate": 18}]},
+                       {"id": "s2", "type": "ITEM_GRID", "title": "Bedroom",
+                        "items": [{"description": "Bed", "qty": 2, "unit_rate": 50000, "gst_rate": 18}]},
+                       {"id": "s3", "type": "PAYMENT_MILESTONES", "title": "Payment",
+                        "milestones": [{"label": "Advance", "pct": 50}, {"label": "Delivery", "pct": 50}]},
+                       {"id": "s4", "type": "TERMS_CONDITIONS", "title": "Terms",
+                        "text": "Quote valid for 15 days. Site to be ready."}]}
+        builder["financial_summary"] = server._compute_quote_financials(builder["sections"])
+        await server.db.quotes.insert_one(dict(builder))
+        resp = await server.quote_pdf("q4", user=ADMIN)
+        assert resp.body[:4] == b"%PDF"
+        assert seen["preset"]["layout"] == "builder" and seen["preset"]["logo"] == "furniture.png"
+        assert [l["group"] for l in seen["lines"]] == ["Living Room", "Bedroom"]
+        assert seen["lines"][0]["amount"] == 90000 and seen["totals"]["grand_total"] == 224200
+        titles = [x["title"] for x in seen["extras"]]
+        assert titles == ["Payment", "Terms & Scope"] and seen["extras"][1]["items"] == [
+            "Quote valid for 15 days.", "Site to be ready."]
     run(go())

@@ -92,7 +92,10 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   only the formats differ. Division presets (`division_preset(tenant, division)`:
   layout, mm/ft lines, rounding, GST, standard terms, highlights, bank, logo in
   `backend/assets/brand/<tenant>/`) drive the workspace and the branded PDF
-  (`backend/quote_pdf.py`, `GET /quotes/{id}/pdf`).
+  (`backend/quote_pdf.py`, `GET /quotes/{id}/pdf`). Quote Builder quotes
+  (sections, no lines) print in the same branded format (`layout="builder"`);
+  workspace lines carry `group` (printed with subtotals) and `image_url`
+  (typology / product picture).
 - Don't rename or restructure modules outside the task's scope.
 
 ## End-to-end flow (the spine)

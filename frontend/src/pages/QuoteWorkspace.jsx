@@ -8,9 +8,10 @@ import AttachmentPanel from "@/components/AttachmentPanel";
 import ProductPicker, { StockBadge, rateFromMrp } from "@/components/ProductPicker";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
+import { shrinkImage } from "@/lib/image";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { ChevronLeft, Plus, Trash2, ArrowRightCircle, GitBranch, FileDown, SlidersHorizontal } from "lucide-react";
+import { ChevronLeft, Plus, Trash2, ArrowRightCircle, GitBranch, FileDown, SlidersHorizontal, FolderPlus, ImagePlus, X } from "lucide-react";
 
 // Full detail workspace for one quote: line-item builder, discount + approval, versions.
 export default function QuoteWorkspace() {
@@ -24,6 +25,10 @@ export default function QuoteWorkspace() {
   const [busy, setBusy] = useState(false);
   const lineTimers = useRef({});   // per-line debounce timers, kept across renders
   const [stock, setStock] = useState({});   // sku -> live stock for inventory-linked lines
+  // Group new lines are added under (a floor, a room, "Doors"); groups that
+  // have no lines yet live only here until their first line is added.
+  const [curGroup, setCurGroup] = useState("");
+  const [newGroups, setNewGroups] = useState([]);
 
   const load = useCallback(async () => {
     try {
@@ -81,7 +86,7 @@ export default function QuoteWorkspace() {
     setBusy(true);
     try {
       await api.post("/quote-lines", {
-        quote_id: id, version: q.version || 1, description: "", w: 0, h: 0, qty: 1, rate: 0,
+        quote_id: id, version: q.version || 1, description: "", w: 0, h: 0, qty: 1, rate: 0, group: curGroup,
         ...(mm ? { dim_unit: "mm", specs: { ...(preset.spec_defaults || {}) } } : {}),
       });
       await load();
@@ -99,6 +104,25 @@ export default function QuoteWorkspace() {
     }, 700);
   };
   const removeLine = async (lid) => { await api.delete(`/quote-lines/${lid}`); load(); };
+  // Groups in order of first appearance, as the quotation prints them.
+  const lineGroups = [];
+  for (const l of ws.lines) {
+    const g = (l.group || "").trim();
+    if (!lineGroups.includes(g)) lineGroups.push(g);
+  }
+  const groupNames = [...lineGroups.filter(Boolean), ...newGroups.filter((g) => !lineGroups.includes(g))];
+  const grouped = lineGroups.some(Boolean);
+  const groupSummary = Object.fromEntries((ws.summary?.groups || []).map((g) => [g.name, g]));
+  const addGroup = () => {
+    const name = (window.prompt("Group name — a floor, a room, or e.g. “Doors”") || "").trim();
+    if (!name) return;
+    if (!groupNames.includes(name)) setNewGroups((p) => [...p, name]);
+    setCurGroup(name);
+  };
+  const pickPicture = async (line, file) => {
+    try { patchLine(line, { image_url: await shrinkImage(file, 800) }); }
+    catch (e) { toast.error(e.message || "Could not use that picture"); }
+  };
   // A product from inventory becomes a priced line; MRP includes GST, so the
   // pre-GST rate is used because the quote adds GST on its total.
   const addProduct = async (item) => {
@@ -107,7 +131,7 @@ export default function QuoteWorkspace() {
     try {
       const taxPct = q.tax_pct ?? 18;
       await api.post("/quote-lines", {
-        quote_id: id, version: q.version || 1, w: 0, h: 0, qty: 1,
+        quote_id: id, version: q.version || 1, w: 0, h: 0, qty: 1, group: curGroup,
         description: [item.name, item.model_no, item.material_finish].filter(Boolean).join(" · "),
         rate: rateFromMrp(item.mrp, item.gst_pct ?? taxPct), sku: item.sku, unit: item.unit, hsn: item.hsn,
       });
@@ -221,7 +245,13 @@ export default function QuoteWorkspace() {
             <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
               <div className="p-3 border-b border-[var(--border-light)] flex justify-between items-center">
                 <div className="font-heading font-semibold text-sm">Line items</div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <select value={curGroup} onChange={(e) => setCurGroup(e.target.value)} title="Group new lines are added under"
+                          className="px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white text-sm max-w-[10rem]" data-testid="quote-group-select">
+                    <option value="">No group</option>
+                    {groupNames.map((g) => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                  <button onClick={addGroup} className="btn-ghost" data-testid="quote-add-group"><FolderPlus size={14} /> Add group</button>
                   <ProductPicker onPick={addProduct} className="w-56 md:w-72" testId="quote-product-picker" />
                   <button onClick={addLine} disabled={busy} className="btn-ghost disabled:opacity-60"><Plus size={14} /> Add line</button>
                 </div>
@@ -242,8 +272,11 @@ export default function QuoteWorkspace() {
                     </tr>
                   </thead>
                   <tbody>
-                    {ws.lines.map((l) => (
-                      <LineRows key={l.id} line={l} mm={mm} specFields={specFields} patchLine={patchLine}>
+                    {lineGroups.map((g) => (
+                      <GroupRows key={g || "_"} name={g} grouped={grouped} cols={mm ? 9 : 8} mm={mm} summary={groupSummary[g]}>
+                    {ws.lines.filter((l) => (l.group || "").trim() === g).map((l) => (
+                      <LineRows key={l.id} line={l} mm={mm} specFields={specFields} patchLine={patchLine}
+                                groups={groupNames} onPicture={pickPicture}>
                       <tr className="border-t border-[var(--border-light)]">
                         <td className="px-3 py-2"><I v={l.description} oc={(v) => patchLine(l, { description: v })} />
                           {l.sku && (
@@ -263,6 +296,8 @@ export default function QuoteWorkspace() {
                         <td className="px-2 py-2"><button onClick={() => removeLine(l.id)} className="p-1 rounded hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button></td>
                       </tr>
                       </LineRows>
+                    ))}
+                      </GroupRows>
                     ))}
                     {ws.lines.length === 0 && <tr><td colSpan={mm ? 9 : 8} className="text-center py-8 text-[var(--ink-3)]">No line items — add the first.</td></tr>}
                   </tbody>
@@ -305,10 +340,31 @@ export default function QuoteWorkspace() {
   );
 }
 
-/** A line row plus, for Doors & Windows, its opening specification. */
-function LineRows({ line, mm, specFields, patchLine, children }) {
+/** A group's heading, its lines and — once a quote has groups — its subtotal. */
+function GroupRows({ name, grouped, cols, mm, summary, children }) {
+  if (!grouped) return children;
+  return (
+    <>
+      <tr className="bg-[var(--brand-soft)]/60 border-t border-[var(--border)]">
+        <td colSpan={cols} className="px-3 py-1.5 text-xs font-semibold text-[var(--brand)]" data-testid={`quote-group-${name || "other"}`}>{name || "Other items"}</td>
+      </tr>
+      {children}
+      <tr className="border-t border-[var(--border-light)]">
+        <td colSpan={cols - 2} className="px-3 py-1.5 text-right text-xs text-[var(--ink-3)]">
+          Subtotal — {name || "Other items"}{mm && summary?.sft ? ` · ${summary.sft} sft` : ""}
+        </td>
+        <td className="px-3 py-1.5 text-right font-mono text-xs font-semibold">{inrFull(summary?.subtotal || 0)}</td>
+        <td></td>
+      </tr>
+    </>
+  );
+}
+
+/** A line row plus its details: group, picture (printed on the quotation)
+ *  and, for Doors & Windows, the opening specification. */
+function LineRows({ line, mm, specFields, patchLine, groups, onPicture, children }) {
   const [open, setOpen] = useState(false);
-  if (!specFields.length) return children;
+  const fileRef = useRef(null);
   const specs = line.specs || {};
   const filled = specFields.filter((f) => String(specs[f.key] || "").trim()).length;
   return (
@@ -316,10 +372,40 @@ function LineRows({ line, mm, specFields, patchLine, children }) {
       {children}
       <tr className="bg-[var(--surface-2)]/40">
         <td colSpan={mm ? 9 : 8} className="px-3 pb-2">
-          <button type="button" onClick={() => setOpen((v) => !v)} className="text-xs text-[var(--brand)] inline-flex items-center gap-1"
-                  data-testid={`quote-line-specs-${line.id}`}>
-            <SlidersHorizontal size={12} /> Specification ({filled}/{specFields.length})
-          </button>
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            {specFields.length > 0 && (
+              <button type="button" onClick={() => setOpen((v) => !v)} className="text-[var(--brand)] inline-flex items-center gap-1"
+                      data-testid={`quote-line-specs-${line.id}`}>
+                <SlidersHorizontal size={12} /> Specification ({filled}/{specFields.length})
+              </button>
+            )}
+            {line.image_url ? (
+              <span className="inline-flex items-center gap-1">
+                <img src={line.image_url} alt="" className="h-10 w-10 object-contain rounded border border-[var(--border)] bg-white cursor-pointer"
+                     onClick={() => fileRef.current?.click()} data-testid={`quote-line-picture-${line.id}`} />
+                <button type="button" onClick={() => patchLine(line, { image_url: "" })} title="Remove picture"
+                        className="p-0.5 rounded hover:bg-[var(--danger-soft)] text-[var(--danger)]"><X size={12} /></button>
+              </span>
+            ) : (
+              <button type="button" onClick={() => fileRef.current?.click()} className="text-[var(--brand)] inline-flex items-center gap-1"
+                      data-testid={`quote-line-add-picture-${line.id}`}>
+                <ImagePlus size={12} /> {mm ? "Typology picture" : "Picture"}
+              </button>
+            )}
+            <input ref={fileRef} type="file" accept="image/*" className="hidden"
+                   onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) onPicture(line, f); }} />
+            {groups.length > 0 && (
+              <label className="inline-flex items-center gap-1 text-[var(--ink-3)]">
+                Group
+                <select value={(line.group || "").trim()} onChange={(e) => patchLine(line, { group: e.target.value })}
+                        className="px-1.5 py-0.5 rounded border border-[var(--border)] bg-white text-xs text-[var(--ink)]"
+                        data-testid={`quote-line-group-${line.id}`}>
+                  <option value="">No group</option>
+                  {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </label>
+            )}
+          </div>
           {open && (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2">
               {specFields.map((f) => (

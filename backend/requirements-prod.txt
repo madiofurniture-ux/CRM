@@ -14,3 +14,4 @@ python-multipart>=0.0.9   # UploadFile/Form parsing — bulk CSV import routes
 reportlab>=4.2.0           # server-rendered quote PDFs — pure-Python, no native deps
 openpyxl>=3.1.0            # go-live data load reads the .xlsx books (go_live_import.py)
 requests>=2.31.0          # notifications.py (WhatsApp Cloud API) — imported at startup
+pillow>=9.0                # go-live product pictures shrunk to JPEG (go_live_import.picture_url)

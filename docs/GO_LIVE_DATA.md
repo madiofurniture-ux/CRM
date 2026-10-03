@@ -18,7 +18,7 @@ Sheets are recognised by name, so file names and upload order don't matter.
 | | Arch | architects & partners |
 | Purchase Order book | Purchase Order | vendors + purchase orders (one PO per number; follow-on rows are its lines) |
 | | Sheet2 (MAP stock list) | MAP inventory items (`MAP-001`…), qty = containers |
-| Receipts and Payments | Stock list | furniture inventory (`MF-0001`…), preferred over the MIS Closing Stock; vendors keep their V-codes (V1, V2…) |
+| Receipts and Payments | Stock list | furniture inventory (`MF-0001`…), preferred over the MIS Closing Stock; vendors keep their V-codes (V1, V2…); the PICTURE column's pictures (floating or "Place in Cell") become each item's picture (320 px JPEG) |
 | MIS | Closing Stock | furniture inventory when there is no Stock list |
 | | ledger letterheads (…Accounts / Indirect… sheets only) | office name, address and GSTIN for invoices |
 
@@ -108,3 +108,15 @@ in execution over 21 days. All are ordinary flows, editable under Flows.
 4. Add starter flows.
 5. Spot-check Visitors, Quotes, Sales Register, Customers, Stock, Purchase
    Orders and Settings → Office.
+
+
+## Product pictures for stock already loaded
+
+Admin → Go-live Data → **Add product pictures** reads the same books (upload
+or SharePoint) and only fills in `inventory.image_url`, matching each Stock
+list row by its loaded SKU + name (else name + model no.). Nothing is
+archived or replaced; items that already have a picture keep it. Routes:
+`POST /api/admin/go-live/pictures` (files) and
+`POST /api/admin/go-live/sharepoint/pictures`. When `GO_LIVE_SHAREPOINT_RUN`
+is set, the server also does this once per company at startup (claimed in
+`go_live_picture_runs`; a failed run is retried on the next start).
