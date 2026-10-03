@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, todayIST } from "@/lib/format";
 import { Check, Calendar, User, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,7 +26,7 @@ export default function Tasks() {
     return rows;
   }, [rows, filter]);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
 
   const counts = {
     open: rows.filter((r) => !r.done).length,

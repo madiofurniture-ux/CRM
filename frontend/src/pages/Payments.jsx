@@ -3,7 +3,7 @@ import Topbar from "@/components/Topbar";
 import EmptyState from "@/components/EmptyState";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import api, { formatApiError } from "@/lib/api";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { Wallet, Landmark, Receipt, X, Download } from "lucide-react";
 
@@ -16,7 +16,7 @@ const STATUS_TONE = {
 };
 
 const emptyForm = {
-  project_id: "", payment_mode: "SPLIT", receipt_date: new Date().toISOString().slice(0, 10),
+  project_id: "", payment_mode: "SPLIT", receipt_date: todayIST(),
   bt_taxable: "", gst_rate: "18", utr_reference: "", other_amount: "", wallet_id: "",
 };
 

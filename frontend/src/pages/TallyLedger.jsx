@@ -3,7 +3,7 @@ import Topbar from "@/components/Topbar";
 import EmptyState from "@/components/EmptyState";
 import TallyConnectorPanel from "@/components/TallyConnectorPanel";
 import api, { formatApiError } from "@/lib/api";
-import { inrFull } from "@/lib/format";
+import { inrFull, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import {
   ArrowLeftRight, RefreshCw, CheckCircle2, AlertCircle, Loader2,
@@ -28,7 +28,7 @@ const TABS = [
 ];
 
 const emptyForm = {
-  date: new Date().toISOString().slice(0, 10),
+  date: todayIST(),
   type: "OUT", payment_mode: "CASH", amount: "",
   from_ledger: "Cash-in-Hand", to_ledger: "", reference_no: "", narration: "",
 };

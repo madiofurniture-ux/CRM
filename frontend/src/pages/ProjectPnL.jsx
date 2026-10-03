@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 import api from "@/lib/api";
-import { inr, inrFull, fmtDate, marginTone } from "@/lib/format";
+import { inr, inrFull, fmtDate, marginTone, todayIST } from "@/lib/format";
 import {
   IndianRupee, Wallet, TrendingUp, AlertTriangle, Download, ChevronDown, ChevronRight,
   LineChart, Plus, ExternalLink,
@@ -39,7 +39,7 @@ export default function ProjectPnL() {
     const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `project_pnl_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `project_pnl_${todayIST()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   };

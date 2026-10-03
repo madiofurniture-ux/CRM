@@ -3,6 +3,7 @@ import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import SearchSelect from "@/components/SearchSelect";
+import { downloadPdf } from "@/lib/pdf";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { shrinkImage } from "@/lib/image";
@@ -87,13 +88,7 @@ const vendorLabel = (r) => [r.vendor_code, r.vendor].filter(Boolean).join(" · "
 // would arrive unauthenticated. Same pattern as QuoteBuilder's quote PDF.
 async function openPriceTag(item) {
   try {
-    const { data } = await api.get(`/inventory/${item.id}/price-tag.pdf`, {
-      skipCache: true, responseType: "blob",
-    });
-    const url = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
-    window.open(url, "_blank", "noopener");
-    // Revoke late: revoking immediately can race the new tab's own load.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    await downloadPdf(`/inventory/${item.id}/price-tag.pdf`, `Price tag ${item.sku || item.name || ""}`);
   } catch {
     toast.error("Could not generate the price tag");
   }

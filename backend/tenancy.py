@@ -69,7 +69,7 @@ def stage_field(entity: str) -> str:
 # one. Kept in sync with models.py by tests/test_workflow_engine.py.
 LOCKED_STAGES: dict[str, list] = {
     "project": ["Survey", "Quoted", "Execution", "Review", "Closure", "Completed"],
-    "vendor_order": ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered"],
+    "vendor_order": ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered", "Installed"],
     "purchase_order": ["Draft", "Issued", "Received", "Cancelled"],
     "invoice": ["Draft", "Sent", "Paid", "Cancelled"],
     "task": ["Pending", "In Progress", "Completed", "Rolled Over"],
@@ -191,7 +191,7 @@ DEFAULT_WORKFLOWS: dict[str, list] = {
     "project":  _stages("Survey", "Quoted", "Execution", "Review", "Closure",
                         ("Completed", True, True)),
     "vendor_order": _stages("Quoted", "Confirmed", "In Production", "Dispatched",
-                            ("Delivered", True, True)),
+                            "Delivered", ("Installed", True, True)),
     "purchase_order": _stages("Draft", "Issued", ("Received", True, True),
                               ("Cancelled", True, False)),
     "invoice":  _stages("Draft", "Sent", ("Paid", True, True), ("Cancelled", True, False)),
@@ -257,6 +257,23 @@ def validate_stages(stages: Any, entity: str = "", fields: Iterable[str] | None 
         for s, label in zip(out, LOCKED_STAGES[entity]):
             s["label"] = label
     return out
+
+
+def with_locked_stages(entity: str, stages: list) -> list:
+    """A saved workflow brought up to the system's fixed stage list: a stage
+    the system added since it was saved (e.g. vendor orders' "Installed")
+    comes in with its default settings, in the fixed order. Anything else is
+    returned unchanged."""
+    if entity not in LOCKED_STAGES:
+        return stages
+    want = [stage_key(x) for x in LOCKED_STAGES[entity]]
+    if [s.get("key") for s in stages] == want:
+        return stages
+    saved = {s.get("key"): s for s in stages}
+    defaults = {s["key"]: s for s in default_workflow(entity)}
+    if not set(saved) <= set(want):
+        return stages            # not a simple upgrade; leave it for an admin to fix
+    return [saved.get(k) or defaults[k] for k in want]
 
 
 def _probability(value: Any, label: str):

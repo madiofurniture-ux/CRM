@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Topbar from "@/components/Topbar";
 import api from "@/lib/api";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, todayIST } from "@/lib/format";
 import { MapPin, Navigation, Camera, CheckCircle2, AlertCircle, Clock, ShieldCheck, UserCheck, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import AttendanceExceptionDrawer from "@/components/AttendanceExceptionDrawer";
@@ -26,7 +26,7 @@ const RANGE_OPTIONS = [
 // actually record; see server.py's check_in/check_out).
 const isException = (r) => {
   if (r.status === "flagged_out_of_bounds") return true;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
   return !!(r.check_in_at && !r.check_out_at && r.date !== today);
 };
 
@@ -135,7 +135,7 @@ export default function Attendance() {
       if (isAdmin && employeeId) params.user_id = employeeId;
       const { data } = await api.get("/attendance", { params });
       setLogs(data);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayIST();
       const mine = data.find((r) => r.date === today);
       setTodayRec(mine || null);
     } catch (e) {
@@ -160,7 +160,7 @@ export default function Attendance() {
   // attendance system, and no fabricated Late/LOP/Holiday concept (this
   // collection has neither — see docs/LIGHT_PEOPLE_UI.md).
   const summary = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayIST();
     let present = 0, absent = 0, openExceptions = 0, overtimeHours = 0;
     for (const r of logs) {
       if (r.status === "absent") absent++;

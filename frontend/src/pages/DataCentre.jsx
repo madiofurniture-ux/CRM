@@ -4,6 +4,7 @@ import api from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Download, Upload, Database } from "lucide-react";
+import { todayIST } from "@/lib/format";
 
 // Import / export any dataset as CSV. Both are admin-only: export reads
 // across the whole tenant's data, import writes across the whole collection.
@@ -27,7 +28,7 @@ export default function DataCentre() {
     const blob = new Blob([data.csv], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `crm_${name}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `crm_${name}_${todayIST()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
     toast.success(`Exported ${data.count} ${name} rows`);

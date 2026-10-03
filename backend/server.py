@@ -7,6 +7,14 @@ load_dotenv(ROOT_DIR / ".env")
 
 import os
 import re
+import time as _time
+
+# Business dates are Indian: date.today() (sale/quote dates, YYMM numbering,
+# "today's" follow-ups) must not roll over at 05:30 IST on a UTC host.
+# Timestamps stay explicit UTC (models.now_iso).
+os.environ.setdefault("TZ", "Asia/Kolkata")
+if hasattr(_time, "tzset"):
+    _time.tzset()
 import json
 import copy
 import logging
@@ -1092,8 +1100,11 @@ async def tenant_create(payload: dict, user: dict = Depends(require_admin)):
 # describe their own pipeline without a code change.
 # ══════════════════════════════════════════════════════════════════
 async def workflow_doc(entity: str, user: dict) -> dict | None:
-    return await db.workflows.find_one(
+    doc = await db.workflows.find_one(
         tenancy.scope({"entity": entity}, "workflows", user), {"_id": 0})
+    if doc and doc.get("stages"):
+        doc["stages"] = tenancy.with_locked_stages(entity, doc["stages"])
+    return doc
 
 
 async def workflow_for(entity: str, user: dict):
@@ -3079,6 +3090,10 @@ async def normalize_manufacturer_order(doc: dict, existing: dict | None, user: d
             tenancy.scope({"id": doc["po_id"]}, "purchase_orders", user), {"_id": 0, "id": 1})
         if not po:
             raise HTTPException(status_code=400, detail="Linked purchase order not found")
+
+    status = doc.get("status", (existing or {}).get("status", ""))
+    if status in ("Delivered", "Installed") and not (doc.get("delivered_date") or (existing or {}).get("delivered_date")):
+        doc["delivered_date"] = lc.today_iso()
 
     if existing is None:
         if not doc.get("date"):

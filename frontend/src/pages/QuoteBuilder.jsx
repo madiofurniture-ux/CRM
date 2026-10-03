@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
+import { downloadPdf } from "@/lib/pdf";
 import api, { formatApiError } from "@/lib/api";
-import { inrFull } from "@/lib/format";
+import { inrFull, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import {
   GripVertical, Plus, X, FileText, Table2, Wallet, ClipboardList, PenTool,
@@ -90,7 +91,7 @@ export default function QuoteBuilder() {
       const { data: existing } = await api.get("/quotes");
       const quote_no = `AF-${String(existing.length + 1).padStart(4, "0")}`;
       const { data } = await api.post("/quotes", {
-        quote_no, date: new Date().toISOString().slice(0, 10), customer: "New Customer",
+        quote_no, date: todayIST(), customer: "New Customer",
         template_id: templateId,
       });
       setShowTemplates(false);
@@ -103,7 +104,7 @@ export default function QuoteBuilder() {
       const { data: existing } = await api.get("/quotes");
       const quote_no = `AF-${String(existing.length + 1).padStart(4, "0")}`;
       const { data } = await api.post("/quotes", {
-        quote_no, date: new Date().toISOString().slice(0, 10), customer: "New Customer",
+        quote_no, date: todayIST(), customer: "New Customer",
         sections: [], layout_config: { section_order: [], visible: {} },
       });
       setShowTemplates(false);
@@ -176,9 +177,8 @@ export default function QuoteBuilder() {
   const previewPdf = async () => {
     if (!quote) return;
     await save();
-    const { data } = await api.get(`/quotes/${quote.id}/pdf`, { skipCache: true, responseType: "blob" });
-    const blob = new Blob([data], { type: "application/pdf" });
-    window.open(URL.createObjectURL(blob), "_blank");
+    try { await downloadPdf(`/quotes/${quote.id}/pdf`, `Quotation ${quote.quote_no || quote.id}`); }
+    catch { toast.error("Couldn't build the PDF"); }
   };
 
   const fs = quote ? computeFinancials(quote.sections || []) : null;

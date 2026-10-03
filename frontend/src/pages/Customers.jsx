@@ -14,7 +14,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Skeleton } from "@/components/ui/skeleton";
 import useCustomFields from "@/hooks/useCustomFields";
 import api from "@/lib/api";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { Compass, X, Pencil, Phone, MessageCircle, Contact, Download, Upload, FolderOpen } from "lucide-react";
 
@@ -72,7 +72,7 @@ export default function Customers() {
     const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `customers_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `customers_${todayIST()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   };

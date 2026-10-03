@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import SearchSelect from "@/components/SearchSelect";
 import api, { formatApiError } from "@/lib/api";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, todayIST } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { Phone, MapPin, Building, X, Pencil, Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -18,7 +18,7 @@ export default function Architects() {
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const empty = { name: "", firm: "", type: "Architect", location: "", phone: "", alternate_contacts: [], last_contact: new Date().toISOString().slice(0, 10), visited: false, assigned_to: "", assigned_to_id: "", remarks: "" };
+  const empty = { name: "", firm: "", type: "Architect", location: "", phone: "", alternate_contacts: [], last_contact: todayIST(), visited: false, assigned_to: "", assigned_to_id: "", remarks: "" };
   const [form, setForm] = useState(empty);
 
   const load = async () => { const { data } = await api.get("/architects"); setRows(data); };

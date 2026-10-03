@@ -6,6 +6,7 @@ import StageProgressBar from "@/components/StageProgressBar";
 import LogTimeline from "@/components/LogTimeline";
 import AttachmentPanel from "@/components/AttachmentPanel";
 import ProductPicker, { StockBadge, rateFromMrp } from "@/components/ProductPicker";
+import { downloadPdf } from "@/lib/pdf";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { shrinkImage } from "@/lib/image";
@@ -140,13 +141,9 @@ export default function QuoteWorkspace() {
     } finally { setBusy(false); }
   };
 
-  const downloadPdf = async () => {
-    try {
-      const { data } = await api.get(`/quotes/${id}/pdf`, { skipCache: true, responseType: "blob" });
-      const url = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
-      window.open(url, "_blank", "noopener");
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-    } catch { toast.error("Couldn't build the PDF"); }
+  const getPdf = async () => {
+    try { await downloadPdf(`/quotes/${id}/pdf`, `Quotation ${ws?.quote?.quote_no || id}`); }
+    catch { toast.error("Couldn't build the PDF"); }
   };
 
   const saveTotal = async (discount, transport, tax_pct) => {
@@ -196,7 +193,7 @@ export default function QuoteWorkspace() {
         actions={
           <div className="flex items-center gap-2">
             <StageBadge stage={q.derived_status} />
-            <button onClick={downloadPdf} className="btn-ghost" data-testid="quote-pdf"><FileDown size={14} /> PDF</button>
+            <button onClick={getPdf} className="btn-ghost" data-testid="quote-pdf"><FileDown size={14} /> PDF</button>
             <button onClick={revise} disabled={busy} className="btn-ghost disabled:opacity-60"><GitBranch size={14} /> Revise</button>
             <button onClick={convert} disabled={pending || busy || !isAdmin}
               title={!isAdmin ? "Admin approval required to convert a quote to a sale" : undefined}

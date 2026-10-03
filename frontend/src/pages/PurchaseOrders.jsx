@@ -2,8 +2,9 @@ import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import SearchSelect from "@/components/SearchSelect";
+import { downloadPdf } from "@/lib/pdf";
 import api from "@/lib/api";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { X, Plus, Trash2, FileText } from "lucide-react";
 import { toast } from "sonner";
 
@@ -31,10 +32,7 @@ async function openPoPdf(po) {
   try {
     // Bearer-token authed, so it must be fetched as a blob — same pattern as
     // the inventory price tag and the quote PDF.
-    const { data } = await api.get(`/purchase-orders/${po.id}/pdf`, { skipCache: true, responseType: "blob" });
-    const url = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
-    window.open(url, "_blank", "noopener");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    await downloadPdf(`/purchase-orders/${po.id}/pdf`, `Purchase Order ${po.po_no || po.id}`);
   } catch {
     toast.error("Could not generate the purchase order PDF");
   }
@@ -53,7 +51,7 @@ export default function PurchaseOrders() {
   const [savingVendor, setSavingVendor] = useState(false);
 
   const empty = {
-    date: new Date().toISOString().slice(0, 10), vendor_id: "", project_id: "",
+    date: todayIST(), vendor_id: "", project_id: "",
     payment_terms: "", delivery_address: "", expected_date: "", status: "Draft",
     remarks: "", line_items: [emptyLine()],
   };

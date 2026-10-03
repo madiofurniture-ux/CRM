@@ -711,3 +711,19 @@ def test_an_unlisted_filter_param_is_ignored_not_passed_to_mongo():
         rows = await list_orders(_Req(), mask_other=False, user=ADMIN)
         assert len(rows) == 1
     asyncio.run(run())
+
+
+def test_delivered_date_is_stamped_once_on_delivery():
+    async def run():
+        await _make_manufacturer()
+        doc = {"vendor_id": "v1", "status": "Dispatched", "promised_date": "2026-09-01"}
+        await server.normalize_manufacturer_order(doc, None, ADMIN)
+        assert not doc.get("delivered_date")
+        doc = {"vendor_id": "v1", "status": "Delivered"}
+        await server.normalize_manufacturer_order(doc, None, ADMIN)
+        assert doc["delivered_date"]
+        later = {"vendor_id": "v1", "status": "Installed"}
+        await server.normalize_manufacturer_order(later, {"delivered_date": "2026-09-05"}, ADMIN)
+        assert "delivered_date" not in later           # the first delivery date stays
+        assert ManufacturerOrderCreate(vendor_id="v1", status="Installed").status == "Installed"
+    asyncio.run(run())

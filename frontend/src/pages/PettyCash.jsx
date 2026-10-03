@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import KpiCard from "@/components/KpiCard";
 import api from "@/lib/api";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, Wallet, X } from "lucide-react";
 
@@ -15,7 +15,7 @@ export default function PettyCash() {
   const [show, setShow] = useState(false);
   const [fKind, setFKind] = useState("All");
   const [saving, setSaving] = useState(false);
-  const empty = { date: new Date().toISOString().slice(0, 10), kind: "Out", category: "Misc", party: "", description: "", amount: 0, mode: "Cash", by_user: "", ref: "" };
+  const empty = { date: todayIST(), kind: "Out", category: "Misc", party: "", description: "", amount: 0, mode: "Cash", by_user: "", ref: "" };
   const [form, setForm] = useState(empty);
 
   const load = async () => { const { data } = await api.get("/petty-cash"); setRows(data); };

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { CheckCircle2, Circle, ListTodo } from "lucide-react";
+import { todayIST } from "@/lib/format";
 
 // Tasks linked to one Lead/Project via Task.ref+ref_type, with a 1-click
 // "+ Add Daily Task" that pre-populates the link. Reused by Leads.jsx and
@@ -31,7 +32,7 @@ export default function LinkedTasksPanel({ refId, refType, entityName }) {
     try {
       await api.post("/daily-planner", {
         title: trimmed, ref: refId, ref_type: refType, linked_entity_name: entityName,
-        date: new Date().toISOString().slice(0, 10),
+        date: todayIST(),
       });
       setTitle("");
       load();

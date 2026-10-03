@@ -7,14 +7,14 @@ import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 import api, { formatApiError } from "@/lib/api";
 import { shrinkImage, dataUrlKb } from "@/lib/image";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { GST_SLABS } from "@/lib/constants";
 import { X, Factory, ImagePlus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 // Mirrors models.MO_STATUSES. "Quoted" is this document's draft state and is
 // the one status that does NOT reach project P&L.
-const STATUSES = ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered"];
+const STATUSES = ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered", "Installed"];
 const MODE_LABEL = { BANK_TRANSFER: "Bank Transfer", OTHER: "Other (Direct)" };
 
 // The server nulls every settlement figure under privacy mode, so a masked
@@ -25,11 +25,21 @@ const MASK = "••••••";
 const money = (v) => (v == null ? MASK : inrFull(v));
 
 const emptyForm = {
-  date: new Date().toISOString().slice(0, 10), vendor_id: "", project_id: "",
+  date: todayIST(), vendor_id: "", project_id: "",
   division: "", site_location: "", description: "", quote_no: "", po_id: "",
   image_url: "", notes: "", actual_amount: "", tax_rate: "0",
-  bank_due: "", other_due: "", status: "Quoted",
+  bank_due: "", other_due: "", status: "Quoted", promised_date: "", delivered_date: "",
 };
+
+// Promised vs actual delivery: late when delivered after the promise, or
+// still not delivered once the promised date has passed.
+function deliveryNote(o) {
+  if (!o.promised_date && !o.delivered_date) return null;
+  const today = todayIST();
+  const late = o.promised_date && ((o.delivered_date && o.delivered_date > o.promised_date)
+    || (!o.delivered_date && o.promised_date < today));
+  return { late, text: o.delivered_date ? `Delivered ${fmtDate(o.delivered_date)}` : `Due ${fmtDate(o.promised_date)}` };
+}
 
 export default function ManufacturerOrders() {
   const { isOtherHidden, requestUnlock } = usePrivacyMode();
@@ -105,6 +115,7 @@ export default function ManufacturerOrders() {
       // placeholder that would be saved back as a real number.
       bank_due: o.bank_due ?? "", other_due: o.other_due ?? "",
       status: o.status || "Quoted",
+      promised_date: o.promised_date || "", delivered_date: o.delivered_date || "",
     });
     setEditingId(o.id);
     setShow(true);
@@ -284,7 +295,14 @@ export default function ManufacturerOrders() {
                           title="Hidden by privacy mode — click to unlock">{MASK}</button>
                       ) : inrFull(o.other_due)}
                     </td>
-                    <td className="px-4 py-2"><StageBadge stage={o.status} /></td>
+                    <td className="px-4 py-2"><StageBadge stage={o.status} />
+                      {deliveryNote(o) && (
+                        <div className={`text-[10px] mt-1 whitespace-nowrap ${deliveryNote(o).late ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-3)]"}`}
+                             data-testid={`mo-delivery-${o.id}`}>
+                          {deliveryNote(o).text}{deliveryNote(o).late ? " · late" : ""}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-2 text-[var(--ink-2)] text-xs">{o.quote_no || "—"}</td>
                     <td className="px-4 py-2">
                       <input
@@ -403,6 +421,17 @@ export default function ManufacturerOrders() {
                     className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" data-testid="mo-status">
                     {STATUSES.map((s) => <option key={s}>{s}</option>)}
                   </select>
+                </div>
+                <div>
+                  <label htmlFor="mo-promised" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Promised delivery</label>
+                  <input id="mo-promised" type="date" value={form.promised_date} onChange={(e) => setForm({ ...form, promised_date: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" data-testid="mo-promised" />
+                </div>
+                <div>
+                  <label htmlFor="mo-delivered" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Delivered on</label>
+                  <input id="mo-delivered" type="date" value={form.delivered_date} onChange={(e) => setForm({ ...form, delivered_date: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" data-testid="mo-delivered" />
+                  <div className="text-[10px] text-[var(--ink-3)] mt-1">Filled in automatically when the order is marked Delivered.</div>
                 </div>
               </div>
 

@@ -18,7 +18,7 @@ import { useTenantConfig } from "@/context/TenantConfigContext";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import { projectLifecycleStages } from "@/lib/lifecycle";
 import api from "@/lib/api";
-import { inrFull, fmtDate, marginTone } from "@/lib/format";
+import { inrFull, fmtDate, marginTone, todayIST } from "@/lib/format";
 import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2, FolderOpen, Phone, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 
@@ -72,7 +72,7 @@ export default function Projects() {
     stage: "Survey",
     site_address: "",
     assigned_engineer: "",
-    start_date: new Date().toISOString().split("T")[0],
+    start_date: todayIST(),
     target_date: "",
     remarks: "",
     quote_ref: "",

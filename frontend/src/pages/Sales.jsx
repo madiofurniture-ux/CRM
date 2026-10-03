@@ -6,7 +6,8 @@ import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { FileText } from "lucide-react";
+import { FileText, IndianRupee } from "lucide-react";
+import RecordPaymentModal from "@/components/RecordPaymentModal";
 import { useAuth } from "@/context/AuthContext";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 
@@ -18,7 +19,10 @@ export default function Sales() {
   const { canAccess } = useAuth();
   const navigate = useNavigate();
   const [invoicing, setInvoicing] = useState("");
+  const [paying, setPaying] = useState(null);     // sale taking a payment
   const canInvoice = canAccess("invoice-gen");
+  // Customer payments are taken where balances are worked: Outstanding.
+  const canPay = canAccess("outstanding");
 
   // One click: the server builds the tax invoice from the sale and its
   // quotation (or returns the one already raised).
@@ -39,7 +43,9 @@ export default function Sales() {
   // order-confirmed notification). Without quote access the button hides.
   const [phoneByQuote, setPhoneByQuote] = useState({});
 
-  useEffect(() => { api.get("/sales").then((r) => setRows(r.data)); }, []);
+  // Fresh after a payment: the server re-derives paid/balance on the sale.
+  const load = () => api.get("/sales", { skipCache: true }).then((r) => setRows(r.data));
+  useEffect(() => { load(); }, []);
   useEffect(() => {
     api.get("/quotes").then(({ data }) => {
       const m = {};
@@ -109,6 +115,12 @@ export default function Sales() {
                     <td className={`px-4 py-3 text-right font-mono ${s.balance > 0 ? "text-[var(--danger)] font-semibold" : "text-[var(--ink-3)]"}`}>{inrFull(s.balance)}</td>
                     <td className="px-2 py-3">
                       <div className="flex items-center gap-1">
+                      {canPay && s.balance > 0 && (
+                        <button onClick={() => setPaying({ kind: "sale", record: s })}
+                                className="p-1.5 rounded-md hover:bg-[var(--moss-soft)] text-[var(--moss)]"
+                                title="Record payment" aria-label={`Record payment for ${s.sale_no}`}
+                                data-testid={`sale-pay-${s.id}`}><IndianRupee size={14} /></button>
+                      )}
                       {canInvoice && (
                         <button onClick={() => raiseInvoice(s)} disabled={invoicing === s.id}
                                 className="p-1.5 rounded-md hover:bg-[var(--surface-hover)] text-[var(--ink-2)] disabled:opacity-50"
@@ -128,6 +140,7 @@ export default function Sales() {
           </div>
         </div>
       </div>
+      {paying && <RecordPaymentModal target={paying} onClose={() => setPaying(null)} onSaved={load} />}
     </>
   );
 }

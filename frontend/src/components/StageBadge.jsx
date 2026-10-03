@@ -11,6 +11,7 @@ const MAP = {
   Confirmed: { bg: "bg-blue-600", text: "text-white", dot: "bg-white" },
   "In Production": { bg: "bg-indigo-900", text: "text-white", dot: "bg-indigo-300" },
   Dispatched: { bg: "bg-[var(--warn-soft)]", text: "text-[var(--warn)]", dot: "bg-[var(--warn)]" },
+  Installed: { bg: "bg-[var(--moss-soft)]", text: "text-[var(--moss)]", dot: "bg-[var(--moss)]" },
   Won: { bg: "bg-[var(--moss-soft)]", text: "text-[var(--moss)]", dot: "bg-[var(--moss)]" },
   Delivered: { bg: "bg-[var(--moss-soft)]", text: "text-[var(--moss)]", dot: "bg-[var(--moss)]" },
   Lost: { bg: "bg-[var(--danger-soft)]", text: "text-[var(--danger)]", dot: "bg-[var(--danger)]" },

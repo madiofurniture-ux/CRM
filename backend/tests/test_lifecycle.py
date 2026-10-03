@@ -374,3 +374,10 @@ def test_bucket_followups_groups_and_sorts_quotes():
     assert [q["id"] for q in out["this_week"]] == ["Q4", "Q1"]
     assert [q["id"] for q in out["overdue"]] == ["Q2"]
     assert sum(len(v) for v in out.values()) == 3  # Q3 never appears anywhere
+
+
+def test_business_dates_follow_india_not_the_host_clock():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import server  # noqa: F401  (sets the process timezone)
+    assert lc.today_iso() == datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()

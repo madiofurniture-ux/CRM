@@ -611,7 +611,7 @@ class PurchaseOrder(PurchaseOrderBase):
 # tax, and lc.next_manufacturer_order_no is the same dated sequence as PO
 # numbering. An optional po_id links the job back to the internal PO raised
 # for the same work.
-MO_STATUSES = ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered"]
+MO_STATUSES = ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered", "Installed"]
 # "Quoted" is this document's "Draft": an unaccepted quotation from a
 # manufacturer is not money the business owes anyone, so it does not reach
 # project P&L. Everything past it does. Same rule, same reasons, as
@@ -660,6 +660,10 @@ class ManufacturerOrderBase(BaseModel):
     quote_no: Optional[str] = ""      # the manufacturer's own quotation reference
     po_id: Optional[str] = ""         # optional link to the internal PurchaseOrder
     notes: Optional[str] = ""
+    # Promised vs actual delivery. delivered_date is stamped server-side when
+    # the order first reaches Delivered/Installed without one.
+    promised_date: Optional[str] = ""
+    delivered_date: Optional[str] = ""
 
     # Money. Every figure below is recomputed server-side — see
     # server.normalize_manufacturer_order and record_manufacturer_payment.

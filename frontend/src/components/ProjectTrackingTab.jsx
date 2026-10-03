@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, todayIST } from "@/lib/format";
 import { HardHat, AlertTriangle, Image as ImageIcon, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 
 const emptyLog = {
-  log_date: new Date().toISOString().split("T")[0],
+  log_date: todayIST(),
   supervisor_name: "",
   work_completed_today: "",
   labor_count: { skilled: 0, unskilled: 0 },

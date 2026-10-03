@@ -5,7 +5,7 @@ import SearchSelect from "@/components/SearchSelect";
 import RemarksEditor, { toRemarksArray } from "@/components/RemarksEditor";
 import api, { formatApiError } from "@/lib/api";
 import useWorkflow, { stageErrorMessage } from "@/hooks/useWorkflow";
-import { fmtDate, inrFull } from "@/lib/format";
+import { fmtDate, inrFull, todayIST } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
 import { Trash2, X, Phone, Pencil, Sparkles, CheckCircle2 } from "lucide-react";
@@ -36,7 +36,7 @@ export default function Visitors() {
   const [archDraft, setArchDraft] = useState(null);
   const [savingArch, setSavingArch] = useState(false);
   const empty = {
-    date: new Date().toISOString().slice(0, 10), name: "", customer_type: "Male", location: "",
+    date: todayIST(), name: "", customer_type: "Male", location: "",
     reference: "", reference_id: "", phone: "", requirement: "",
     attend_person: "", attend_person_id: "", remarks: [], status: "New", stage: "New", ticket_value: 0,
     customer_id: "",

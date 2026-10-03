@@ -40,7 +40,7 @@ export default function Quotes() {
 
   const empty = {
     quote_no: "",
-    date: new Date().toISOString().slice(0, 10),
+    date: todayIST(),
     customer: "",
     reference: "",
     phone: "",

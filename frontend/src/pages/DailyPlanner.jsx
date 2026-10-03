@@ -3,7 +3,7 @@ import Topbar from "@/components/Topbar";
 import EmptyState from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import api from "@/lib/api";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, todayIST, isoDateIST } from "@/lib/format";
 import { toast } from "sonner";
 import {
   ChevronLeft, ChevronRight, Calendar, RotateCcw, Plus, X, PartyPopper,
@@ -19,11 +19,11 @@ const PRIORITY_TONE = {
 };
 const emptyForm = { title: "", priority: "Medium", time_slot: "", notes: "" };
 
-const isoToday = () => new Date().toISOString().slice(0, 10);
+const isoToday = () => todayIST();
 const shiftDate = (iso, days) => {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return isoDateIST(d);
 };
 const dayLabel = (iso) => {
   const today = isoToday();

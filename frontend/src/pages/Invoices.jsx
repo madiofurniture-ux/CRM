@@ -3,7 +3,7 @@ import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import api from "@/lib/api";
 import { GST_DEFAULT, GST_SLABS } from "@/lib/constants";
-import { inrFull, fmtDate, amountInWords } from "@/lib/format";
+import { inrFull, fmtDate, amountInWords, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { Trash2, Edit2, Printer, X, Plus, IndianRupee } from "lucide-react";
 import ProductPicker, { StockBadge, rateFromMrp } from "@/components/ProductPicker";
@@ -30,7 +30,7 @@ export default function Invoices() {
   const [stock, setStock] = useState({});   // sku -> live stock for the lines in the open form
 
   const empty = {
-    invoice_no: "", date: new Date().toISOString().slice(0, 10), due_date: "",
+    invoice_no: "", date: todayIST(), due_date: "",
     customer: "", billing_address: "", phone: "", gstin: "",
     place_of_supply: "Telangana", is_igst: false,
     line_items: [emptyItem()],
@@ -345,7 +345,7 @@ function Row({ label, val, bold, muted, danger }) {
 
 function RecordPayment({ invoice, onClose, onSaved }) {
   const [amount, setAmount] = useState(invoice.balance || 0);
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayIST());
   const [mode, setMode] = useState("Bank");
   const [busy, setBusy] = useState(false);
   const save = async () => {

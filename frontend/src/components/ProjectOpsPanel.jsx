@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "@/lib/api";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { CheckCircle2, Circle, ClipboardList, IndianRupee, LifeBuoy, ListChecks, Plus, Trash2, Ruler } from "lucide-react";
 import AttachmentPanel from "@/components/AttachmentPanel";
@@ -320,7 +320,7 @@ function SurveyTab({ project, data, reload }) {
   }
 
   const blank = division === "MAP" ? MAP_ROW : FURNITURE_ROW;
-  const startNew = () => setForm({ survey_date: new Date().toISOString().slice(0, 10), surveyor: "", site_address: project.site_address || "",
+  const startNew = () => setForm({ survey_date: todayIST(), surveyor: "", site_address: project.site_address || "",
     notes: "", customer_signed: false, signed_by: "", rows: [{ ...blank }] });
   const setRow = (i, k, v) => setForm((f) => ({ ...f, rows: f.rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)) }));
 

@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
 import api from "@/lib/api";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { X, Trash2, ArrowDownCircle, ArrowUpCircle, Repeat, SlidersHorizontal } from "lucide-react";
 import { FloorBadge } from "@/components/LocationsManager";
@@ -24,7 +24,7 @@ export default function StockLedger() {
   const [saving, setSaving] = useState(false);
 
   const empty = {
-    date: new Date().toISOString().slice(0, 10), type: "Receipt", product_id: "",
+    date: todayIST(), type: "Receipt", product_id: "",
     qty: 1, unit: "pc", warehouse: "", to_warehouse: "", source_doc: "", reason: "",
   };
   const [form, setForm] = useState(empty);

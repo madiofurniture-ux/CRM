@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import EmptyState from "@/components/EmptyState";
 import api from "@/lib/api";
-import { fmtDate, inrFull } from "@/lib/format";
+import { fmtDate, inrFull, isoDateIST } from "@/lib/format";
 import { toast } from "sonner";
 import { AlarmClock, Phone, MessageCircle, CheckCircle2 } from "lucide-react";
 
@@ -20,7 +20,7 @@ const BUCKETS = [
 const addDays = (n) => {
   const d = new Date();
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return isoDateIST(d);
 };
 const wa = (lead) => `https://wa.me/91${String(lead.whatsapp || lead.phone || "").replace(/\D/g, "").slice(-10)}`;
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Topbar from "@/components/Topbar";
 import api, { formatApiError } from "@/lib/api";
-import { inr, inrFull, fmtDate } from "@/lib/format";
+import { inr, inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { GripVertical, X, Trash2, Pencil } from "lucide-react";
 import { useTenantConfig } from "@/context/TenantConfigContext";
@@ -32,7 +32,7 @@ const probabilityTone = (pct) =>
 
 const emptyForm = {
   quote_no: "",
-  date: new Date().toISOString().slice(0, 10),
+  date: todayIST(),
   customer: "",
   division: "Furniture",
   by_user: "",

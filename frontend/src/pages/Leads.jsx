@@ -23,7 +23,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Skeleton } from "@/components/ui/skeleton";
 import useCustomFields from "@/hooks/useCustomFields";
 import api, { formatApiError } from "@/lib/api";
-import { fmtDate, inrFull } from "@/lib/format";
+import { fmtDate, inrFull, todayIST } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
 import { Phone, Calendar, X, Trash2, Pencil, MessageSquare, Sparkles, Download, Upload } from "lucide-react";
@@ -78,7 +78,7 @@ export default function Leads() {
   // modal. It stays on the Lead record (CSV export still reads it) and rides
   // through untouched on edit via the `...l` spread in openEdit below.
   const empty = {
-    date: new Date().toISOString().slice(0, 10), name: "", phone: "", source: "Walk-in",
+    date: todayIST(), name: "", phone: "", source: "Walk-in",
     architect_id: "", architect_name: "",
     reference: "", attended_by: "", confidence_level: "",
     stage: "New", follow_up_date: "", remarks_history: [], assigned_to: "", assigned_to_id: "", value: 0,
@@ -176,7 +176,7 @@ export default function Leads() {
     });
   }, [rows, search, fStage, fDivision, customFilters]);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
 
   const openNew = () => { setEditing(null); setForm(empty); setArchDraft(null); setShow(true); };
   const openEdit = (l) => {
@@ -269,7 +269,7 @@ export default function Leads() {
     const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `leads_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `leads_${todayIST()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   };

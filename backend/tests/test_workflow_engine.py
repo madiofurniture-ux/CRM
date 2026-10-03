@@ -345,3 +345,12 @@ def test_list_view_describes_every_entity():
         assert not view["lead"]["locked"] and view["lead"]["fields"]
         assert view["quote"]["stages"][3]["probability"] == 70
     run(go())
+
+
+def test_saved_vendor_order_workflow_gains_installed():
+    old = [s for s in tenancy.default_workflow("vendor_order") if s["key"] != "installed"]
+    old[1]["guidance"] = "kept"
+    up = tenancy.with_locked_stages("vendor_order", old)
+    assert [s["key"] for s in up][-2:] == ["delivered", "installed"]
+    assert up[1]["guidance"] == "kept"
+    assert tenancy.with_locked_stages("lead", old) is old

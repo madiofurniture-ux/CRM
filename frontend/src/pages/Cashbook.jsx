@@ -5,7 +5,7 @@ import Topbar from "@/components/Topbar";
 import KpiCard from "@/components/KpiCard";
 import api, { formatApiError } from "@/lib/api";
 import { shrinkImage } from "@/lib/image";
-import { inrFull, fmtDate } from "@/lib/format";
+import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
@@ -236,7 +236,7 @@ export default function Cashbook() {
     const blob = new Blob([data], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `cashbook_entries_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `cashbook_entries_${todayIST()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
   };

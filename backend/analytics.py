@@ -385,7 +385,7 @@ def attendance_summary(records: list[dict], start: date, end: date, *,
 
 
 # ── vendors & projects ─────────────────────────────────────────────────────
-MO_STATUSES = ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered"]
+MO_STATUSES = ["Quoted", "Confirmed", "In Production", "Dispatched", "Delivered", "Installed"]
 MO_OPEN = {"Confirmed", "In Production", "Dispatched"}
 PROJECT_STAGES = ["Survey", "Quoted", "Execution", "Review", "Closure", "Completed"]
 PROJECT_DONE = {"Closure", "Completed"}

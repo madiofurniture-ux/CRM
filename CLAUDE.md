@@ -112,9 +112,17 @@ Finance (customer receipts, vendor payments, ledger), Attendance.
 - Vendor PO linked to a Sales Order (one SO can have multiple POs), collection
   `purchase_orders`
 - PO status: Raised → Confirmed → In Production → Dispatched → Delivered → Installed
+  (vendor orders are `manufacturer_orders`: Quoted → … → Installed, with
+  `promised_date` / `delivered_date`, stamped on first Delivered)
 - Vendor payments against a PO: amount, date, mode, reference
 - Per PO: value, paid, balance, promised vs actual delivery date
 - Per SO: sale value − total PO cost = gross margin
+
+## Dates
+Business dates are IST: the server sets `TZ=Asia/Kolkata` at import
+(`date.today()`), the frontend uses `todayIST()` / `isoDateIST()` from
+`lib/format.js` — never `new Date().toISOString().slice(0, 10)` (UTC: it gives
+yesterday until 05:30 IST). Timestamps stay UTC (`now_iso`).
 
 ## Working rules for Claude Code
 - One task per session. Plan first, then implement, then test, then commit.

@@ -3,7 +3,7 @@ import Topbar from "@/components/Topbar";
 import KpiCard from "@/components/KpiCard";
 import FilterChips from "@/components/FilterChips";
 import api from "@/lib/api";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime, todayIST } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
 import { History, ShieldAlert, Download } from "lucide-react";
 
@@ -92,7 +92,7 @@ export default function AuditTrail() {
 
   const kpis = useMemo(() => {
     const all = rows || [];
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayIST();
     const eventsToday = all.filter((r) => (r.at || "").slice(0, 10) === today).length;
     const sevenDaysAgo = Date.now() - 7 * 86400000;
     const permChanges = all.filter((r) => r.bucket === "PERMISSION" && new Date(r.at).getTime() >= sevenDaysAgo).length;
