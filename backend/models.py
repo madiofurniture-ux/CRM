@@ -321,6 +321,10 @@ class QuoteBase(BaseModel):
     # an open quote past it reads as expired (lc.quote_expired).
     valid_until: Optional[str] = ""
     discount: Optional[float] = 0
+    # Transport / handling, added after GST (untaxed), and the rounding that
+    # makes the net payable a round figure — see lifecycle.quote_total.
+    transport: Optional[float] = 0
+    round_off: Optional[float] = 0
     # "" (none needed) | "pending" | "approved" | "rejected"
     approval: Optional[str] = ""
     approved_by: Optional[str] = ""
@@ -1549,6 +1553,12 @@ class QuoteLineBase(BaseModel):
     sku: Optional[str] = ""
     unit: Optional[str] = ""
     hsn: Optional[str] = ""
+    # Doors & Windows lines: W/H in millimetres ("mm"; sft = W×H/90,000),
+    # the opening's specification (pattern, series, glass, location, …) and
+    # an optional typology picture printed on the quotation.
+    dim_unit: Optional[str] = ""
+    specs: Optional[dict] = None
+    image_url: Optional[str] = ""
 
 class DWOpeningBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

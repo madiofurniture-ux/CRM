@@ -89,7 +89,10 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
 - No cross-tenant reads, ever.
 - One codebase. Divisions and tenants are configuration, not forks.
 - Quotation is ONE engine with per-division templates (`quotation_templates.py`);
-  only the formats differ.
+  only the formats differ. Division presets (`division_preset(tenant, division)`:
+  layout, mm/ft lines, rounding, GST, standard terms, highlights, bank, logo in
+  `backend/assets/brand/<tenant>/`) drive the workspace and the branded PDF
+  (`backend/quote_pdf.py`, `GET /quotes/{id}/pdf`).
 - Don't rename or restructure modules outside the task's scope.
 
 ## End-to-end flow (the spine)

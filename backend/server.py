@@ -39,6 +39,7 @@ import storage
 import tally
 import workflow_rules as wf
 import tally_import as ti
+import quote_pdf as qpdf
 import hashlib
 import secrets
 import flows as flowlib
@@ -2430,6 +2431,13 @@ async def normalize_quote_template(doc: dict, existing: dict | None, user: dict)
                     + "; ".join(f'"{t[:60]}"' for t in missing[:3])))
     if existing is None and not doc.get("valid_until"):
         doc["valid_until"] = lc.quote_valid_until(doc.get("date"))
+    if existing is None:
+        preset = quotation_templates.division_preset(tenancy.tenant_of(user), doc.get("division"))
+        # A new quote starts with its division's standard terms and GST rate (both editable).
+        if not doc.get("terms") and not str(doc.get("remarks") or "").strip() and preset.get("terms"):
+            doc["terms"], doc["remarks"] = lc.quote_terms(list(preset["terms"]), None)
+        if not doc.get("tax_pct") and preset.get("tax_pct"):
+            doc["tax_pct"] = preset["tax_pct"]
     if existing is None and doc.get("template_id") and not doc.get("sections"):
         template = quotation_templates.get_template(doc["template_id"])
         if template:
@@ -2606,6 +2614,34 @@ def _render_quote_pdf(quote: dict, tenant: dict) -> bytes:
     return buf.getvalue()
 
 
+async def _branded_quote_pdf(quote: dict, lines: list, user: dict) -> bytes:
+    preset = _quote_preset(quote, user)
+    # Picture and model number from the stock item a line was picked from.
+    skus = sorted({l.get("sku") for l in lines if l.get("sku")})
+    items = {i["sku"]: i async for i in db.inventory.find(
+        tenancy.scope({"sku": {"$in": skus}}, "inventory", user),
+        {"_id": 0, "sku": 1, "model_no": 1, "image_url": 1})} if skus else {}
+    for l in lines:
+        item = items.get(l.get("sku")) or {}
+        l.setdefault("model_no", item.get("model_no") or "")
+        if not l.get("image_url"):
+            l["image_url"] = item.get("image_url") or ""
+    customer = None
+    if quote.get("customer_id"):
+        customer = await db.customers.find_one(
+            tenancy.scope({"id": quote["customer_id"]}, "customers", user), {"_id": 0})
+    if not customer and quote.get("phone"):
+        customer = await db.customers.find_one(
+            tenancy.scope({"phone": lc.phone_key(quote["phone"])}, "customers", user), {"_id": 0})
+    totals = _quote_totals(quote, lines, preset)
+    view = _quote_view(quote, lines, preset)
+    terms, _ = lc.quote_terms(quote.get("terms") or None, quote.get("remarks"))
+    office = await _get_settings(user)
+    return await asyncio.to_thread(
+        qpdf.render, quote=quote, lines=view["lines"], totals=totals, summary=view["summary"],
+        preset=preset, office=office, customer=customer, tenant_id=tenancy.tenant_of(user), terms=terms)
+
+
 @api.get("/quotes/{quote_id}/pdf")
 async def quote_pdf(quote_id: str, user: dict = Depends(get_current_user)):
     owned = tenancy.scope({"id": quote_id}, "quotes", user)
@@ -2613,7 +2649,18 @@ async def quote_pdf(quote_id: str, user: dict = Depends(get_current_user)):
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found")
     tenant = await db.tenants.find_one({"id": tenancy.tenant_of(user)}, {"_id": 0}) or {}
-    pdf_bytes = _render_quote_pdf(quote, tenant)
+    version = int(quote.get("version") or 1)
+    lines = [lc.calc_line(dict(l)) for l in await _quote_lines(quote_id, user)
+             if int(l.get("version") or 1) == version]
+    if not lines and quote.get("sections"):
+        pdf_bytes = _render_quote_pdf(quote, tenant)          # Quote Builder sections keep their layout
+    else:
+        if not lines:
+            lines = [lc.calc_line({"description": i.get("description", ""), "w": i.get("w", 0),
+                                   "h": i.get("h", 0), "qty": i.get("qty", 1), "rate": i.get("rate", 0),
+                                   "sku": i.get("sku", ""), "version": version})
+                     for i in quote.get("line_items") or []]
+        pdf_bytes = await _branded_quote_pdf(quote, lines, user)
     return Response(
         content=pdf_bytes, media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{quote.get("quote_no", "quote")}.pdf"'},
@@ -3384,7 +3431,8 @@ async def invoice_from_sale(sale_id: str, user: dict = Depends(get_current_user)
         sale_lines = [l for l in await _quote_lines(quote["id"], user) if int(l.get("version") or 1) == version]
     lines = lc.invoice_lines_from_sale(
         sale_lines, quote.get("discount") if sale_lines else 0, tax_pct,
-        sale.get("value"), f"As per {sale.get('sale_no') or 'order'} {sale.get('quote_ref') or ''}".strip())
+        sale.get("value"), f"As per {sale.get('sale_no') or 'order'} {sale.get('quote_ref') or ''}".strip(),
+        transport=quote.get("transport") if sale_lines else 0)
     project = await db.projects.find_one(tenancy.scope({"sale_id": sale_id}, "projects", user),
                                          {"_id": 0, "id": 1, "site_address": 1})
     customer = await db.customers.find_one(
@@ -6725,7 +6773,7 @@ from models import (
     QuoteLineCreate, QuoteLine, DWOpeningCreate, DWOpening,
     CommissionRuleCreate, CommissionRule,
     CommissionPayoutCreate, CommissionPayout,
-    CustomerCreate, Customer, GST_DOC_DEFAULT,
+    CustomerCreate, Customer, GST_DOC_DEFAULT, GST_SLABS,
 )
 
 make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
@@ -6913,7 +6961,19 @@ async def _quote_lines(quote_id: str, user: dict) -> list:
     ).sort("created_at", 1).to_list(500)
 
 
-def _quote_view(q: dict, all_lines: list) -> dict:
+def _quote_preset(q: dict, user: dict) -> dict:
+    return quotation_templates.division_preset(tenancy.tenant_of(user), q.get("division") or "Furniture")
+
+
+def _quote_totals(q: dict, lines: list, preset: dict, discount=None, transport=None) -> dict:
+    return lc.quote_total(lc.lines_subtotal(lines),
+                          q.get("discount") or 0 if discount is None else discount,
+                          q.get("tax_pct") if q.get("tax_pct") is not None else 18.0,
+                          transport=q.get("transport") or 0 if transport is None else transport,
+                          round_to=preset.get("round_to") or 0)
+
+
+def _quote_view(q: dict, all_lines: list, preset: dict | None = None) -> dict:
     """
     Assemble what the workspace screen renders.
 
@@ -6926,20 +6986,25 @@ def _quote_view(q: dict, all_lines: list) -> dict:
     lines = [lc.calc_line(dict(l)) for l in all_lines
              if int(l.get("version") or 1) == version]
     subtotal = lc.lines_subtotal(lines)
-    totals = lc.quote_total(subtotal, q.get("discount") or 0,
-                            q.get("tax_pct") if q.get("tax_pct") is not None else 18.0)
+    preset = preset or quotation_templates.division_preset("", q.get("division") or "Furniture")
+    totals = _quote_totals(q, lines, preset)
     versions = sorted({int(l.get("version") or 1) for l in all_lines} | {version})
     q = dict(q)
     q["derived_status"] = lc.quote_status(q)
     q["expired"] = lc.quote_expired(q)
-    return {"quote": q, "lines": lines, "subtotal": subtotal,
-            "totals": totals, "versions": versions}
+    summary = {"openings": round(sum(lc.money(l.get("qty")) or 1 for l in lines if lc.money(l.get("sft")) > 0), 2),
+               "sft": round(sum(lc.money(l.get("sft")) for l in lines), 2)}
+    summary["avg_rate"] = round(subtotal / summary["sft"], 2) if summary["sft"] else 0
+    return {"quote": q, "lines": lines, "subtotal": subtotal, "totals": totals, "versions": versions,
+            "summary": summary,
+            "preset": {k: preset.get(k) for k in ("division", "name", "dims", "round_to", "line_label",
+                                                   "spec_fields", "spec_defaults", "logo")}}
 
 
 @api.get("/quotes/{quote_id}/workspace")
 async def quote_workspace(quote_id: str, user: dict = Depends(get_current_user)):
     q = await _quote_or_404(quote_id, user)
-    return _quote_view(q, await _quote_lines(quote_id, user))
+    return _quote_view(q, await _quote_lines(quote_id, user), _quote_preset(q, user))
 
 
 @api.post("/quotes/{quote_id}/save-total")
@@ -6952,8 +7017,13 @@ async def quote_save_total(quote_id: str, payload: dict,
              if int(l.get("version") or 1) == version]
     subtotal = lc.lines_subtotal(lines)
     discount = lc.money(payload.get("discount"))
-    totals = lc.quote_total(subtotal, discount,
-                            q.get("tax_pct") if q.get("tax_pct") is not None else 18.0)
+    transport = lc.money(payload["transport"]) if "transport" in payload else lc.money(q.get("transport"))
+    if "tax_pct" in payload:
+        tax = lc.money(payload.get("tax_pct"))
+        if tax not in GST_SLABS:
+            raise HTTPException(status_code=400, detail=f"GST must be one of {GST_SLABS}")
+        q = {**q, "tax_pct": tax}
+    totals = _quote_totals(q, lines, _quote_preset(q, user), discount=discount, transport=transport)
 
     # A discount past the threshold needs an admin. An existing approval only
     # survives if the amount is unchanged — otherwise raising the discount
@@ -6969,6 +7039,8 @@ async def quote_save_total(quote_id: str, payload: dict,
 
     upd = {"discount": totals["discount"], "subtotal": totals["subtotal"],
            "tax_total": totals["tax_total"], "grand_total": totals["grand_total"],
+           "transport": totals["transport"], "round_off": totals["round_off"],
+           "tax_pct": q.get("tax_pct") if q.get("tax_pct") is not None else 18.0,
            "value": totals["value"], "approval": approval}
     if approval != "approved":
         upd["approved_by"] = ""

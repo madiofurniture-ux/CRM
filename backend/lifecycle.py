@@ -479,11 +479,23 @@ def quote_view_predicate(view: str, q: dict, me: str = "") -> bool:
 
 
 # ------------------------------------------------------------- quote lines
+# Doors & Windows quote in millimetres: square feet per opening = W×H / 90,000
+# (the trade's own rounding of 92,903 mm² per sq ft, as on MADIO's quotes).
+MM_PER_SFT = 90000
+
+
 def calc_line(line: dict) -> dict:
-    """sft = W×H×qty (feet in, square feet out); amount bills by area when there is one."""
+    """sft = W×H×qty (feet in, square feet out); amount bills by area when there is one.
+    A line with dim_unit "mm" takes W and H in millimetres (Doors & Windows):
+    sft_each = W×H / MM_PER_SFT, sft = sft_each × qty."""
     w, h = money(line.get("w")), money(line.get("h"))
     qty, rate = money(line.get("qty")), money(line.get("rate"))
-    line["sft"] = round(w * h * (qty or 1), 2) if w > 0 and h > 0 else 0
+    if line.get("dim_unit") == "mm":
+        each = round(w * h / MM_PER_SFT, 2) if w > 0 and h > 0 else 0
+        line["sft_each"] = each
+        line["sft"] = round(each * (qty or 1), 2)
+    else:
+        line["sft"] = round(w * h * (qty or 1), 2) if w > 0 and h > 0 else 0
     line["amount"] = round((line["sft"] or qty or 0) * rate, 2)
     return line
 
@@ -524,14 +536,25 @@ def payroll_approval_blocked(attendance_exceptions: list) -> bool:
     return bool(attendance_exceptions)
 
 
-def quote_total(subtotal: float, discount: float, tax_pct: float) -> dict:
-    """Roll lines → subtotal → discount → tax → grand total. Discount is an absolute ₹."""
+def quote_total(subtotal: float, discount: float, tax_pct: float,
+                transport: float = 0, round_to: float = 0) -> dict:
+    """Roll lines → subtotal → discount → tax → grand total. Discount is an absolute ₹.
+
+    `transport` (transport / handling) is added after tax, untaxed, as on
+    MADIO's Doors & Windows quotes. `round_to` (e.g. 1 or 100) rounds the
+    grand total to that many rupees and reports the difference as round_off;
+    0 keeps the exact figure."""
     sub = round(money(subtotal), 2)
     disc = min(money(discount), sub)            # a discount never exceeds the subtotal
     taxable = round(sub - disc, 2)
     tax = round(taxable * money(tax_pct) / 100, 2)
+    carriage = round(max(money(transport), 0), 2)
+    total = round(taxable + tax + carriage, 2)
+    step = money(round_to)
+    rounded = round(round(total / step) * step, 2) if step > 0 else total
     return {"subtotal": sub, "discount": round(disc, 2), "tax_total": tax,
-            "grand_total": round(taxable + tax, 2), "value": round(taxable, 2)}
+            "transport": carriage, "round_off": round(rounded - total, 2),
+            "grand_total": rounded, "value": round(taxable, 2)}
 
 
 # --------------------------------------------------------- purchase orders
@@ -658,7 +681,7 @@ def _taxable_for_total(total: float, tax_pct: float) -> float:
 
 
 def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: Any,
-                            fallback_value: Any, fallback_label: str) -> list[dict]:
+                            fallback_value: Any, fallback_label: str, transport: Any = 0) -> list[dict]:
     """Quote/sale lines (w/h/sft, rate, amount) -> invoice LineItems. The
     quote's absolute discount is spread as the same % on every line so the
     invoice total matches the quote's grand total."""
@@ -679,6 +702,9 @@ def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: 
             "unit": "sqft" if by_area else str(l.get("unit") or ""),
             "discount_pct": disc_pct, "tax_pct": tax,
         })
+    if out and money(transport) > 0:
+        out.append({"sku": "", "hsn": "996511", "description": "Transport / Handling", "qty": 1,
+                    "rate": round(money(transport), 2), "unit": "", "discount_pct": 0, "tax_pct": 0})
     if not out:
         base = money(fallback_value)
         out = [{"sku": "", "hsn": "", "description": fallback_label, "qty": 1,

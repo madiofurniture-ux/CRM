@@ -10,7 +10,7 @@ import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { ChevronLeft, Plus, Trash2, ArrowRightCircle, GitBranch } from "lucide-react";
+import { ChevronLeft, Plus, Trash2, ArrowRightCircle, GitBranch, FileDown, SlidersHorizontal } from "lucide-react";
 
 // Full detail workspace for one quote: line-item builder, discount + approval, versions.
 export default function QuoteWorkspace() {
@@ -65,6 +65,11 @@ export default function QuoteWorkspace() {
   if (!ws) return <><Topbar title="Quote Workspace" /><div className="p-10 text-center text-[var(--ink-3)]">Loading…</div></>;
 
   const q = ws.quote;
+  // Division preset: Doors & Windows quotes take W/H in mm (sft = W×H/90,000)
+  // and an opening specification per line; see quotation_templates.py.
+  const preset = ws.preset || {};
+  const mm = preset.dims === "mm";
+  const specFields = preset.spec_fields || [];
   const isAdmin = user?.role === "admin";
   const rejected = q.approval === "rejected";
   // Rejected must block conversion too — checking only "pending" meant a
@@ -74,7 +79,13 @@ export default function QuoteWorkspace() {
   const addLine = async () => {
     if (busy) return;
     setBusy(true);
-    try { await api.post("/quote-lines", { quote_id: id, version: q.version || 1, description: "", w: 0, h: 0, qty: 1, rate: 0 }); await load(); }
+    try {
+      await api.post("/quote-lines", {
+        quote_id: id, version: q.version || 1, description: "", w: 0, h: 0, qty: 1, rate: 0,
+        ...(mm ? { dim_unit: "mm", specs: { ...(preset.spec_defaults || {}) } } : {}),
+      });
+      await load();
+    }
     finally { setBusy(false); }
   };
   // Debounced per-line save so rapid keystrokes collapse into one write.
@@ -105,11 +116,20 @@ export default function QuoteWorkspace() {
     } finally { setBusy(false); }
   };
 
-  const saveTotal = async (discount) => {
+  const downloadPdf = async () => {
+    try {
+      const { data } = await api.get(`/quotes/${id}/pdf`, { skipCache: true, responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([data], { type: "application/pdf" }));
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch { toast.error("Couldn't build the PDF"); }
+  };
+
+  const saveTotal = async (discount, transport, tax_pct) => {
     if (busy) return;
     setBusy(true);
     try {
-      const { data } = await api.post(`/quotes/${id}/save-total`, { discount });
+      const { data } = await api.post(`/quotes/${id}/save-total`, { discount, transport, tax_pct });
       setWs((p) => ({ ...p, quote: data }));
       toast.success("Totals saved to quote");
       await load();
@@ -152,6 +172,7 @@ export default function QuoteWorkspace() {
         actions={
           <div className="flex items-center gap-2">
             <StageBadge stage={q.derived_status} />
+            <button onClick={downloadPdf} className="btn-ghost" data-testid="quote-pdf"><FileDown size={14} /> PDF</button>
             <button onClick={revise} disabled={busy} className="btn-ghost disabled:opacity-60"><GitBranch size={14} /> Revise</button>
             <button onClick={convert} disabled={pending || busy || !isAdmin}
               title={!isAdmin ? "Admin approval required to convert a quote to a sale" : undefined}
@@ -210,18 +231,20 @@ export default function QuoteWorkspace() {
                   <thead className="bg-[var(--surface-2)]">
                     <tr className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
                       <th className="text-left font-semibold px-3 py-2">Description</th>
-                      <th className="text-right font-semibold px-3 py-2">W</th>
-                      <th className="text-right font-semibold px-3 py-2">H</th>
+                      <th className="text-right font-semibold px-3 py-2">{mm ? "W (mm)" : "W"}</th>
+                      <th className="text-right font-semibold px-3 py-2">{mm ? "H (mm)" : "H"}</th>
+                      {mm && <th className="text-right font-semibold px-3 py-2">Sft</th>}
                       <th className="text-right font-semibold px-3 py-2">Qty</th>
-                      <th className="text-right font-semibold px-3 py-2">Sqft</th>
-                      <th className="text-right font-semibold px-3 py-2">Rate</th>
+                      <th className="text-right font-semibold px-3 py-2">{mm ? "Total Sft" : "Sqft"}</th>
+                      <th className="text-right font-semibold px-3 py-2">{mm ? "Rate / Sft" : "Rate"}</th>
                       <th className="text-right font-semibold px-3 py-2">Amount</th>
                       <th className="w-8"></th>
                     </tr>
                   </thead>
                   <tbody>
                     {ws.lines.map((l) => (
-                      <tr key={l.id} className="border-t border-[var(--border-light)]">
+                      <LineRows key={l.id} line={l} mm={mm} specFields={specFields} patchLine={patchLine}>
+                      <tr className="border-t border-[var(--border-light)]">
                         <td className="px-3 py-2"><I v={l.description} oc={(v) => patchLine(l, { description: v })} />
                           {l.sku && (
                             <div className="mt-1 flex items-center gap-1.5 text-[10px] text-[var(--ink-3)]" data-testid={`quote-line-sku-${l.id}`}>
@@ -230,21 +253,30 @@ export default function QuoteWorkspace() {
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-2 w-16"><I t="number" v={l.w} oc={(v) => patchLine(l, { w: parseFloat(v) || 0 })} right /></td>
-                        <td className="px-3 py-2 w-16"><I t="number" v={l.h} oc={(v) => patchLine(l, { h: parseFloat(v) || 0 })} right /></td>
+                        <td className={`px-3 py-2 ${mm ? "w-24" : "w-16"}`}><I t="number" v={l.w} oc={(v) => patchLine(l, { w: parseFloat(v) || 0 })} right /></td>
+                        <td className={`px-3 py-2 ${mm ? "w-24" : "w-16"}`}><I t="number" v={l.h} oc={(v) => patchLine(l, { h: parseFloat(v) || 0 })} right /></td>
+                        {mm && <td className="px-3 py-2 text-right font-mono text-[var(--ink-3)]">{(l.sft_each || 0).toFixed(2)}</td>}
                         <td className="px-3 py-2 w-16"><I t="number" v={l.qty} oc={(v) => patchLine(l, { qty: parseFloat(v) || 0 })} right /></td>
                         <td className="px-3 py-2 text-right font-mono text-[var(--ink-3)]">{(l.sft || 0).toFixed(2)}</td>
                         <td className="px-3 py-2 w-24"><I t="number" v={l.rate} oc={(v) => patchLine(l, { rate: parseFloat(v) || 0 })} right /></td>
                         <td className="px-3 py-2 text-right font-mono font-semibold">{inrFull(l.amount)}</td>
                         <td className="px-2 py-2"><button onClick={() => removeLine(l.id)} className="p-1 rounded hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button></td>
                       </tr>
+                      </LineRows>
                     ))}
-                    {ws.lines.length === 0 && <tr><td colSpan="8" className="text-center py-8 text-[var(--ink-3)]">No line items — add the first.</td></tr>}
+                    {ws.lines.length === 0 && <tr><td colSpan={mm ? 9 : 8} className="text-center py-8 text-[var(--ink-3)]">No line items — add the first.</td></tr>}
                   </tbody>
                 </table>
               </div>
             </div>
-            <TotalsBar ws={ws} onSave={saveTotal} busy={busy} />
+            {mm && ws.summary?.sft > 0 && (
+              <div className="text-xs text-[var(--ink-2)] flex flex-wrap gap-4" data-testid="quote-summary">
+                <span>{preset.line_label || "Openings"}: <b>{ws.summary.openings}</b></span>
+                <span>Total area: <b>{ws.summary.sft} sft</b></span>
+                <span>Average rate: <b>{inrFull(ws.summary.avg_rate)} / sft</b></span>
+              </div>
+            )}
+            <TotalsBar ws={ws} onSave={saveTotal} busy={busy} transportLabel={preset.division === "Furniture" ? "H&T ₹" : "Transport ₹"} />
           </>
         )}
 
@@ -273,22 +305,71 @@ export default function QuoteWorkspace() {
   );
 }
 
-function TotalsBar({ ws, onSave, busy }) {
+/** A line row plus, for Doors & Windows, its opening specification. */
+function LineRows({ line, mm, specFields, patchLine, children }) {
+  const [open, setOpen] = useState(false);
+  if (!specFields.length) return children;
+  const specs = line.specs || {};
+  const filled = specFields.filter((f) => String(specs[f.key] || "").trim()).length;
+  return (
+    <>
+      {children}
+      <tr className="bg-[var(--surface-2)]/40">
+        <td colSpan={mm ? 9 : 8} className="px-3 pb-2">
+          <button type="button" onClick={() => setOpen((v) => !v)} className="text-xs text-[var(--brand)] inline-flex items-center gap-1"
+                  data-testid={`quote-line-specs-${line.id}`}>
+            <SlidersHorizontal size={12} /> Specification ({filled}/{specFields.length})
+          </button>
+          {open && (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mt-2">
+              {specFields.map((f) => (
+                <label key={f.key} className="text-[11px] text-[var(--ink-3)]">
+                  {f.label}
+                  <input value={specs[f.key] || ""} className="w-full px-2 py-1 rounded border border-[var(--border)] bg-white text-sm text-[var(--ink)]"
+                         onChange={(e) => patchLine(line, { specs: { ...specs, [f.key]: e.target.value } })} />
+                </label>
+              ))}
+            </div>
+          )}
+        </td>
+      </tr>
+    </>
+  );
+}
+
+function TotalsBar({ ws, onSave, busy, transportLabel }) {
   const [discount, setDiscount] = useState(ws.quote.discount || 0);
+  const [transport, setTransport] = useState(ws.quote.transport || 0);
+  const [taxPct, setTaxPct] = useState(ws.quote.tax_pct ?? 18);
+  useEffect(() => { setTaxPct(ws.quote.tax_pct ?? 18); }, [ws.quote.tax_pct]);
   useEffect(() => { setDiscount(ws.quote.discount || 0); }, [ws.quote.discount]);
+  useEffect(() => { setTransport(ws.quote.transport || 0); }, [ws.quote.transport]);
   const t = ws.totals;
   return (
     <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 flex flex-col md:flex-row md:items-end gap-4 justify-between">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 text-sm">
         <Cell label="Subtotal" value={inrFull(ws.subtotal)} />
         <div>
           <label className="text-[10px] uppercase tracking-widest font-semibold text-[var(--ink-3)] block mb-1">Discount ₹</label>
           <input type="number" value={discount} onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)} className="w-28 px-2 py-1.5 rounded border border-[var(--border)] bg-white text-sm text-right font-mono outline-none focus:border-[var(--brand)]" />
         </div>
-        <Cell label={`Tax (${ws.quote.tax_pct || 18}%)`} value={inrFull(t.tax_total)} />
-        <Cell label="Grand Total" value={inrFull(t.grand_total)} strong />
+        <div>
+          <label className="text-[10px] uppercase tracking-widest font-semibold text-[var(--ink-3)] block mb-1">{transportLabel}</label>
+          <input type="number" value={transport} onChange={(e) => setTransport(parseFloat(e.target.value) || 0)} data-testid="quote-transport"
+                 className="w-28 px-2 py-1.5 rounded border border-[var(--border)] bg-white text-sm text-right font-mono outline-none focus:border-[var(--brand)]" />
+        </div>
+        <div>
+          <label className="text-[10px] uppercase tracking-widest font-semibold text-[var(--ink-3)] block mb-1">GST</label>
+          <select value={taxPct} onChange={(e) => setTaxPct(Number(e.target.value))} data-testid="quote-gst"
+                  className="px-2 py-1.5 rounded border border-[var(--border)] bg-white text-sm">
+            {[0, 5, 12, 18, 28].map((r) => <option key={r} value={r}>{r}%</option>)}
+          </select>
+          <div className="text-[11px] font-mono text-[var(--ink-2)] mt-0.5">{inrFull(t.tax_total)} at {ws.quote.tax_pct ?? 18}%</div>
+        </div>
+        {!!t.round_off && <Cell label="Round off" value={inrFull(t.round_off)} />}
+        <Cell label="Net payable" value={inrFull(t.grand_total)} strong />
       </div>
-      <button onClick={() => onSave(discount)} disabled={busy} className="btn-primary disabled:opacity-60">{busy ? "Saving…" : "Save totals to quote"}</button>
+      <button onClick={() => onSave(discount, transport, taxPct)} disabled={busy} className="btn-primary disabled:opacity-60">{busy ? "Saving…" : "Save totals to quote"}</button>
     </div>
   );
 }
