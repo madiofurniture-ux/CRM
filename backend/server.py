@@ -9273,6 +9273,28 @@ async def _imported_pos_signed_off(user: dict) -> int:
     return res.modified_count + res2.modified_count
 
 
+async def go_live_auto_po_signoff():
+    """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set). Its own run
+    key: quote-notes-1 had already run in production when this was added."""
+    run_key = "po-signoff-1"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
+    if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    await db.go_live_picture_runs.insert_one(
+        tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
+    try:
+        signed = await _imported_pos_signed_off(system_user)
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
+                                                 {"$set": {"result": {"signed_off": signed}}})
+        logger.info("Go-live PO sign-off for %s: %s imported POs signed off", tid, signed)
+        return {"signed_off": signed}
+    except Exception as e:  # never take the server down over this
+        logger.exception("Go-live PO sign-off failed: %s", e)
+        await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key})
+    return None
+
+
 async def go_live_auto_quote_notes():
     """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set)."""
     run_key = "quote-notes-1"
@@ -9284,12 +9306,10 @@ async def go_live_auto_quote_notes():
         tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
     try:
         moved = await _imported_quote_notes_off_terms(system_user)
-        signed = await _imported_pos_signed_off(system_user)
         await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
-                                                 {"$set": {"result": {"moved": moved, "pos_signed_off": signed}}})
-        logger.info("Go-live quote notes for %s: %s quotes moved off terms, %s imported POs signed off",
-                    tid, moved, signed)
-        return {"moved": moved, "pos_signed_off": signed}
+                                                 {"$set": {"result": {"moved": moved}}})
+        logger.info("Go-live quote notes for %s: %s quotes moved off terms", tid, moved)
+        return {"moved": moved}
     except Exception as e:  # never take the server down over this
         logger.exception("Go-live quote notes failed: %s", e)
         await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key})
@@ -9561,6 +9581,7 @@ async def startup():
             await go_live_auto_pictures()
             await go_live_auto_projects()
             await go_live_auto_quote_notes()
+            await go_live_auto_po_signoff()
         asyncio.create_task(_auto())
 
 

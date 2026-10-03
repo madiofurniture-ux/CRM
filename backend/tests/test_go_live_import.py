@@ -576,8 +576,10 @@ def test_imported_quote_remarks_are_notes_not_terms():
              "terms": [server.quotation_templates.division_preset("madio", "MAP")["terms"][0]]}])
         await db.purchase_orders.insert_one({"id": "p1", "tenant_id": "madio", "source": "go-live import",
                                              "approval": "", "grand_total": 250000, "status": "Issued"})
-        assert await server.go_live_auto_quote_notes() == {"moved": 1, "pos_signed_off": 1}
+        assert await server.go_live_auto_quote_notes() == {"moved": 1}
+        assert await server.go_live_auto_po_signoff() == {"signed_off": 1}
         assert (await db.purchase_orders.find_one({"id": "p1"}))["approval"] == "approved"
+        assert "skipped" in await server.go_live_auto_po_signoff()
         a = await db.quotes.find_one({"id": "a"})
         assert a["terms"] == [] and [e["text"] for e in a["log"]] == ["Confirm expected Feb", "Out of station"]
         assert (await db.quotes.find_one({"id": "b"}))["terms"]                      # real terms kept
