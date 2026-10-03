@@ -191,13 +191,18 @@ export default function QuoteWorkspace() {
     <>
       <Topbar title={`${q.quote_no}${q.version > 1 ? ` · v${q.version}` : ""}`} subtitle={q.customer}
         actions={
-          <div className="flex items-center gap-2">
-            <StageBadge stage={q.derived_status} />
-            <button onClick={getPdf} className="btn-ghost" data-testid="quote-pdf"><FileDown size={14} /> PDF</button>
-            <button onClick={revise} disabled={busy} className="btn-ghost disabled:opacity-60"><GitBranch size={14} /> Revise</button>
-            <button onClick={convert} disabled={pending || busy || !isAdmin}
-              title={!isAdmin ? "Admin approval required to convert a quote to a sale" : undefined}
-              className={`btn-primary ${pending || busy || !isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}><ArrowRightCircle size={15} /> Convert to Sale</button>
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <span className="hidden sm:inline-flex"><StageBadge stage={q.derived_status} /></span>
+            <button onClick={getPdf} className="btn-ghost" data-testid="quote-pdf" aria-label="PDF"><FileDown size={14} /><span className="hidden sm:inline"> PDF</span></button>
+            <button onClick={revise} disabled={busy} className="btn-ghost disabled:opacity-60" aria-label="Revise"><GitBranch size={14} /><span className="hidden sm:inline"> Revise</span></button>
+            {ws.sale ? (
+              <button onClick={() => nav(`/sales?q=${encodeURIComponent(ws.sale.sale_no || "")}`)} className="btn-primary" data-testid="quote-open-sale"
+                      aria-label={`Open sale ${ws.sale.sale_no}`}><ArrowRightCircle size={15} /><span className="hidden sm:inline"> Sale {ws.sale.sale_no}</span></button>
+            ) : (
+              <button onClick={convert} disabled={pending || busy || !isAdmin} aria-label="Convert to Sale" data-testid="quote-convert"
+                title={!isAdmin ? "Admin approval required to convert a quote to a sale" : undefined}
+                className={`btn-primary ${pending || busy || !isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}><ArrowRightCircle size={15} /><span className="hidden sm:inline"> Convert to Sale</span></button>
+            )}
           </div>
         } />
       <div className="p-6 space-y-4" data-testid="quote-workspace">
@@ -308,7 +313,7 @@ export default function QuoteWorkspace() {
                 <span>Average rate: <b>{inrFull(ws.summary.avg_rate)} / sft</b></span>
               </div>
             )}
-            <TotalsBar ws={ws} onSave={saveTotal} busy={busy} transportLabel={preset.division === "Furniture" ? "H&T ₹" : "Transport ₹"} />
+            <TotalsBar ws={ws} onSave={saveTotal} busy={busy} transportLabel={`${preset.transport_label || "Transport"} ₹`} />
           </>
         )}
 

@@ -13,7 +13,8 @@ import { useTenantConfig } from "@/context/TenantConfigContext";
 
 export default function Sales() {
   const [rows, setRows] = useState([]);
-  const [search, setSearch] = useState("");
+  // ?q= pre-fills the search (the quote workspace links to its sale this way).
+  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get("q") || "");
   const [fDiv, setFDiv] = useState("All");
   const { divisions } = useTenantConfig();
   const { canAccess } = useAuth();
@@ -98,7 +99,7 @@ export default function Sales() {
                   <th className="text-right font-semibold px-4 py-2.5">Value</th>
                   <th className="text-right font-semibold px-4 py-2.5">Paid</th>
                   <th className="text-right font-semibold px-4 py-2.5">Balance</th>
-                  <th className="px-2 py-2.5"><span className="sr-only">Actions</span></th>
+                  <th className="relative px-2 py-2.5"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>

@@ -99,7 +99,13 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
         </div>
       )}
 
-      {actions}
+      {actions && (
+        // On a phone the page's own controls scroll within their space rather
+        // than pushing Privacy Mode and Notifications off the screen.
+        <div className="flex items-center gap-2 min-w-0 max-w-[55vw] overflow-x-auto sm:max-w-none sm:overflow-visible shrink">
+          {actions}
+        </div>
+      )}
 
       <button
         onClick={isOtherHidden ? requestUnlock : relock}

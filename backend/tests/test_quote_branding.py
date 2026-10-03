@@ -77,6 +77,9 @@ def test_new_quote_gets_its_divisions_terms_and_the_workspace_and_pdf_follow_the
                                                 "created_at": "2026-09-12"})
         ws = await server.quote_workspace("q1", user=ADMIN)
         assert ws["preset"]["dims"] == "mm" and ws["totals"]["grand_total"] == 160800
+        assert ws["sale"] is None
+        await server.db.sales.insert_one({"id": "s9", "tenant_id": ADMIN["tenant_id"], "quote_id": "q1", "sale_no": "MF 9"})
+        assert (await server.quote_workspace("q1", user=ADMIN))["sale"] == {"id": "s9", "sale_no": "MF 9"}
         assert ws["summary"] == {"openings": 1, "sft": 34.5, "avg_rate": 3753.0,
                                  "groups": [{"name": "", "subtotal": 129478.5, "sft": 34.5, "count": 1}]}
         saved = await server.quote_save_total("q1", {"discount": 0, "transport": 9000}, user=ADMIN)

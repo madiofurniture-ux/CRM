@@ -219,8 +219,17 @@ COMPANY_PRESETS = {
                 "Our liability is limited to rectifying or replacing materials with manufacturing defects only.",
             ],
         },
+        # Terms as on MADIO's MAP quotations (e.g. AF-2610-178, Oct 2026).
         "MAP": {"name": "MAP — Madio Architectural Plasters", "logo": "map.png",
-                "tagline": "Premium Architectural Plasters"},
+                "tagline": "Premium Architectural Plasters", "transport_label": "H & T Charges",
+                "terms": [
+                    "Scaffolding / stools / ladders, power and water on site are in the customer's scope.",
+                    "Applicators' accommodation is in the customer's scope.",
+                    "The customer checks colours, patterns and finishes on the first coat / sample only; "
+                    "the company is not responsible for changes after that.",
+                    "100% payment before delivery (cheque payments after clearance only).",
+                    "Area includes wastage.",
+                ]},
         "Furniture": {
             "name": "Madio Furniture", "logo": "furniture.png", "tagline": "Madio Furniture",
             "note": "Thank you for considering Madio Furniture. We appreciate the opportunity to collaborate on "

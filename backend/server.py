@@ -7116,13 +7116,17 @@ def _quote_view(q: dict, all_lines: list, preset: dict | None = None) -> dict:
     return {"quote": q, "lines": lines, "subtotal": subtotal, "totals": totals, "versions": versions,
             "summary": summary,
             "preset": {k: preset.get(k) for k in ("division", "name", "dims", "round_to", "line_label",
-                                                   "spec_fields", "spec_defaults", "logo")}}
+                                                   "spec_fields", "spec_defaults", "logo", "transport_label")}}
 
 
 @api.get("/quotes/{quote_id}/workspace")
 async def quote_workspace(quote_id: str, user: dict = Depends(get_current_user)):
     q = await _quote_or_404(quote_id, user)
-    return _quote_view(q, await _quote_lines(quote_id, user), _quote_preset(q, user))
+    view = _quote_view(q, await _quote_lines(quote_id, user), _quote_preset(q, user))
+    # Already converted: the screen offers the sale instead of converting again.
+    view["sale"] = await db.sales.find_one(tenancy.scope({"quote_id": quote_id}, "sales", user),
+                                           {"_id": 0, "id": 1, "sale_no": 1}) or None
+    return view
 
 
 @api.post("/quotes/{quote_id}/save-total")
