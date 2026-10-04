@@ -130,3 +130,26 @@ Review), value and paid from the sale. Stage automations are not run.
 `POST /api/admin/go-live/projects` does the same for any open order without a
 project; with `GO_LIVE_SHAREPOINT_RUN` set it also runs once at startup
 (claimed in `go_live_picture_runs` as `projects-1`).
+
+
+## SALE REPORT (Receipts & Payments book)
+
+MF Sale is not the only sales register: the Receipts & Payments book's SALE
+REPORT lists each month's Map / Furniture / Windows orders side by side
+(DATE, CUST/SITE, Q.No, Q.Value, Cash, Bank, Balance, Remarks). Orders MF
+Sale doesn't have are added as sales (`origin: "sale report"`), matched to
+their quotation by number regardless of formatting (`quote_key`:
+AF-2602-27 = AF-2602-027 = AFF-2602027), numbered after MF Sale's series.
+For FY 2026-27 this adds 49 orders (₹1.08 Cr, including every July sale MF
+Sale lacked). Data loaded earlier gets them once at startup (`sale-report-1`),
+with their customers, quotes marked Won and projects for open orders.
+
+## Cash books: each month stands alone
+
+MADIO's monthly cash-book sheets each start from that sheet's own opening
+figures; a wallet with no opening row starts the month at 0 (money carried
+over is written in as a receipt, e.g. "Cash Handover"). The import follows
+that with "Balance adjustment" entries (out of P&L), recognises hand-typed
+closing rows ("closing Blance"), and checks each month's closing against the
+sheet — every wallet reconciles for April–September 2026. `cash-books-2`
+replaced the first production import once at startup.

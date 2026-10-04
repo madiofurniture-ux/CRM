@@ -9357,9 +9357,81 @@ async def go_live_cash_books_upload(files: List[UploadFile] = File(...), user: d
     return await _go_live_cash_books(await _go_live_files(files), user)
 
 
-async def go_live_auto_cash_books():
+async def _drop_imported_cash_books(user: dict) -> Optional[int]:
+    """Remove imported cash books so a corrected import can replace them.
+    None (and nothing removed) when anyone has written to those wallets since."""
+    books = [b["id"] for b in await db.cashbooks.find(
+        tenancy.scope({"source": "go-live import"}, "cashbooks", user), {"_id": 0, "id": 1}).to_list(1000)]
+    if not books:
+        return 0
+    if await db.cashbook_entries.find_one(tenancy.scope(
+            {"cashbook_id": {"$in": books}, "source": {"$ne": "go-live import"}}, "cashbook_entries", user)):
+        return None
+    await db.cashbook_entries.delete_many(tenancy.scope({"cashbook_id": {"$in": books}}, "cashbook_entries", user))
+    await db.cashbooks.delete_many(tenancy.scope({"id": {"$in": books}}, "cashbooks", user))
+    return len(books)
+
+
+async def _go_live_sale_report(named_files: list, user: dict) -> dict:
+    """Add the SALE REPORT orders MF Sale didn't have to data already loaded
+    (additive): sales mapped onto the live quotes and numbered after the live
+    sales, their customers, quotes marked Won, projects for open orders."""
+    try:
+        sheets = await asyncio.to_thread(gl.load_workbooks, named_files)
+        result = await asyncio.to_thread(gl.build, sheets)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    new = [x for x in result["records"]["sales"] if x.get("origin") == "sale report"]
+    live = await db.sales.find(tenancy.scope({}, "sales", user),
+                               {"_id": 0, "sale_no": 1, "quote_ref": 1}).to_list(50000)
+    sold = {gl.quote_key(x.get("quote_ref")) for x in live if x.get("quote_ref")}
+    quotes = {gl.quote_key(q["quote_no"]): q for q in await db.quotes.find(
+        tenancy.scope({}, "quotes", user), {"_id": 0, "id": 1, "quote_no": 1, "phone": 1}).to_list(50000)
+        if q.get("quote_no")}
+    nums = [int(m.group(1)) for x in live for m in [re.search(r"(\d+)$", x.get("sale_no") or "")] if m]
+    next_no = max(nums or [0]) + 1
+    docs = []
+    for sale in sorted(new, key=lambda x: x["date"]):
+        key = gl.quote_key(sale.get("quote_ref"))
+        if key in sold:
+            continue
+        sold.add(key)
+        q = quotes.get(key)
+        d = dict(sale)
+        d.update(sale_no=f"MF {next_no}", quote_id=(q or {}).get("id", ""),
+                 phone=d.get("phone") or (q or {}).get("phone", ""))
+        next_no += 1
+        stamp_fy(d, "sales")
+        tenancy.stamp(d, "sales", user)
+        docs.append(d)
+        if q:
+            await db.quotes.update_one(tenancy.scope({"id": q["id"]}, "quotes", user),
+                                       {"$set": {"stage": "Won", "status": "Won", "sale_id": d["id"]}})
+    if docs:
+        await db.sales.insert_many([dict(x) for x in docs])
+    have_phones = {c.get("phone") for c in await db.customers.find(
+        tenancy.scope({}, "customers", user), {"_id": 0, "phone": 1}).to_list(50000)}
+    custs = []
+    for d in docs:
+        if d.get("phone") and d["phone"] not in have_phones:
+            have_phones.add(d["phone"])
+            c = {"id": new_id(), "created_at": now_iso(), "name": d["customer"], "phone": d["phone"],
+                 "division": d.get("division") or "Furniture", "stage": "Active", "address": d.get("location", ""),
+                 "source": "go-live import", "first_sale_id": d["id"]}
+            tenancy.stamp(c, "customers", user)
+            custs.append(c)
+    if custs:
+        await db.customers.insert_many(custs)
+    projects = await _projects_for_open_sales(user)
+    if docs:
+        await _audit("go_live_sale_report", user, f"Added {len(docs)} sales from the SALE REPORT")
+    return {"sales": len(docs), "value": round(sum(x["value"] for x in docs), 2),
+            "customers": len(custs), "projects": projects}
+
+
+async def go_live_auto_sale_report():
     """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set)."""
-    run_key = "cash-books-1"
+    run_key = "sale-report-1"
     tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
     system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
     if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
@@ -9367,6 +9439,37 @@ async def go_live_auto_cash_books():
     await db.go_live_picture_runs.insert_one(
         tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
     try:
+        out = await _go_live_sale_report(await _go_live_sharepoint_files(), system_user)
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key}, {"$set": {"result": out}})
+        logger.info("Go-live sale report for %s: %s", tid, out)
+        return out
+    except HTTPException as e:
+        logger.warning("Go-live sale report failed: %s", e.detail)
+    except Exception as e:  # never take the server down over this
+        logger.exception("Go-live sale report failed: %s", e)
+    await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key, "result": {"$exists": False}})
+    return None
+
+
+async def go_live_auto_cash_books():
+    """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set). cash-books-2
+    replaces cash-books-1's import, which misread a misspelled closing row
+    ("closing Blance") as an expense and carried balances between months the
+    sheets keep separate."""
+    run_key = "cash-books-2"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
+    if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    await db.go_live_picture_runs.insert_one(
+        tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
+    try:
+        dropped = await _drop_imported_cash_books(system_user)
+        if dropped is None:
+            logger.warning("Go-live cash books: imported wallets have entries added since; not re-importing")
+            await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
+                                                     {"$set": {"result": {"skipped": "wallets in use"}}})
+            return {"skipped": "wallets in use"}
         out = await _go_live_cash_books(await _go_live_sharepoint_files(), system_user)
         await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
                                                  {"$set": {"result": {k: v for k, v in out.items() if k != "report"}}})
@@ -9722,6 +9825,7 @@ async def startup():
             await go_live_auto_projects()
             await go_live_auto_quote_notes()
             await go_live_auto_po_signoff()
+            await go_live_auto_sale_report()
             await go_live_auto_cash_books()
             await go_live_auto_sale_gst()
         asyncio.create_task(_auto())

@@ -681,3 +681,77 @@ def test_uncovered_vendor_payments_are_vendor_cost_in_the_pnl():
                                 start=date(2026, 4, 1), end=date(2026, 9, 30))["statement"]
     assert (pnl["vendor_cost"], pnl["overheads"], pnl["net_profit"]) == (40000, 1000, 59000)
     assert gl._expense_head("Rent - Swarnalatha") == gl._expense_head("SWARNALATHA") == "Rent"
+
+
+def test_misspelled_closing_rows_and_months_that_stand_alone():
+    book = _book({
+        "July26": [CASH_HDR,
+                   (datetime(2026, 7, 1), "Opening Balance", None, None, 1000),
+                   (datetime(2026, 7, 20), "Water Exp", None, None, None, 200),
+                   (None, "Closing Balance", None, None, None, None)],          # no closing written
+        "AUG 26": [CASH_HDR,
+                   (datetime(2026, 8, 1), "Cash Handover", None, None, 800),     # last month's cash, as a receipt
+                   (datetime(2026, 8, 20), "Office Exp", None, None, None, 100),
+                   (None, "closing Blance", None, None, None, 700),
+                   (None, None, None, None, 800, 800)]})
+    res = gl.build(gl.load_workbooks([("RP.xlsx", book)]))
+    e = res["records"]["cashbook_entries"]
+    assert not any(x["amount"] == 700 for x in e)                              # the closing isn't an expense
+    assert res["records"]["cashbooks"][0]["current_balance"] == 700
+    assert not any("closing" in n for r in res["report"] for n in r["notes"])
+
+
+def test_cash_books_are_replaced_once_unless_in_use(monkeypatch):
+    async def go():
+        db = server.db
+        await server._go_live_cash_books([("RP.xlsx", _cash_book())], ADMIN)
+        assert await server._drop_imported_cash_books(ADMIN) > 0
+        assert await db.cashbook_entries.count_documents({}) == 0
+        await server._go_live_cash_books([("RP.xlsx", _cash_book())], ADMIN)
+        book = await db.cashbooks.find_one({"source": "go-live import"})
+        await db.cashbook_entries.insert_one({"id": "mine", "tenant_id": "madio", "cashbook_id": book["id"],
+                                              "type": "CASH_OUT", "amount": 5})
+        assert await server._drop_imported_cash_books(ADMIN) is None             # someone is using them
+    run(go())
+
+
+SALE_REPORT = {"SALE REPORT": [
+    ("APR Map  Sale - 26", None, None, None, None, None, None, None, None, None, "July Windows Sale - 26"),
+    ("DATE", "CUST/ SITE", "Q.No", "Q.Value", "Cash", "Bank", "Balance", "Remarks", "Sft", None,
+     "DATE", "CUST/ SITE", "Q.No", "Q.Value", "Cash", "Bank", "Balance", "Remarks"),
+    (datetime(2026, 4, 20), "Hall Mark Aspen 51", "AF-2603-44", 77526, 27526, 50000, None, "Work Completed", 270,
+     None, datetime(2026, 7, 16), "MLA Party Office", "AF-2511-160/6", 827100, None, 300000, 527100, "Adv"),
+    ("Total", None, None, 77526),
+]}
+
+
+def test_sale_report_orders_missing_from_mf_sale_are_added():
+    enquiry = {k: v for k, v in ENQUIRY.items()}
+    res = gl.build(gl.load_workbooks([("AF.xlsx", _book(enquiry)), ("RP.xlsx", _book(SALE_REPORT))]))
+    added = [s for s in res["records"]["sales"] if s.get("origin") == "sale report"]
+    by = {s["customer"]: s for s in added}
+    assert set(by) == {"Hall Mark Aspen 51", "MLA Party Office"}
+    hm, mla = by["Hall Mark Aspen 51"], by["MLA Party Office"]
+    assert (hm["division"], hm["value"], hm["paid"], hm["stage"], hm["date"]) == ("MAP", 77526, 77526, "Completed",
+                                                                                 "2026-04-20")
+    assert (mla["division"], mla["balance"], mla["stage"]) == ("D&W", 527100, "Confirmed")
+    assert gl.quote_key("AF-2602-27") == gl.quote_key("AF-2602-027") == gl.quote_key("AFF-2602027")
+    # A second copy of the same order (already in MF Sale) is not added twice.
+    again = gl.build(gl.load_workbooks([("AF.xlsx", _book(enquiry)), ("RP.xlsx", _book(SALE_REPORT)),
+                                        ("RP2.xlsx", _book({"Sheet9": [("x",)]}))]))
+    assert len([s for s in again["records"]["sales"] if s.get("origin") == "sale report"]) == 2
+
+
+def test_sale_report_reaches_production_additively():
+    async def go():
+        db = server.db
+        await db.sales.insert_one({"id": "s0", "tenant_id": "madio", "sale_no": "MF 153", "quote_ref": "AF-2603-044"})
+        await db.quotes.insert_one({"id": "qx", "tenant_id": "madio", "quote_no": "AF-2511-160", "phone": "9000000099"})
+        out = await server._go_live_sale_report([("RP.xlsx", _book(SALE_REPORT))], ADMIN)
+        assert out["sales"] == 1                                            # Hall Mark was already sold
+        mla = await db.sales.find_one({"customer": "MLA Party Office"})
+        assert (mla["sale_no"], mla["quote_id"], mla["tenant_id"]) == ("MF 154", "qx", "madio")
+        assert (await db.quotes.find_one({"id": "qx"}))["stage"] == "Won"
+        assert await db.projects.count_documents({"sale_id": mla["id"]}) == 1
+        assert await db.customers.count_documents({"phone": "9000000099"}) == 1
+    run(go())

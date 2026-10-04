@@ -563,6 +563,7 @@ def build(sheets: dict, today: Optional[str] = None) -> dict:
     _navaki(sheets, rep, out)
     quotes_by_no = _quotes(sheets, rep, out)
     _sales(sheets, rep, out, quotes_by_no)
+    _sale_report(sheets, rep, out, quotes_by_no)
     _customers(rep, out)
     _purchase_orders(sheets, rep, out, quotes_by_no, vendor)
     _closing_stock(sheets, rep, out, vendor)
@@ -870,6 +871,94 @@ def _sales(sheets, rep, out, quotes_by_no):
         rep.sheet(name)["loaded"] += 1
 
 
+def quote_key(qno: Any) -> str:
+    """Canonical quotation number for matching across hand-typed books:
+    AF-2602-27, AF-2602-027, AFF-2604061 and "AF 2604 061/2" are one quote."""
+    m = re.search(r"AF+\s*-?\s*(\d{4})\s*-?\s*(\d{1,4})", str(qno or ""), re.I)
+    return f"AF-{m.group(1)}-{int(m.group(2)):03d}" if m else quote_no(qno)
+
+
+def _sale_report(sheets, rep, out, quotes_by_no):
+    """The Receipts & Payments book's SALE REPORT: side-by-side monthly blocks
+    ("APR Map Sale - 26", "July Furniture Sale - 26", "Windows April & May -26"),
+    each DATE, CUST/SITE, Q.No, Q.Value, Cash, Bank, Balance, Remarks. Orders
+    MF Sale doesn't have are added as sales."""
+    name = _find(sheets, "SALE REPORT", "Sale Report", "SALE_REPORT")
+    if not name:
+        return
+    rows = sheets[name]
+    by_key = {quote_key(k): q for k, q in quotes_by_no.items()}
+    sold = {quote_key(s.get("quote_ref")) for s in out["sales"] if s.get("quote_ref")}
+    nums = [int(m.group(1)) for s in out["sales"] for m in [re.search(r"(\d+)$", s.get("sale_no") or "")] if m]
+    next_no = max(nums or [0]) + 1
+    for ri, row in enumerate(rows):
+        for ci, cell in enumerate(row):
+            if not (isinstance(cell, str) and _norm_header(cell) == "q no") or ci < 2:
+                continue
+            title = ""
+            for k in range(ri - 1, max(-1, ri - 3), -1):
+                t = [x for x in rows[k][max(0, ci - 2):ci + 8] if isinstance(x, str) and x.strip()]
+                if t:
+                    title = t[0]
+                    break
+            low = title.lower()
+            division = "MAP" if "map" in low else ("D&W" if "window" in low or "door" in low else "Furniture")
+            hdr = {_norm_header(rows[ri][j]): j for j in range(ci - 2, min(len(rows[ri]), ci + 9))
+                   if rows[ri][j] not in (None, "")}
+
+            def at(r, *names):
+                for n in names:
+                    j = hdr.get(n)
+                    if j is not None and j < len(r):
+                        return r[j]
+                return None
+            for k, r in enumerate(rows[ri + 1:], ri + 2):
+                first = text(_cell(r, ci - 2), 40).lower() + text(_cell(r, ci - 1), 40).lower()
+                if first.startswith("total"):
+                    break
+                qno = quote_no(_cell(r, ci))
+                cust, loc = name_location(_cell(r, ci - 1))
+                if not qno and not cust:
+                    if all(_cell(r, j) in (None, "") for j in range(ci - 2, ci + 6)):
+                        break                 # end of this block
+                    continue
+                rep.sheet(name)["rows"] += 1
+                key = quote_key(qno)
+                if key in sold:
+                    rep.note(name, "already in MF Sale")
+                    continue
+                value = amount(at(r, "q value", "value"))
+                if not value or not cust:
+                    rep.skip(name, "no value or customer", k)
+                    continue
+                sold.add(key)
+                quote = by_key.get(key)
+                d = _ledger_date(_cell(r, ci - 2), None) or (quote or {}).get("date") or today_iso()
+                paid = amount(at(r, "cash")) + amount(at(r, "bank"))
+                bal_cell = at(r, "balance")
+                if not paid and is_number(bal_cell):
+                    paid = max(0.0, value - amount(bal_cell))
+                remark = text(at(r, "remarks", "remark"), 300)
+                balance = max(0.0, round(value - paid, 2))
+                sale = _stamp({
+                    "sale_no": f"MF {next_no}", "date": d, "customer": cust, "location": loc,
+                    "phone": (quote or {}).get("phone", ""), "reference": (quote or {}).get("reference", ""),
+                    "division": division, "quote_ref": (quote or {}).get("quote_no") or qno,
+                    "quote_id": (quote or {}).get("id", ""), "lead_id": "", "by_user": (quote or {}).get("by_user", ""),
+                    "value": value, "paid": round(min(paid, value), 2), "balance": balance,
+                    "status": "PAID" if balance <= 0 else ("PARTIAL" if paid > 0 else "PENDING"),
+                    "stage": sale_stage(False, paid, value, remark), "line_items": [],
+                    "remarks": " · ".join(x for x in (f"From {title.strip()}", remark) if x)[:500],
+                    "origin": "sale report",
+                }, d)
+                next_no += 1
+                if quote:
+                    quote["stage"] = "Won"
+                    quote["sale_id"] = sale["id"]
+                out["sales"].append(sale)
+                rep.sheet(name)["loaded"] += 1
+
+
 def _customers(rep, out):
     """One customer per phone from the sales book (customers are people who bought)."""
     by_phone: dict[str, dict] = {}
@@ -1032,6 +1121,9 @@ _TRANSFER = re.compile(r"petty\s*(cash\s*)?adv|petty\s*cash$|\bcash$|\badv(ance)
 # "Vijay Kphb Furniture cust", "Sharmila Map cust" — not "Customer Welfare Exp".
 _CUSTOMER = re.compile(r"\bcust\b|\bcustomer\b(?!\s*welfare)|\brefund", re.I)
 _SALARY = re.compile(r"\bsalar(y|ies)\b", re.I)
+# Hand-typed: "Closing Balance", "closing Blance", "Closing bal", "Opening Bal."
+_CLOSING = re.compile(r"^\s*clos\w*\s*b\w*", re.I)
+_OPENING = re.compile(r"^\s*open\w*\s*b\w*", re.I)
 
 
 def fin_year(iso: str) -> str:
@@ -1086,6 +1178,19 @@ def _expense_head(desc: str) -> str:
         return "Rent"
     d = re.sub(r"\bexp\b\.?$", "Expense", d, flags=re.I)
     return d[:1].upper() + d[1:] if d else "Other"
+
+
+def _balance_adjustment(out, book, key, target, when, why):
+    diff = round(target - book["current_balance"], 2)
+    out["cashbook_entries"].append(_stamp({
+        "cashbook_id": book["id"], "type": "CASH_IN" if diff > 0 else "CASH_OUT",
+        "amount": abs(diff), "category": "Balance adjustment",
+        "payment_mode": "ONLINE" if key == "bt" else "OTHER",
+        "remark": f"{why}: {target:,.2f} (carried {book['current_balance']:,.2f})",
+        "entry_person": "Go-live import", "status": "Approved", "approved_by": "Go-live import",
+        "approved_at": f"{when}T09:00:00+05:30" if when else "", "pnl_exclude": True,
+        "quote_id": "", "date": when}, when or ""))
+    book["current_balance"] = round(target, 2)
 
 
 def _cash_books(sheets, rep, out, quotes_by_no):
@@ -1149,21 +1254,29 @@ def _cash_books(sheets, rep, out, quotes_by_no):
     found.sort(key=lambda f: ((f[0] - 4) % 12))
     for month, name, c, data, h, wallets in found:
         seen_entries = False
+        opened: set = set()
         for i, r in enumerate(data, h + 2):
             desc = text(_cell(r, c["desc"]), 200)
             when = _ledger_date(_cell(r, c["date"]), month)
             if not desc and not any(amount(_cell(r, w.get(k))) for w in wallets.values() for k in ("in", "out")):
                 continue
             low = desc.lower()
-            if low.startswith("closing balance") and not seen_entries:
-                low = "opening balance"           # last month's closing, carried in as this month's opening
+            if _OPENING.match(desc):
+                low = "opening balance"
+            elif _CLOSING.match(desc):
+                # Last month's closing, carried in as this month's opening —
+                # or, after the entries, this month's closing.
+                low = "closing balance" if seen_entries else "opening balance"
             if low.startswith("closing balance"):
                 # The book is balanced by entering each wallet's closing
                 # figure as a payment; the row after it is the totals. Check
                 # our running balance against the sheet's own figure.
                 for key, w in wallets.items():
                     book = books.get(key)
-                    sheet_close = amount(_cell(r, w.get("out"))) - amount(_cell(r, w.get("in")))
+                    cells = [_cell(r, w.get("out")), _cell(r, w.get("in"))]
+                    if all(c in (None, "") for c in cells):
+                        continue                  # no closing written for this wallet
+                    sheet_close = amount(cells[0]) - amount(cells[1])
                     if book is not None and abs(book["current_balance"] - sheet_close) > 1:
                         rep.note(name, f"{w['label']}: closing {sheet_close:,.0f} on the sheet, "
                                        f"{book['current_balance']:,.0f} from its entries")
@@ -1171,25 +1284,25 @@ def _cash_books(sheets, rep, out, quotes_by_no):
             if not desc and not when:
                 continue                      # a totals / spacer row
             rep.sheet(name)["rows"] += 1
-            if not low.startswith("opening balance"):
+            if not low.startswith("opening balance") and not seen_entries:
                 seen_entries = True
+                # Each month's sheet stands alone: a wallet it gives no opening
+                # starts the month at 0 (money carried over is written in as a
+                # receipt, e.g. "Cash Handover").
+                for key in wallets:
+                    book = books.get(key)
+                    if book is not None and key not in opened and abs(book["current_balance"]) > 0.005:
+                        _balance_adjustment(out, book, key, 0.0, when, f"No opening balance on {name}")
+                        rep.note(name, "wallets without an opening start the month at 0")
             for key, w in wallets.items():
                 book = books.get(key)
                 if low.startswith("opening balance"):
                     bal = amount(_cell(r, w.get("in"))) - amount(_cell(r, w.get("out")))
-                    if book is not None and abs(book["current_balance"] - bal) > 1:
+                    opened.add(key)
+                    if book is not None and abs(book["current_balance"] - bal) > 0.005:
                         # The business carried a different figure forward:
                         # follow the sheet, and say so in the book.
-                        diff = round(bal - book["current_balance"], 2)
-                        out["cashbook_entries"].append(_stamp({
-                            "cashbook_id": book["id"], "type": "CASH_IN" if diff > 0 else "CASH_OUT",
-                            "amount": abs(diff), "category": "Balance adjustment",
-                            "payment_mode": "ONLINE" if key == "bt" else "OTHER",
-                            "remark": f"Opening balance per {name}: {bal:,.2f} (carried {book['current_balance']:,.2f})",
-                            "entry_person": "Go-live import", "status": "Approved", "approved_by": "Go-live import",
-                            "approved_at": f"{when}T09:00:00+05:30" if when else "", "pnl_exclude": True,
-                            "quote_id": "", "date": when}, when or ""))
-                        book["current_balance"] = round(bal, 2)
+                        _balance_adjustment(out, book, key, bal, when, f"Opening balance per {name}")
                         rep.note(name, "opening balances aligned to the sheet")
                     if book is None:
                         books[key] = _stamp({"book_name": w["label"], "description": "Imported cash book",
