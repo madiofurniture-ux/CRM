@@ -209,3 +209,67 @@ def test_links_never_cross_tenants():
         with pytest.raises(HTTPException):
             await _quote(user=OTHER, customer_id=c["id"])                   # another company's customer
     run(go())
+
+
+customer_context = _route("/api/customers/{customer_id}/context")
+project_context = _route("/api/projects/{project_id}/context")
+project_search = _route("/api/projects/search")
+customer_duplicates = _route("/api/customers/duplicates")
+customer_search = _route("/api/customers/search")
+
+
+def test_quote_from_project_shows_on_customer_and_project_pages():
+    async def go():
+        c = await _customer()
+        p1 = await _project(c, name="Villa")
+        p2 = await _project(c, name="Office")
+        q = await _quote(project_id=p1["id"])
+        await create_meet(MeetCreate(title="Design review", date=TODAY, project_id=p1["id"]), user=ADMIN)
+        cc = await customer_context(c["id"], user=ADMIN)
+        assert {x["id"] for x in cc["records"]["projects"]} == {p1["id"], p2["id"]}
+        assert [x["id"] for x in cc["records"]["quotes"]] == [q["id"]]
+        assert cc["records"]["meets"] and cc["totals"]["quotes"] == 1
+        assert any(t["entity"] == "quote" and t["entity_id"] == q["id"] for t in cc["timeline"])
+        pc = await project_context(p1["id"], user=ADMIN)
+        assert pc["customer"]["id"] == c["id"] and pc["customer"]["code"] == c["code"]
+        assert [x["id"] for x in pc["records"]["quotes"]] == [q["id"]]
+        pc2 = await project_context(p2["id"], user=ADMIN)
+        assert pc2["records"]["quotes"] == [] and pc2["records"]["meets"] == []
+        # Cascade: the customer's projects; and a project search finds its customer.
+        assert {x["id"] for x in await project_search(customer_id=c["id"], user=ADMIN)} == {p1["id"], p2["id"]}
+        found = await project_search(q="Office", user=ADMIN)
+        assert found[0]["customer_id"] == c["id"]
+    run(go())
+
+
+def test_context_respects_personal_records_and_tenants():
+    async def go():
+        c = await _customer()
+        p = await _project(c)
+        rep = {"id": "u3", "tenant_id": "acme", "name": "Rep", "role": "user", "role_id": "", "username": "rep"}
+        other_rep = {**rep, "id": "u4", "name": "Other Rep", "username": "rep2"}
+        await create_task(TaskCreate(title="Private reminder", project_id=p["id"]), user=rep)
+        mine = await project_context(p["id"], user=rep)
+        theirs = await project_context(p["id"], user=other_rep)
+        assert len(mine["records"]["tasks"]) == 1
+        assert theirs["records"]["tasks"] == []                  # someone else's personal task
+        with pytest.raises(HTTPException):
+            await customer_context(c["id"], user=OTHER)
+        with pytest.raises(HTTPException):
+            await project_context(p["id"], user=OTHER)
+    run(go())
+
+
+def test_duplicate_warning_and_search_by_code_email_company():
+    async def go():
+        c = await create_customer(CustomerCreate(name="Ravi Kumar", phone="9876543210", email="ravi@x.in",
+                                                 company="RK Builders"), user=ADMIN)
+        d = await customer_duplicates(phone="+91 98765-43210", user=ADMIN)
+        assert d[0]["id"] == c["id"] and d[0]["strong"] and "same phone" in d[0]["match"]
+        d = await customer_duplicates(name="ravi kumar", user=ADMIN)
+        assert d[0]["id"] == c["id"] and not d[0]["strong"]
+        assert await customer_duplicates(phone="9876543210", exclude_id=c["id"], user=ADMIN) == []
+        assert await customer_duplicates(phone="9876543210", user=OTHER) == []
+        for term in (c["code"], "ravi@x", "RK Build", "98765 43210"):
+            assert [x["id"] for x in await customer_search(q=term, user=ADMIN)] == [c["id"]], term
+    run(go())

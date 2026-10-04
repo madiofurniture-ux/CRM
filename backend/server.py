@@ -6755,6 +6755,210 @@ async def customer_overview(customer_id: str, user: dict = Depends(get_current_u
     }
 
 
+# ------- Connected records: what belongs to a customer / a project -------
+# (key, collection, permission module, owner field, personal, sort field)
+_CONTEXT_SOURCES = (
+    ("visitors", "visitors", "visitors", "", False, "date"),
+    ("leads", "leads", "leads", "assigned_to", False, "date"),
+    ("quotes", "quotes", "quotes", "by_user", False, "date"),
+    ("sales", "sales", "sales", "by_user", False, "date"),
+    ("projects", "projects", "projects", "", False, "created_at"),
+    ("invoices", "invoices", "invoice-gen", "by_user", False, "date"),
+    ("payments", "payments", "", "", False, "date"),
+    ("meets", "meets", "meetplan", "created_by", True, "date"),
+    ("tasks", "tasks", "tasks", "assigned_to", True, "due_date"),
+    ("calls", "calls", "calls", "by_user", False, "date"),
+    ("service_tickets", "service_tickets", "projects", "", False, "created_at"),
+    ("purchase_orders", "purchase_orders", "inventory", "by_user", False, "date"),
+    ("manufacturer_orders", "manufacturer_orders", "inventory", "by_user", False, "created_at"),
+)
+_CONTEXT_FIELDS = {
+    "quotes": {"_id": 0, "id": 1, "quote_no": 1, "version": 1, "stage": 1, "status": 1, "division": 1,
+               "grand_total": 1, "value": 1, "date": 1, "customer": 1, "phone": 1, "customer_id": 1,
+               "project_id": 1, "by_user": 1, "lead_id": 1},
+}
+
+
+async def _context_records(match: dict, user: dict, skip: tuple = ()) -> dict:
+    """Every record matching `match` (customer_id / project_id …) that this
+    user may see: module permission, own/team scope and personal records
+    (meetings, tasks) all apply as on the list screens."""
+    roles = await _roles_for(user)
+    out: dict = {}
+    for key, coll, module, owner_field, personal, sort in _CONTEXT_SOURCES:
+        if key in skip:
+            continue
+        m = match(key) if callable(match) else match
+        if m is None:
+            continue
+        q = dict(m)
+        if module:
+            if not perm.can(user, roles, module, "view"):
+                continue
+            owners = await _scope_owners(user, roles, module)
+            if owners is not None and owner_field:
+                q = {"$and": [q, {owner_field: {"$in": owners}}]}
+        if personal:
+            q = _merge_visibility(q, personal_visibility_query(user, coll))
+        rows = await db[coll].find(tenancy.scope(q, coll, user), _CONTEXT_FIELDS.get(key, {"_id": 0})) \
+            .sort(sort, -1).to_list(500)
+        out[key] = [_lead_out(r, user) for r in rows] if key == "leads" else rows
+    return out
+
+
+def _customer_match(customer: dict) -> dict:
+    """Linked to this customer, or not linked yet and on the same number."""
+    match = [{"customer_id": customer["id"]}]
+    phone = rel.norm_phone(customer.get("phone"))
+    if phone:
+        match.append({"customer_id": {"$in": [None, ""]}, "phone": {"$regex": re.escape(phone) + "$"}})
+    return {"$or": match}
+
+
+async def _timeline(match: dict, user: dict, limit: int = 200) -> list:
+    """What happened, newest first, from the activity trail (every create,
+    edit, conversion and payment is logged with its customer and project)."""
+    rows = await db.activities.find(tenancy.scope(match, "activities", user),
+                                    {"_id": 0, "before": 0}).sort("at", -1).to_list(limit)
+    for r in rows:
+        after = r.pop("after", None) or {}
+        r["changed"] = sorted(k for k in after if k not in ("updated_at", "fy", "id", "created_at"))[:8]
+    return rows
+
+
+def _money_totals(sales: list, payments: list, projects: list) -> dict:
+    live = [s for s in sales if str(s.get("stage") or "").lower() != "cancelled"
+            and str(s.get("status") or "").upper() != "CANCELLED"]
+    order_value = round(sum(lc.money(s.get("value")) for s in live), 2) if live else \
+        round(sum(lc.money(p.get("value")) for p in projects), 2)
+    received = round(sum(lc.money(p.get("amount")) * (-1 if p.get("direction") in ("Refund", "Out") else 1)
+                         for p in payments), 2)
+    return {"order_value": order_value, "received": received, "pending": round(max(order_value - received, 0), 2)}
+
+
+@api.get("/customers/{customer_id}/context")
+async def customer_context(customer_id: str, user: dict = Depends(get_current_user)):
+    """The customer page: the customer, everything linked to them, money and
+    the timeline. Records not yet linked but on the same number are included
+    (and flagged) so nothing is missed before they're linked."""
+    await _require_permission("customers", "view", user)
+    customer = await db.customers.find_one(tenancy.scope({"id": customer_id}, "customers", user), {"_id": 0})
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    match = _customer_match(customer)
+    records = await _context_records(match, user)
+    for rows in records.values():
+        for r in rows:
+            r["linked"] = r.get("customer_id") == customer_id
+    contacts = await db.record_contacts.find(
+        tenancy.scope({"subject_type": "customer", "subject_id": customer_id}, "record_contacts", user),
+        {"_id": 0}).to_list(100)
+    ids = [r["id"] for rows in records.values() for r in rows if r.get("id")]
+    timeline = await _timeline({"$or": [{"customer_id": customer_id}, {"entity_id": {"$in": ids[:2000]}}]}, user)
+    totals = _money_totals(records.get("sales", []), records.get("payments", []), records.get("projects", []))
+    totals.update({k: len(v) for k, v in records.items()})
+    totals["open_service_tickets"] = sum(1 for t in records.get("service_tickets", [])
+                                         if t.get("status") in ops.OPEN_SERVICE_STATUSES)
+    return {"customer": customer, "contacts": contacts, "records": records, "totals": totals,
+            "timeline": timeline}
+
+
+@api.get("/projects/{project_id}/context")
+async def project_context(project_id: str, user: dict = Depends(get_current_user)):
+    """The project page: its customer (live), and every quotation, order,
+    meeting, task, payment, vendor order and ticket that belongs to it."""
+    await _require_permission("projects", "view", user)
+    project = await _project_or_404(project_id, user)
+    customer = None
+    if project.get("customer_id"):
+        customer = await db.customers.find_one(
+            tenancy.scope({"id": project["customer_id"]}, "customers", user),
+            {"_id": 0, "id": 1, "code": 1, "name": 1, "phone": 1, "email": 1, "address": 1, "company": 1,
+             "stage": 1})
+
+    def match(key):
+        clauses = [{"project_id": project_id}]
+        if key == "quotes" and project.get("quote_id"):
+            clauses.append({"id": project["quote_id"]})
+        if key == "sales" and project.get("sale_id"):
+            clauses.append({"id": project["sale_id"]})
+        if key in ("payments",) and project.get("sale_id"):
+            clauses.append({"against_sale_id": project["sale_id"]})
+        if key in ("purchase_orders", "invoices") and project.get("sale_id"):
+            clauses.append({"sale_id": project["sale_id"]})
+        if key == "tasks":
+            clauses.append({"ref_type": "project", "ref": project_id})
+        if key == "leads":
+            return {"id": project["lead_id"]} if project.get("lead_id") else {"project_id": project_id}
+        return {"$or": clauses}
+
+    records = await _context_records(match, user, skip=("projects", "visitors"))
+    ids = [r["id"] for rows in records.values() for r in rows if r.get("id")]
+    timeline = await _timeline({"$or": [{"project_id": project_id}, {"entity_id": {"$in": [project_id] + ids[:2000]}}]},
+                               user)
+    totals = _money_totals(records.get("sales", []), records.get("payments", []), [project])
+    totals.update({k: len(v) for k, v in records.items()})
+    return {"project": project, "customer": customer, "records": records, "totals": totals,
+            "workflow": _project_workflow_view(project), "timeline": timeline}
+
+
+@api.get("/projects/search")
+async def project_search(q: str = "", customer_id: str = "", user: dict = Depends(get_current_user)):
+    """Project picker: by name, number, customer, phone or site; or every
+    project of one customer (the customer → project cascade)."""
+    await _require_permission("projects", "view", user)
+    query: dict = {}
+    if customer_id:
+        query["customer_id"] = customer_id
+    q = (q or "").strip()
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [{"project_name": rx}, {"project_no": rx}, {"customer": rx}, {"phone": rx},
+                        {"site_address": rx}]
+    elif not customer_id:
+        return []
+    rows = await db.projects.find(tenancy.scope(query, "projects", user),
+                                  {"_id": 0, "id": 1, "project_no": 1, "project_name": 1, "customer": 1,
+                                   "customer_id": 1, "phone": 1, "site_address": 1, "division": 1, "stage": 1,
+                                   "value": 1, "created_at": 1}).sort("created_at", -1).to_list(50)
+    return rows
+
+
+@api.get("/customers/duplicates")
+async def customer_duplicates(phone: str = "", email: str = "", name: str = "", exclude_id: str = "",
+                              user: dict = Depends(get_current_user)):
+    """Possible existing customers for what's being typed — a warning with
+    "use existing", never a block. Same number is a strong match; same email
+    or the same name a weaker one."""
+    out: dict = {}
+    p = rel.norm_phone(phone)
+    clauses = []
+    if p:
+        clauses += [{"phone": {"$regex": re.escape(p) + "$"}}, {"alt_phone": {"$regex": re.escape(p) + "$"}}]
+    if str(email or "").strip():
+        clauses.append({"email": {"$regex": "^" + re.escape(email.strip()) + "$", "$options": "i"}})
+    nm = re.sub(r"\s+", " ", str(name or "")).strip()
+    if len(nm) >= 3:
+        clauses.append({"name": {"$regex": "^" + re.escape(nm) + "$", "$options": "i"}})
+    if not clauses:
+        return []
+    rows = await db.customers.find(tenancy.scope({"$or": clauses}, "customers", user),
+                                   {"_id": 0, "id": 1, "code": 1, "name": 1, "phone": 1, "email": 1,
+                                    "company": 1, "stage": 1}).to_list(20)
+    for r in rows:
+        if r["id"] == exclude_id:
+            continue
+        why = []
+        if p and p in (rel.norm_phone(r.get("phone")), rel.norm_phone(r.get("alt_phone"))):
+            why.append("same phone")
+        if email and str(r.get("email") or "").lower() == email.strip().lower():
+            why.append("same email")
+        if nm and str(r.get("name") or "").strip().lower() == nm.lower():
+            why.append("same name")
+        out[r["id"]] = {**r, "match": why, "strong": "same phone" in why or "same email" in why}
+    return sorted(out.values(), key=lambda r: (not r["strong"], r.get("name") or ""))
+
+
 # ------- Stakeholder search: 1-click lookup across the existing people
 # collections (architects, record_contacts, customers) so a project's
 # client_poc/architect/contractor/supervisor slots can be linked to an
@@ -7080,14 +7284,21 @@ async def customer_resolver(q: str = "", user: dict = Depends(get_current_user))
         {"phone": {"$regex": pattern, "$options": "i"}},
         {"alt_phone": {"$regex": pattern, "$options": "i"}},
         {"name": {"$regex": r"(^|\s)" + pattern, "$options": "i"}},
+        {"email": {"$regex": pattern, "$options": "i"}},
+        {"company": {"$regex": pattern, "$options": "i"}},
+        {"code": {"$regex": "^" + pattern, "$options": "i"}},
+        {"id": q},
     ]
+    digits = _re.sub(r"\D", "", q)
+    if len(digits) >= 4 and digits != q:          # "98765 43210", "+91-98765…"
+        or_clauses.append({"phone": {"$regex": _re.escape(digits[-10:])}})
     rows = await db.customers.find(
         tenancy.scope({"$or": or_clauses}, "customers", user), {"_id": 0}).to_list(20)
     out = []
     for c in rows:
-        phone = c.get("phone")
-        projects = await db.projects.count_documents(tenancy.scope({"phone": phone}, "projects", user)) if phone else 0
-        quotes = await db.quotes.count_documents(tenancy.scope({"phone": phone}, "quotes", user)) if phone else 0
+        match = _customer_match(c)
+        projects = await db.projects.count_documents(tenancy.scope(match, "projects", user))
+        quotes = await db.quotes.count_documents(tenancy.scope(match, "quotes", user))
         out.append({**c, "project_count": projects, "quote_count": quotes})
     return out
 
