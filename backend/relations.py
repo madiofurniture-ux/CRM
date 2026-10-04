@@ -112,6 +112,8 @@ async def link(db, collection: str, doc: dict, user: dict, existing: Optional[di
         # Edit forms resend every field; a blank one never unlinks the customer.
         doc.pop("customer_id", None)
     cur = {**(existing or {}), **{k: v for k, v in doc.items() if v not in (None, "")}}
+    if "project_id" in doc and doc["project_id"] in (None, ""):
+        cur.pop("project_id", None)          # "no particular project" unlinks it
 
     # Walk up the chain: payment → order → quotation → project → customer.
     sale_id = cur.get("sale_id") or cur.get("against_sale_id")
@@ -186,7 +188,7 @@ async def link(db, collection: str, doc: dict, user: dict, existing: Optional[di
         if live or linked_now or not cur.get(field):
             # Live copies follow the customer; a document gets the customer's
             # details when it is first linked, and keeps them after that.
-            if collection == "meets" and cur.get(field) and not linked_now:
+            if collection in ("meets", "tasks") and cur.get(field):
                 continue                     # a meeting's "with" may name someone else at the customer
             doc[field] = value
     return doc

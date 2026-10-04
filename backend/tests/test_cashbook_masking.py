@@ -17,6 +17,7 @@ does not contain it and that no arithmetic over what IS in the response
 puts it back.
 """
 import asyncio
+import re
 import sys
 from pathlib import Path
 
@@ -36,6 +37,12 @@ ADMIN = {"id": "u1", "tenant_id": "acme", "name": "Admin", "role": "admin"}
 #     opening 20000 + top-up 5000 - approved 15000 = balance 10000
 # SECRET is the figure mask_pnl already redacts as approved_petty_cash.
 OPENING, TOP_UP, SECRET, PENDING = 20000, 5000, 15000, 2000
+
+
+def _no_ts(value) -> str:
+    """The text a check reads, minus ISO timestamps: ".215000+00:00" in a
+    created_at must not look like the amount 15000."""
+    return re.sub(r"\d{4}-\d{2}-\d{2}T[\d:.+-]+", "", str(value))
 BALANCE = OPENING + TOP_UP - SECRET
 
 
@@ -98,7 +105,7 @@ def test_masked_entries_do_not_carry_the_amounts_that_sum_to_the_spend_figure():
 
         assert len(rows) == 3                       # top-up, approved debit, pending debit
         assert all(r["amount"] is None for r in rows)
-        assert str(SECRET) not in str(rows)
+        assert str(SECRET) not in _no_ts(rows)
         # Masked, not zeroed — a 0 would read as a real, settled figure.
         assert not any(r["amount"] == 0 for r in rows)
 
@@ -144,7 +151,7 @@ def test_masked_wallet_balances_close_the_opening_minus_current_inversion():
 
         assert book["current_balance"] is None
         assert book["initial_balance"] is None
-        assert str(SECRET) not in str(book)
+        assert str(SECRET) not in _no_ts(book)
 
         # The configured ceiling is an input, not a result of spend — it
         # stays, the same line mask_pnl draws when it keeps contract_value.
@@ -196,7 +203,7 @@ def test_no_arithmetic_over_the_whole_masked_surface_recovers_the_spend():
         pnl = await server.project_pnl_report(mask_other=True, user=ADMIN)
 
         surface = [books, rows, pnl]
-        assert str(SECRET) not in str(surface)
+        assert str(SECRET) not in _no_ts(surface)
 
         numbers = _numbers(surface)
         assert SECRET not in numbers
@@ -241,7 +248,7 @@ def test_masked_csv_export_cannot_be_used_to_bypass_the_on_screen_mask():
         await _wallet_with_spend()
         masked = "".join([chunk async for chunk in
                           csv_engine.stream_cashbook_entries_csv(server.db, ADMIN, True)])
-        assert str(SECRET) not in masked
+        assert str(SECRET) not in _no_ts(masked)
         assert "Materials" in masked          # the ledger is still exportable
 
         unmasked = "".join([chunk async for chunk in
@@ -255,5 +262,5 @@ def test_cashbook_csv_export_route_defaults_to_masked():
         await _wallet_with_spend()
         resp = await server.cashbook_entries_export(user=ADMIN)  # no flag at all
         body = "".join([chunk async for chunk in resp.body_iterator])
-        assert str(SECRET) not in body
+        assert str(SECRET) not in _no_ts(body)
     asyncio.run(run())

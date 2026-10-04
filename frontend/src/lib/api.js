@@ -21,23 +21,10 @@ api.interceptors.request.use((config) => {
 // STILL served from cache instantly — no visible reload — while a real
 // request quietly refreshes that entry in the background for next time.
 // So a page is never more than one visit behind, but a visit is never
-// blocked waiting on the network. A write to a resource clears its
-// entries outright so an edit is never shown stale.
+// blocked waiting on the network. Any write clears the cache outright so
+// an edit is never shown stale.
 const CACHE_TTL_MS = 20_000;
 const _cache = new Map(); // url -> { response, expiry }
-
-function resourceOf(url) {
-  const path = url.split("?")[0];
-  const segment = path.split("/").filter(Boolean)[0] || "";
-  return "/" + segment;
-}
-
-function invalidateResource(url) {
-  const resource = resourceOf(url);
-  for (const key of _cache.keys()) {
-    if (resourceOf(key) === resource) _cache.delete(key);
-  }
-}
 
 const rawGet = api.get.bind(api);
 api.get = (url, config) => {
@@ -61,7 +48,10 @@ for (const method of ["post", "put", "patch", "delete"]) {
   const raw = api[method].bind(api);
   api[method] = (url, ...args) =>
     raw(url, ...args).then((response) => {
-      invalidateResource(url);
+      // Records are linked: saving a customer updates their projects and
+      // leads, converting a quotation creates an order and a project. So a
+      // write clears every cached read, not just its own resource's.
+      _cache.clear();
       return response;
     });
 }

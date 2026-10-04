@@ -69,7 +69,8 @@ async def _project(customer, user=ADMIN, **extra):
 
 async def _quote(user=ADMIN, **fields):
     fields.setdefault("customer", "")
-    return await create_quote(QuoteCreate(quote_no="", date=TODAY, **fields), user=user)
+    fields.setdefault("quote_no", "")
+    return await create_quote(QuoteCreate(date=TODAY, **fields), user=user)
 
 
 def test_customer_gets_a_code():
@@ -272,4 +273,50 @@ def test_duplicate_warning_and_search_by_code_email_company():
         assert await customer_duplicates(phone="9876543210", user=OTHER) == []
         for term in (c["code"], "ravi@x", "RK Build", "98765 43210"):
             assert [x["id"] for x in await customer_search(q=term, user=ADMIN)] == [c["id"]], term
+    run(go())
+
+
+def test_quote_numbers_are_assigned_and_unique():
+    async def go():
+        a = await _quote(customer="A", phone="9000000011")
+        b = await _quote(customer="B", phone="9000000012")
+        assert a["quote_no"] and b["quote_no"] and a["quote_no"] != b["quote_no"]
+        with pytest.raises(HTTPException) as e:
+            await _quote(customer="C", phone="9000000013", quote_no=a["quote_no"])
+        assert e.value.status_code == 409
+        # Editing a quotation that keeps its number is fine; taking another's is not.
+        await update_quote(a["id"], {"quote_no": a["quote_no"], "remarks": "x"}, user=ADMIN)
+        with pytest.raises(HTTPException):
+            await update_quote(a["id"], {"quote_no": b["quote_no"]}, user=ADMIN)
+    run(go())
+
+
+def test_moving_a_quote_to_another_customer_and_project():
+    async def go():
+        a = await _customer()
+        b = await _customer("Asha", "9000000001")
+        pa = await _project(a)
+        pb = await _project(b)
+        q = await _quote(project_id=pa["id"])
+        out = await update_quote(q["id"], {"customer_id": b["id"], "project_id": ""}, user=ADMIN)
+        assert out["customer_id"] == b["id"] and not out.get("project_id")
+        out = await update_quote(q["id"], {"project_id": pb["id"]}, user=ADMIN)
+        assert out["project_id"] == pb["id"]
+        with pytest.raises(HTTPException):                       # a's project under b's quotation
+            await update_quote(q["id"], {"project_id": pa["id"]}, user=ADMIN)
+    run(go())
+
+
+def test_context_money_counts_order_paid_and_timeline_has_loaded_records():
+    async def go():
+        c = await _customer()
+        await server.db.sales.insert_one({"id": "s9", "tenant_id": "acme", "customer_id": c["id"], "sale_no": "MF 9",
+                                          "date": "2026-01-05", "value": 100000, "paid": 40000, "stage": "Confirmed"})
+        await server.db.payments.insert_one({"id": "p9", "tenant_id": "acme", "customer_id": c["id"], "date": "2026-01-06",
+                                             "amount": 5000, "direction": "In"})     # an advance against no order
+        cc = await customer_context(c["id"], user=ADMIN)
+        assert cc["totals"]["order_value"] == 100000 and cc["totals"]["received"] == 45000
+        assert cc["totals"]["pending"] == 55000
+        notes = [t.get("note", "") for t in cc["timeline"]]
+        assert any("Order MF 9" in n for n in notes) and any("Payment" in n for n in notes)
     run(go())

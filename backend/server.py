@@ -2441,6 +2441,20 @@ async def normalize_quote_template(doc: dict, existing: dict | None, user: dict)
     then recomputes financial_summary from whatever sections the write
     carries, so every save's totals are server-derived."""
     _guard_quote_approval(doc, existing)
+    # One number per quotation: blank on a new one -> the next in the series;
+    # a typed number already in use is refused (edits that keep it are fine).
+    if existing is None or ("quote_no" in doc and str(doc.get("quote_no") or "").strip() != existing.get("quote_no")):
+        no = str(doc.get("quote_no") or "").strip()
+        if not no and existing is None:
+            rows = await db.quotes.find(tenancy.scope({}, "quotes", user), {"quote_no": 1, "_id": 0}).to_list(50000)
+            doc["quote_no"] = lc.next_quote_no(rows)
+        elif not no:
+            doc.pop("quote_no", None)
+        else:
+            doc["quote_no"] = no
+            clash = {"quote_no": no, **({"id": {"$ne": existing["id"]}} if existing else {})}
+            if await db.quotes.find_one(tenancy.scope(clash, "quotes", user), {"_id": 1}):
+                raise HTTPException(status_code=409, detail=f"Quotation number {no} is already used — leave it blank to get the next one")
     if "terms" in doc or "remarks" in doc:
         doc["terms"], doc["remarks"] = lc.quote_terms(
             doc["terms"] if doc.get("terms") or "remarks" not in doc else None, doc.get("remarks"))
@@ -6827,13 +6841,59 @@ async def _timeline(match: dict, user: dict, limit: int = 200) -> list:
 
 
 def _money_totals(sales: list, payments: list, projects: list) -> dict:
+    """Order value and money received. An order's `paid` is kept in step by
+    every payment against it (and carries what was paid before the CRM), so
+    it counts as received; payments against no order are added on top."""
     live = [s for s in sales if str(s.get("stage") or "").lower() != "cancelled"
             and str(s.get("status") or "").upper() != "CANCELLED"]
     order_value = round(sum(lc.money(s.get("value")) for s in live), 2) if live else \
         round(sum(lc.money(p.get("value")) for p in projects), 2)
-    received = round(sum(lc.money(p.get("amount")) * (-1 if p.get("direction") in ("Refund", "Out") else 1)
-                         for p in payments), 2)
+    sale_ids = {s.get("id") for s in sales}
+    loose = [p for p in payments if not p.get("against_sale_id") or p.get("against_sale_id") not in sale_ids]
+    received = sum(lc.money(s.get("paid")) for s in live) + \
+        sum(lc.money(p.get("amount")) * (-1 if p.get("direction") in ("Refund", "Out") else 1) for p in loose)
+    if not live:
+        received += sum(lc.money(p.get("paid")) for p in projects if not p.get("sale_id"))
+    received = round(received, 2)
     return {"order_value": order_value, "received": received, "pending": round(max(order_value - received, 0), 2)}
+
+
+# When a record has no logged "created" event (loaded data, older records),
+# its own date stands in for one, so a timeline is never empty.
+_RECORD_EVENTS = {
+    "visitors": ("visitor", "date", lambda r: "Showroom visit" + (f" — {r['requirement']}" if r.get("requirement") else "")),
+    "leads": ("lead", "date", lambda r: f"Enquiry from {r.get('source') or 'walk-in'}"),
+    "quotes": ("quote", "date", lambda r: f"Quotation {r.get('quote_no', '')} · ₹{lc.money(r.get('grand_total') or r.get('value')):,.0f}"),
+    "sales": ("sale", "date", lambda r: f"Order {r.get('sale_no', '')} · ₹{lc.money(r.get('value')):,.0f}"),
+    "projects": ("project", "start_date", lambda r: f"Project {r.get('project_no', '')} {r.get('project_name') or ''}".strip()),
+    "payments": ("payment", "date", lambda r: f"{'Refund' if r.get('direction') == 'Refund' else 'Payment'} ₹{lc.money(r.get('amount')):,.0f}"),
+    "meets": ("meet", "date", lambda r: f"Meeting: {r.get('title', '')}"),
+    "calls": ("call", "date", lambda r: f"Call — {r.get('outcome') or 'logged'}"),
+    "service_tickets": ("service_ticket", "created_at", lambda r: f"Service ticket {r.get('ticket_no', '')}"),
+    "invoices": ("invoice", "date", lambda r: f"Invoice {r.get('invoice_no', '')}"),
+}
+
+
+def _with_record_events(timeline: list, records: dict, limit: int = 300) -> list:
+    logged = {(t.get("entity_id"), t.get("action")) for t in timeline}
+    extra = []
+    for key, rows in records.items():
+        spec = _RECORD_EVENTS.get(key)
+        if not spec:
+            continue
+        entity, date_field, note = spec
+        for r in rows:
+            if (r.get("id"), "create") in logged or (r.get("id"), "convert") in logged:
+                continue
+            at = str(r.get(date_field) or r.get("created_at") or "")
+            if not at:
+                continue
+            extra.append({"id": f"rec-{r.get('id')}", "entity": entity, "entity_id": r.get("id"), "action": "create",
+                          "note": note(r), "by_user": r.get("by_user") or r.get("created_by") or "", "at": at,
+                          "from_record": True})
+    out = timeline + extra
+    out.sort(key=lambda t: str(t.get("at") or ""), reverse=True)
+    return out[:limit]
 
 
 @api.get("/customers/{customer_id}/context")
@@ -6860,7 +6920,7 @@ async def customer_context(customer_id: str, user: dict = Depends(get_current_us
     totals["open_service_tickets"] = sum(1 for t in records.get("service_tickets", [])
                                          if t.get("status") in ops.OPEN_SERVICE_STATUSES)
     return {"customer": customer, "contacts": contacts, "records": records, "totals": totals,
-            "timeline": timeline}
+            "timeline": _with_record_events(timeline, records)}
 
 
 @api.get("/projects/{project_id}/context")
@@ -6899,7 +6959,8 @@ async def project_context(project_id: str, user: dict = Depends(get_current_user
     totals = _money_totals(records.get("sales", []), records.get("payments", []), [project])
     totals.update({k: len(v) for k, v in records.items()})
     return {"project": project, "customer": customer, "records": records, "totals": totals,
-            "workflow": _project_workflow_view(project), "timeline": timeline}
+            "workflow": _project_workflow_view(project),
+            "timeline": _with_record_events(timeline, {**records, "projects": [project]})}
 
 
 @api.get("/projects/search")
@@ -7123,6 +7184,16 @@ async def normalize_customer(doc: dict, existing: dict | None, user: dict) -> No
         await rel.assign_code(db, doc, user)
     else:
         doc.pop("code", None)                 # a customer number never changes
+    if "phone" in doc and (existing is None or rel.norm_phone(doc.get("phone")) != rel.norm_phone(existing.get("phone"))):
+        doc["phone"] = _phone_or_400(doc.get("phone"))
+        same = await rel.customer_by_phone(db, doc["phone"], user)
+        if same and same["id"] != (existing or {}).get("id"):
+            raise HTTPException(status_code=409, detail={
+                "message": "A customer with this phone number already exists.",
+                "existing_id": same["id"], "existing_name": same.get("name", ""),
+            })
+    elif existing is not None and "phone" in doc:
+        doc.pop("phone")                      # same number, however it was typed
 
 
 async def _customer_written(doc: dict, user: dict) -> None:
@@ -8274,8 +8345,9 @@ async def global_search(q: str = "", user: dict = Depends(get_current_user)):
             results.append({"type": kind, "id": r.get("id"), "title": r.get(title_field, ""),
                              "subtitle": subtitle_fn(r)})
 
-    await add(db.customers.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"alt_phone": rx}, {"email": rx}]}, "customers", user), {"_id": 0}),
-              "customer", "name", lambda r: r.get("phone", ""))
+    await add(db.customers.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"alt_phone": rx}, {"email": rx},
+                                                       {"code": rx}, {"company": rx}]}, "customers", user), {"_id": 0}),
+              "customer", "name", lambda r: " · ".join(x for x in (r.get("code", ""), r.get("phone", ""), r.get("company", "")) if x))
     await add(db.leads.find(tenancy.scope({"$or": [{"name": rx}, {"phone": rx}, {"reference": rx}, {"email": rx},
                                                     {"whatsapp": rx}, {"id": q}]}, "leads", user), {"_id": 0}),
               "lead", "name", lambda r: " · ".join(x for x in (r.get("phone", ""), r.get("stage", ""), r.get("division", "")) if x))
