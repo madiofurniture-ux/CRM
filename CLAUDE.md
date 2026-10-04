@@ -106,6 +106,15 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   (`lc.tier_price`, server-side); a typed rate turns it off.
 - Starter flows switch on once at startup for a company with none
   (`go_live_auto_starter_flows`, run key `starter-flows-1`).
+- UI shell: Salesforce Lightning-style by default (`components/lightning/*`:
+  global header with search + reminders, App Launcher, app tabs from
+  `lib/apps.js`; `Topbar` renders a page header with the object's icon
+  tile). `REACT_APP_UI_SHELL=sidebar` restores the left-sidebar shell.
+- Reminders: tasks carry `due_time` + `remind_minutes`, meetings
+  `remind_minutes` (default 15); `GET /reminders` lists the signed-in
+  person's timed tasks/meetings (yesterday–tomorrow) and `ReminderCenter`
+  pops them up on any screen (snooze/dismiss kept per browser; optional
+  desktop notifications).
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.

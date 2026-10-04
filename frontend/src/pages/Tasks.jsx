@@ -9,6 +9,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 import StaffPicker from "@/components/StaffPicker";
 
+const REMIND = [["", "No reminder"], [0, "At the time"], [5, "5 minutes before"], [10, "10 minutes before"],
+  [15, "15 minutes before"], [30, "30 minutes before"], [60, "1 hour before"], [120, "2 hours before"]];
 const PRIORITIES = ["Low", "Medium", "High"];
 const CATEGORIES = ["General", "Sales", "Site Visit", "Marketing", "Delivery", "Inventory", "Admin", "Procurement", "Finance"];
 
@@ -17,7 +19,7 @@ export default function Tasks() {
   const [filter, setFilter] = useState("Open"); // Open / Done / All
   const [show, setShow] = useState(false);
   const [saving, setSaving] = useState(false);
-  const empty = { title: "", priority: "Medium", due_date: "", assigned_to: "", category: "General", notes: "", done: false,
+  const empty = { title: "", priority: "Medium", due_date: "", due_time: "", remind_minutes: 15, assigned_to: "", category: "General", notes: "", done: false,
                   customer_id: "", project_id: "", ref: "", ref_type: "", linked_entity_name: "" };
   const [form, setForm] = useState(empty);
 
@@ -116,7 +118,7 @@ export default function Tasks() {
                   <div className={`text-sm font-medium ${t.done ? "line-through text-[var(--ink-3)]" : "text-[var(--ink)]"}`}>{t.title}</div>
                   <div className="flex flex-wrap items-center gap-3 mt-1.5 text-[11px] text-[var(--ink-3)]">
                     <span className={`flex items-center gap-1 ${overdue ? "text-[var(--danger)] font-semibold" : ""}`}>
-                      <Calendar size={11} />{fmtDate(t.due_date)}
+                      <Calendar size={11} />{fmtDate(t.due_date)}{t.due_time ? `, ${t.due_time}` : ""}{t.due_time && t.remind_minutes != null ? " · reminder on" : ""}
                     </span>
                     {t.assigned_to && <span className="flex items-center gap-1"><User size={11} />{t.assigned_to}</span>}
                     <span className="px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--ink-2)]">{t.category}</span>
@@ -159,7 +161,19 @@ export default function Tasks() {
               </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Due date</label>
-                <input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" />
+                <div className="flex gap-2">
+                  <input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" aria-label="Due date" />
+                  <input type="time" value={form.due_time || ""} onChange={(e) => setForm({ ...form, due_time: e.target.value })} className="w-28 px-2 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" aria-label="Due time" data-testid="task-due-time" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Remind me</label>
+                <select value={form.remind_minutes ?? ""} disabled={!form.due_time}
+                        onChange={(e) => setForm({ ...form, remind_minutes: e.target.value === "" ? null : Number(e.target.value) })}
+                        className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm disabled:opacity-50" data-testid="task-remind"
+                        title={form.due_time ? "" : "Set a due time to get a reminder"}>
+                  {REMIND.map(([v, l]) => <option key={l} value={v}>{l}</option>)}
+                </select>
               </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Assign to</label>

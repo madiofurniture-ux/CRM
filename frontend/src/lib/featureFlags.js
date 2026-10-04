@@ -11,6 +11,13 @@ const RAW_UI_THEME = (process.env.REACT_APP_UI_THEME || "").trim().toLowerCase()
 export const UI_THEME = RAW_UI_THEME === "baseplate" ? "baseplate" : "light";
 export const IS_LIGHT_THEME = UI_THEME === "light";
 
+// Shell inside the light theme. "lightning" = Salesforce Lightning-style
+// global header + App Launcher + app tabs (components/lightning/*), the
+// default. "sidebar" = the earlier left-sidebar shell (components/light/*),
+// kept as the rollback: REACT_APP_UI_SHELL=sidebar and rebuild.
+export const UI_SHELL = (process.env.REACT_APP_UI_SHELL || "").trim().toLowerCase() === "sidebar" ? "sidebar" : "lightning";
+export const IS_LIGHTNING = IS_LIGHT_THEME && UI_SHELL === "lightning";
+
 // Legacy/non-core nav — kept default-off as the umbrella override: set
 // REACT_APP_SHOW_LEGACY_MENUS=true (e.g. in frontend/.env) and restart the
 // dev server / rebuild to restore everything at once, no code changes

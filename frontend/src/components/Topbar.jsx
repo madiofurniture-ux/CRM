@@ -1,5 +1,8 @@
 import { useState, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { IS_LIGHTNING } from "@/lib/featureFlags";
+import { navItemForPath } from "@/lib/apps";
+import { ObjectTile } from "@/components/lightning/LightningShell";
 import { Search, Plus, Bell, Shield, ShieldCheck, X } from "lucide-react";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import api from "@/lib/api";
@@ -16,6 +19,7 @@ const TYPE_LABEL = { service_ticket: "service" };
 export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actions }) {
   const { isOtherHidden, requestUnlock, relock } = usePrivacyMode();
   const nav = useNavigate();
+  const { pathname } = useLocation();
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [open, setOpen2] = useState(false);
@@ -56,6 +60,47 @@ export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actio
       ))}
     </div>
   );
+
+  const privacyButton = (
+    <button
+      onClick={isOtherHidden ? requestUnlock : relock}
+      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-semibold shrink-0 ${
+        isOtherHidden ? "bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]" : "bg-[var(--color-primary)] text-white"
+      }`}
+      title={isOtherHidden ? "Privacy Mode: ON — Other amounts masked" : "Unlocked — all Other amounts visible. Click to relock."}
+      aria-label={isOtherHidden ? "Privacy Mode on, Other amounts masked. Click to unlock." : "Privacy Mode unlocked. Click to relock."}
+      data-testid="privacy-mode-toggle"
+    >
+      {isOtherHidden ? <Shield size={15} strokeWidth={1.8} /> : <ShieldCheck size={15} strokeWidth={1.8} />}
+      <span className="hidden sm:inline">{isOtherHidden ? "Privacy Mode" : "Unlocked"}</span>
+    </button>
+  );
+
+  // Lightning shell: search and the bell live in the global header; the page
+  // gets a header card with its object's icon tile, title and actions.
+  if (IS_LIGHTNING) {
+    const item = navItemForPath(pathname);
+    const objectLabel = item && item.label !== title ? item.label : "";
+    return (
+      <header className="lx-page-header flex flex-wrap items-center gap-3" data-testid="topbar">
+        <ObjectTile id={item?.id} size={36} />
+        <div className="flex-1 min-w-[10rem]">
+          {objectLabel && <div className="text-xs text-[var(--color-text-muted)] leading-tight">{objectLabel}</div>}
+          <h1 className="font-heading text-[18px] sm:text-[20px] font-bold text-[var(--color-text)] leading-tight truncate">{title}</h1>
+          {subtitle && <div className="text-xs text-[var(--color-text-muted)] mt-0.5 truncate">{subtitle}</div>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {actions}
+          {privacyButton}
+          {onAdd && (
+            <button onClick={onAdd} className="lx-btn lx-btn-brand" data-testid="topbar-add-btn">
+              <Plus size={15} strokeWidth={2} /> {addLabel}
+            </button>
+          )}
+        </div>
+      </header>
+    );
+  }
 
   return (
     <header className="sticky top-0 z-30 h-16 bg-[var(--color-surface)]/85 backdrop-blur-md border-b border-[var(--color-border)] flex items-center px-3 sm:px-6 gap-2 sm:gap-4" data-testid="topbar">

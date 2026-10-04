@@ -3602,6 +3602,62 @@ make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_fiel
           personal=True)
 
 
+# ── Reminders: the signed-in person's timed tasks and meetings ─────────────
+_HHMM = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*(am|pm)?\s*$", re.I)
+
+
+def _hhmm(value) -> str:
+    """"14:30", "2:30 pm", "09.15" -> "HH:MM"; anything else -> ""."""
+    m = _HHMM.match(str(value or ""))
+    if not m:
+        return ""
+    h, mi, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").lower()
+    if ap == "pm" and h < 12:
+        h += 12
+    if ap == "am" and h == 12:
+        h = 0
+    return f"{h:02d}:{mi:02d}" if h < 24 and mi < 60 else ""
+
+
+@api.get("/reminders")
+async def my_reminders(user: dict = Depends(get_current_user)):
+    """What this person has coming up: their open tasks (assigned to or
+    raised by them) and meetings (theirs or ones they attend) from yesterday
+    to tomorrow. Items with a time and a reminder pop up on screen at
+    `at` minus `remind_minutes` (times are IST); the rest list in the bell."""
+    from datetime import date, datetime, timedelta
+    today = date.today()                               # IST: the server runs with TZ=Asia/Kolkata
+    days = [(today + timedelta(days=d)).isoformat() for d in (-1, 0, 1)]
+    name, uid = user.get("name", ""), user.get("id", "")
+    out = []
+    task_q = {"done": {"$ne": True}, "status": {"$nin": ["Completed"]},
+              "$and": [{"$or": [{"assigned_to": name}, {"created_by_id": uid}, {"created_by": name}]},
+                       {"$or": [{"due_date": {"$in": days}}, {"date": {"$in": days}},
+                                {"due_date": {"$lt": days[0], "$nin": ["", None]}}]}]}
+    for t in await db.tasks.find(tenancy.scope(task_q, "tasks", user), {"_id": 0}).to_list(500):
+        day = t.get("due_date") or t.get("date") or ""
+        hhmm = _hhmm(t.get("due_time")) or _hhmm(t.get("time_slot"))
+        out.append({"kind": "task", "id": t["id"], "title": t.get("title", ""), "date": day,
+                    "time": hhmm, "at": f"{day}T{hhmm}" if day and hhmm else "",
+                    "remind_minutes": t.get("remind_minutes") if hhmm else None,
+                    "overdue": bool(day) and day < today.isoformat(),
+                    "subtitle": " · ".join(x for x in (t.get("linked_entity_name"), t.get("priority")) if x),
+                    "link": "/tasks"})
+    meet_q = {"date": {"$in": days[1:]}, "status": {"$nin": ["Cancelled", "Done"]},
+              "$or": [{"created_by_id": uid}, {"created_by": name}, {"attendees": name}]}
+    for m in await db.meets.find(tenancy.scope(meet_q, "meets", user), {"_id": 0}).to_list(500):
+        hhmm = _hhmm(m.get("start_time"))
+        out.append({"kind": "meeting", "id": m["id"], "title": m.get("title", ""), "date": m.get("date", ""),
+                    "time": hhmm, "end_time": _hhmm(m.get("end_time")),
+                    "at": f"{m.get('date')}T{hhmm}" if hhmm else "",
+                    "remind_minutes": m.get("remind_minutes", 15) if hhmm else None,
+                    "overdue": False,
+                    "subtitle": " · ".join(x for x in (m.get("with_person") or m.get("ref_name"), m.get("location")) if x),
+                    "link": "/meets"})
+    out.sort(key=lambda r: (r["date"] or "9999", r["time"] or "99:99"))
+    return {"now": datetime.now().strftime("%Y-%m-%dT%H:%M"), "items": out}
+
+
 # ---------- Daily Task Planner — a date-scoped view over the same `tasks`
 # collection the generic Tasks page uses (see normalize_task above for how
 # `done`/`status` stay in sync between the two UIs). ----------

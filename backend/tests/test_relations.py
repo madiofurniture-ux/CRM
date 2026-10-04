@@ -408,3 +408,31 @@ def test_new_user_keeps_team_role_and_access_flags():
         assert (stored["team_id"], stored["role_id"], stored["can_view_cost"], stored["shared_login"]) == ("t1", "r1", True, False)
         assert server._can_see_cost_prices(stored)
     run(go())
+
+
+def test_reminders_list_my_timed_tasks_and_meetings():
+    from datetime import date, timedelta
+    from models import TaskCreate, MeetCreate
+    today = date.today().isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    me = {"id": "u10", "tenant_id": "acme", "name": "Asha", "role": "user", "role_id": "", "username": "asha"}
+    other = {**me, "id": "u11", "name": "Ravi", "username": "ravi"}
+    reminders = _route("/api/reminders")
+
+    async def go():
+        await create_task(TaskCreate(title="Call Mr Rao", due_date=today, due_time="15:30", remind_minutes=10), user=me)
+        await create_task(TaskCreate(title="Untimed", due_date=today), user=me)
+        await create_task(TaskCreate(title="Someone else's", due_date=today, due_time="10:00"), user=other)
+        await create_task(TaskCreate(title="Done one", due_date=today, due_time="09:00", done=True), user=me)
+        await create_meet(MeetCreate(title="Site visit", date=tomorrow, start_time="11:00", end_time="12:00"), user=me)
+        await create_meet(MeetCreate(title="Planning", date=today, start_time="2:30 pm", attendees=["Asha"]), user=other)
+        r = await reminders(user=me)
+        got = {i["title"]: i for i in r["items"]}
+        assert set(got) == {"Call Mr Rao", "Untimed", "Site visit", "Planning"}
+        assert got["Call Mr Rao"]["at"] == f"{today}T15:30" and got["Call Mr Rao"]["remind_minutes"] == 10
+        assert got["Untimed"]["at"] == "" and got["Untimed"]["remind_minutes"] is None
+        assert got["Site visit"]["remind_minutes"] == 15 and got["Site visit"]["kind"] == "meeting"
+        assert got["Planning"]["time"] == "14:30"                     # attendee; "2:30 pm" read as 14:30
+        assert [i["title"] for i in (await reminders(user=other))["items"]] == ["Someone else's", "Planning"] or \
+            {i["title"] for i in (await reminders(user=other))["items"]} == {"Someone else's", "Planning"}
+    run(go())

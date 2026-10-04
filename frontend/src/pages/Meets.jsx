@@ -7,6 +7,8 @@ import { todayIST, isoDateIST } from "@/lib/format";
 import { Link, useSearchParams } from "react-router-dom";
 import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 
+const REMIND = [["", "No reminder"], [0, "At the time"], [5, "5 minutes before"], [10, "10 minutes before"],
+  [15, "15 minutes before"], [30, "30 minutes before"], [60, "1 hour before"], [120, "2 hours before"]];
 const HOURS = Array.from({ length: 12 }, (_, i) => 8 + i); // 8..19
 
 function startOfWeek(d) {
@@ -25,7 +27,7 @@ export default function Meets() {
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const empty = { title: "", date: todayIST(), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Internal", ref_name: "", agenda: "", status: "Scheduled", attendees: [], customer_id: "", project_id: "" };
+  const empty = { title: "", date: todayIST(), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Internal", ref_name: "", agenda: "", status: "Scheduled", attendees: [], customer_id: "", project_id: "", remind_minutes: 15 };
   const [form, setForm] = useState(empty);
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -212,6 +214,13 @@ export default function Meets() {
               <div className="grid grid-cols-2 gap-2">
                 <F l="Start" t="time" v={form.start_time} oc={(v) => setForm({ ...form, start_time: v })} />
                 <F l="End" t="time" v={form.end_time} oc={(v) => setForm({ ...form, end_time: v })} />
+              </div>
+              <div className="col-span-2 sm:col-span-1">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Remind me</label>
+                <select value={form.remind_minutes ?? ""} onChange={(e) => setForm({ ...form, remind_minutes: e.target.value === "" ? null : Number(e.target.value) })}
+                        className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" data-testid="meet-remind">
+                  {REMIND.map(([v, l]) => <option key={l} value={v}>{l}</option>)}
+                </select>
               </div>
               <F l="Location" v={form.location} oc={(v) => setForm({ ...form, location: v })} />
               <F l="With" v={form.with_person} oc={(v) => setForm({ ...form, with_person: v })} />

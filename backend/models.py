@@ -508,6 +508,8 @@ class TaskBase(BaseModel):
     title: str
     priority: str = "Medium"  # Low / Medium / High / Urgent
     due_date: Optional[str] = ""
+    due_time: Optional[str] = ""          # "HH:MM" (IST) — with due_date, when the reminder pops up
+    remind_minutes: Optional[int] = None  # pop up this many minutes before; None = no reminder
     assigned_to: Optional[str] = ""
     category: Optional[str] = "General"
     ref: Optional[str] = ""
@@ -866,6 +868,7 @@ class MeetBase(BaseModel):
     project_id: Optional[str] = ""
     agenda: Optional[str] = ""
     status: str = "Scheduled"  # Scheduled / Done / Cancelled
+    remind_minutes: Optional[int] = 15    # pop-up reminder this many minutes before start; None = off
     created_by: Optional[str] = ""
     created_by_id: Optional[str] = ""  # stamped server-side; personal-visibility key
 

@@ -2,7 +2,8 @@ import { useLocation } from "react-router-dom";
 import Header from "@/components/Header";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import LightAppShell from "@/components/light/LightAppShell";
-import { IS_LIGHT_THEME } from "@/lib/featureFlags";
+import LightningShell from "@/components/lightning/LightningShell";
+import { IS_LIGHT_THEME, IS_LIGHTNING } from "@/lib/featureFlags";
 
 const IS_STAGING = process.env.REACT_APP_ENV === "staging";
 
@@ -18,6 +19,15 @@ export default function Layout({ children }) {
       STAGING / TEST — not production data
     </div>
   );
+
+  if (IS_LIGHTNING) {
+    return (
+      <>
+        {stagingBanner}
+        <LightningShell>{page}</LightningShell>
+      </>
+    );
+  }
 
   if (IS_LIGHT_THEME) {
     return (
