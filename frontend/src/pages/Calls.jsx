@@ -5,6 +5,7 @@ import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 import api, { formatApiError } from "@/lib/api";
 import { fmtDate, todayIST, isoDateIST } from "@/lib/format";
 import { toast } from "sonner";
@@ -19,7 +20,6 @@ import { PhoneOutgoing, UserPlus, Trash2, ArrowUpRight } from "lucide-react";
 const OUTCOMES = ["Interested", "Callback", "Not interested", "No answer", "Busy", "Wrong number"];
 const CONNECTED = new Set(["Interested", "Callback", "Not interested"]);
 const TYPES = ["Cold call", "Follow-up", "Inbound"];
-const DIVISIONS = ["Furniture", "MAP", "D&W"];
 const OUTCOME_TONE = {
   Interested: "bg-[var(--moss-soft)] text-[var(--color-success)]",
   Callback: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]",
@@ -43,6 +43,7 @@ export default function Calls() {
   const canCreate = canDo("calls", "create");
   const canEdit = canDo("calls", "edit");
   const canDelete = canDo("calls", "delete");
+  const DIVISIONS = useTenantConfig().divisions.map((d) => d.slug);
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);

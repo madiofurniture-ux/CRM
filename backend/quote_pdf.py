@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Optional
 from xml.sax.saxutils import escape
 
+import india
+
 ASSETS = Path(__file__).resolve().parent / "assets"
 NAVY = "#14213D"
 GOLD = "#C9A227"
@@ -95,6 +97,23 @@ def _image(src: str, max_w: float, max_h: float):
         return None
 
 
+def office_bank_lines(office: dict) -> list:
+    """Bank and UPI lines from the company profile (Admin → Business Setup),
+    used when the division preset carries no bank block of its own."""
+    o = office or {}
+    out = []
+    if o.get("bank_account_no"):
+        out.append(f"Name: {o.get('legal_name') or o.get('name') or ''}".rstrip())
+        out.append(f"A/c no: {o['bank_account_no']}")
+        if o.get("bank_name"):
+            out.append(f"Bank: {o['bank_name']}")
+        if o.get("bank_ifsc"):
+            out.append(f"IFSC: {o['bank_ifsc']}")
+    if o.get("upi_id"):
+        out.append(f"UPI: {o['upi_id']}")
+    return out
+
+
 def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dict, office: dict,
            customer: Optional[dict], tenant_id: str, terms: list, extras: Optional[list] = None) -> bytes:
     """extras: [{"title", "items": [str], "numbered": bool}] printed after the
@@ -168,7 +187,8 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
         qdate = f"{m.group(3)}/{months[int(m.group(2)) - 1]}/{m.group(1)}"
     info = ["<b>QUOTATION</b>", f"Quotation No. : {e(quote.get('quote_no'))}", f"Quotation Date : {e(qdate)}",
             f"Valid Until : {e(quote.get('valid_until'))}" if quote.get("valid_until") else "",
-            f"GST No. : {e(cust.get('gstin') or 'NA')}"]
+            f"GST No. : {e(cust.get('gstin') or 'NA')}",
+            f"Our GSTIN : {e(office.get('gstin'))}" if office.get("gstin") else ""]
     t = Table([[P("<br/>".join(bill)), P("<br/>".join(x for x in info if x))]], colWidths=[width * .55, width * .45])
     t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), pale), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                            ("BOX", (0, 0), (-1, -1), .5, colors.HexColor("#CFC6AE")),
@@ -315,6 +335,8 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
     net.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), navy), ("TOPPADDING", (0, 0), (-1, -1), 5),
                              ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
     story.append(net)
+    # Indian documents state the payable amount in words (lakh / crore).
+    story.append(P(f"<i>{e(india.amount_in_words(totals.get('grand_total') or 0))}</i>", right))
 
     # ── project summary ──
     if summary.get("sft"):
@@ -350,8 +372,9 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
     for extra in extras or []:
         story += section(extra.get("title") or "", extra.get("items") or [], bool(extra.get("numbered")))
     story += section("Terms & Conditions", terms, True)
-    if preset.get("bank"):
-        story += [Spacer(1, 3 * mm), P("<b>Bank details</b>", base)] + [P(e(b), base) for b in preset["bank"]]
+    bank = preset.get("bank") or office_bank_lines(office)
+    if bank:
+        story += [Spacer(1, 3 * mm), P("<b>Bank details</b>", base)] + [P(e(b), base) for b in bank]
 
     sig = Table([[P("<b>Authorized Signatory</b>"), P("<b>Signature of Customer</b>", right)]],
                 colWidths=[width * .5, width * .5])

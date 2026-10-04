@@ -14,7 +14,6 @@ const PERIODS = [
   { key: "alltime", label: "All Time" },
 ];
 const ROW_ICON = { Furniture: "🛋", MAP: "🎨", "D&W": "🚪", Other: "▫", TOTAL: "Σ" };
-const ROWS = ["Furniture", "MAP", "D&W", "Other", "TOTAL"];
 
 export default function Reports() {
   const [period, setPeriod] = useState("thisweek");
@@ -32,7 +31,8 @@ export default function Reports() {
       .catch(() => window.prompt("Copy this summary:", txt));
   };
 
-  const visibleRows = ROWS.filter((d) => {
+  // The server rolls up by this company's own divisions (then Other, TOTAL).
+  const visibleRows = Object.keys(D).filter((d) => {
     const r = D[d];
     return d === "TOTAL" || (r && (r.leads || r.quotes || r.won || r.collected || r.due));
   });
@@ -69,7 +69,7 @@ export default function Reports() {
               return (
                 <div key={d}>
                   <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium text-[var(--ink)]">{ROW_ICON[d]} {d}</span>
+                    <span className="font-medium text-[var(--ink)]">{ROW_ICON[d] || "▪"} {d}</span>
                     <span className="text-[var(--ink-2)]">{r.won || 0} won · {inrFull(r.wval)}{r.due > 0 && <span className="text-[var(--danger)]"> · {inrFull(r.due)} due</span>}</span>
                   </div>
                   <div className="h-2.5 rounded-full bg-[var(--surface-2)] overflow-hidden">

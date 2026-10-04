@@ -6,6 +6,7 @@ import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePrivacyMode } from "@/context/PrivacyModeContext";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 import api, { formatApiError } from "@/lib/api";
 import { inr, inrFull, fmtDate, todayIST, isoDateIST } from "@/lib/format";
 import {
@@ -42,6 +43,7 @@ function presetRange(k) {
 }
 
 export default function ProfitLoss() {
+  const { divisions } = useTenantConfig();
   const location = useLocation();
   const nav = useNavigate();
   const params = new URLSearchParams(location.search);
@@ -131,7 +133,7 @@ function CompanyPnl() {
         <input type="date" aria-label="To" className={field} value={end} min={start} onChange={(e) => { setPreset(""); setRange([start, e.target.value]); }} />
         <select className={field} aria-label="Division" value={division} onChange={(e) => setDivision(e.target.value)}>
           <option value="">All divisions</option>
-          {["Furniture", "MAP", "D&W"].map((d) => <option key={d}>{d}</option>)}
+          {divisions.map((d) => <option key={d.slug} value={d.slug}>{d.name || d.slug}</option>)}
         </select>
       </div>
 

@@ -4474,7 +4474,8 @@ async def company_pnl(start: str = "", end: str = "", division: str = "", mask_o
         s_, e_ = an.parse_range(start, end, today=_ist_today())
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
-    if division and division not in lc.DIVISIONS + ["Other"]:
+    await _tenant_divisions(user)
+    if division and division not in lc.divisions() + ["Other"]:
         raise HTTPException(status_code=400, detail=f"Unknown division '{division}'")
     data = await _lineage_data(user)
     out = fl.company_pnl(
@@ -5303,6 +5304,13 @@ async def _get_business_profile(user: dict):
     return doc
 
 
+async def _tenant_divisions(user: dict) -> list:
+    """Scope this request's division rollups (lifecycle.divisions) to the
+    caller's own division roster."""
+    profile = await _get_business_profile(user)
+    return lc.use_divisions([d.get("slug") for d in profile.get("divisions") or []])
+
+
 @api.get("/settings/business-profile")
 async def get_business_profile(user: dict = Depends(get_current_user)):
     return await _get_business_profile(user)
@@ -6037,7 +6045,8 @@ async def analytics_hub(tab: str, start: str = "", end: str = "", division: str 
         s, e = an.parse_range(start, end, today=today)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
-    if division and division not in lc.DIVISIONS + ["Other"]:
+    await _tenant_divisions(user)
+    if division and division not in lc.divisions() + ["Other"]:
         raise HTTPException(status_code=400, detail=f"Unknown division '{division}'")
     admin = user.get("role") == "admin"
 
@@ -6093,7 +6102,8 @@ async def analytics_tracker(division: str = "MAP", start: str = "", end: str = "
         s, e = an.parse_range(start, end, today=today)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
-    if division and division not in lc.DIVISIONS:
+    await _tenant_divisions(user)
+    if division and division not in lc.divisions():
         raise HTTPException(status_code=400, detail=f"Unknown division '{division}'")
     owners = await _scope_owners(user, roles, "analytics")
     mine = None if owners is None else {"by_user": {"$in": owners}}
@@ -8186,8 +8196,12 @@ async def reports(period: str = "thisweek", user: dict = Depends(get_current_use
     quotes = await db.quotes.find(tenancy.scope({}, "quotes", user), {"_id": 0}).to_list(5000)
     sales = await db.sales.find(tenancy.scope({}, "sales", user), {"_id": 0}).to_list(5000)
     payments = await db.payments.find(tenancy.scope({}, "payments", user), {"_id": 0}).to_list(5000)
+    await _tenant_divisions(user)
     report = lc.build_report(period, leads, quotes, sales, payments)
-    report["whatsapp"] = lc.whatsapp_summary(report)
+    tenant = await db.tenants.find_one({"id": tenancy.tenant_of(user)}, {"_id": 0}) or {}
+    report["whatsapp"] = lc.whatsapp_summary(
+        report, tenant.get("short_name") or ("MADIO" if tenancy.tenant_of(user) == DEFAULT_TENANT else "")
+        or tenant.get("display_name") or tenant.get("name") or "Weekly")
     return report
 
 

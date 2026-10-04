@@ -6,6 +6,7 @@ import Topbar from "@/components/Topbar";
 import ErrorState from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 import api, { formatApiError } from "@/lib/api";
 import { inr, inrFull, fmtDate, todayIST, isoDateIST } from "@/lib/format";
 import { ArrowUp, ArrowDown, Table2, BarChart3 } from "lucide-react";
@@ -73,6 +74,7 @@ const fmtValue = (v, format) => {
 const field = "px-2.5 py-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border-strong,var(--color-border))] bg-[var(--color-surface)] text-sm outline-none focus:border-[var(--color-primary)]";
 
 export default function Analytics() {
+  const { divisions } = useTenantConfig();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const tabs = TABS.filter((t) => !t.adminOnly || isAdmin);
@@ -143,7 +145,7 @@ export default function Analytics() {
           {tabDef.division ? (
             <select className={field} aria-label="Division" value={division} onChange={(e) => setDivision(e.target.value)}>
               <option value="">All divisions</option>
-              {["Furniture", "MAP", "D&W"].map((d) => <option key={d}>{d}</option>)}
+              {divisions.map((d) => <option key={d.slug} value={d.slug}>{d.name || d.slug}</option>)}
             </select>
           ) : (
             <span className="text-xs text-[var(--color-text-muted)]">The division filter doesn't apply to {tabDef.label.toLowerCase()}.</span>

@@ -18,6 +18,7 @@ import csv
 import math
 import io
 import re
+from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
@@ -192,9 +193,28 @@ def is_corrupt_money(value: Any) -> bool:
         return False
 
 
+# The divisions rollups group by. DIVISIONS is MADIO's roster and the
+# default; a request for another company calls use_divisions() with its own
+# business-profile slugs first (server._tenant_divisions), so a solar or
+# clinic tenant's reports show its own lines instead of one "Other" bucket.
+# A ContextVar is per request task, so one tenant's roster never leaks into
+# another's request.
+_tenant_divisions: ContextVar = ContextVar("tenant_divisions", default=None)
+
+
+def use_divisions(slugs: Iterable[str] | None) -> list:
+    clean = [str(s).strip() for s in (slugs or []) if str(s or "").strip()]
+    _tenant_divisions.set(clean or None)
+    return divisions()
+
+
+def divisions() -> list:
+    return list(_tenant_divisions.get() or DIVISIONS)
+
+
 def norm_division(value: Any) -> str:
     v = str(value or "").strip()
-    return v if v in DIVISIONS else "Other"
+    return v if v in divisions() else "Other"
 
 
 # ------------------------------------------------------------ document ids
@@ -863,7 +883,7 @@ def build_report(period, leads, quotes, sales, payments) -> dict:
             return False
         return (start is None or d >= start) and d <= end
 
-    rows = {d: _blank_row() for d in DIVISIONS + ["Other", "TOTAL"]}
+    rows = {d: _blank_row() for d in divisions() + ["Other", "TOTAL"]}
 
     def add(division, key, amount):
         rows[norm_division(division)][key] += amount
@@ -891,7 +911,7 @@ def build_report(period, leads, quotes, sales, payments) -> dict:
             "divisions": rows}
 
 
-def whatsapp_summary(report: dict) -> str:
+def whatsapp_summary(report: dict, company: str = "MADIO") -> str:
     """The WhatsApp-pasteable digest the team sends every Monday."""
     rows, icons = report["divisions"], {"Furniture": "🛋", "MAP": "🎨", "D&W": "🚪"}
 
@@ -905,13 +925,13 @@ def whatsapp_summary(report: dict) -> str:
             return f"₹{n / 1e3:.1f}k"
         return f"₹{n:.0f}"
 
-    lines = [f"📊 *MADIO {report['label']}*"]
-    for d in DIVISIONS:
+    lines = [f"📊 *{company} {report['label']}*"]
+    for d in [k for k in rows if k not in ("Other", "TOTAL")] + ["Other"]:
         r = rows[d]
         if not any((r["leads"], r["quotes"], r["won"], r["collected"])):
             continue
         lines.append(
-            f"{icons[d]} *{d}*: {r['leads']} leads | {r['quotes']} quotes ({fmt(r['qval'])})"
+            f"{icons.get(d, '▪')} *{d}*: {r['leads']} leads | {r['quotes']} quotes ({fmt(r['qval'])})"
             f" | {r['won']} sales ({fmt(r['wval'])}) | collected {fmt(r['collected'])}"
         )
     t = rows["TOTAL"]

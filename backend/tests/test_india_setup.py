@@ -216,3 +216,68 @@ def test_setup_status_tracks_progress():
         assert {"company", "industry", "divisions", "workflow"} <= done
         assert after["percent"] > before["percent"]
     run(go())
+
+
+# ── documents ────────────────────────────────────────────────────────────
+def test_bank_lines_come_from_the_company_profile():
+    import quote_pdf
+    assert quote_pdf.office_bank_lines({}) == []
+    lines = quote_pdf.office_bank_lines({"legal_name": "Kiran Solar LLP", "bank_account_no": "5020001",
+                                         "bank_name": "HDFC Bank", "bank_ifsc": "HDFC0001234",
+                                         "upi_id": "kiran@hdfcbank"})
+    assert lines == ["Name: Kiran Solar LLP", "A/c no: 5020001", "Bank: HDFC Bank",
+                     "IFSC: HDFC0001234", "UPI: kiran@hdfcbank"]
+
+
+def test_quote_pdf_states_the_total_in_words(monkeypatch):
+    import quote_pdf
+    said = []
+    real = india.amount_in_words
+    monkeypatch.setattr(quote_pdf.india, "amount_in_words", lambda a: said.append(a) or real(a))
+
+    async def go():
+        await server.db.tenants.insert_one({"id": "acme"})
+        await server.setup_company({"name": "Acme", "gstin": VALID_GSTIN, "address": "Pune",
+                                    "bank_account_no": "123456", "upi_id": "acme@upi"}, user=ADMIN)
+        await server.db.quotes.insert_one({"id": "q1", "tenant_id": "acme", "quote_no": "Q-1",
+                                           "date": "2026-10-04", "customer": "Ravi", "division": "Furniture",
+                                           "version": 1, "tax_pct": 18})
+        await server.db.quote_lines.insert_one({"id": "l1", "tenant_id": "acme", "quote_id": "q1", "version": 1,
+                                                "qty": 1, "rate": 100000, "created_at": "2026-10-04T00"})
+        resp = await server.quote_pdf("q1", user=ADMIN)
+        assert resp.body[:4] == b"%PDF"
+        assert said and said[-1] > 0
+    run(go())
+
+
+# ── divisions are configuration ──────────────────────────────────────────
+def test_reports_roll_up_by_the_tenants_own_divisions():
+    async def go():
+        await server.db.tenants.insert_many([{"id": "acme", "name": "Kiran Solar"}, {"id": "globex"}])
+        await server.setup_apply_pack({"pack": "solar_electrical"}, user=ADMIN)
+        await server.db.leads.insert_many([
+            {"id": "a", "tenant_id": "acme", "division": "Solar", "date": "2026-10-01"},
+            {"id": "b", "tenant_id": "acme", "division": "Electrical", "date": "2026-10-01"},
+            {"id": "c", "tenant_id": "globex", "division": "Furniture", "date": "2026-10-01"},
+        ])
+        rep = await server.reports(period="alltime", user=ADMIN)
+        assert set(rep["divisions"]) == {"Solar", "Electrical", "Other", "TOTAL"}
+        assert rep["divisions"]["Solar"]["leads"] == 1 and rep["divisions"]["Other"]["leads"] == 0
+        assert "Kiran Solar" in rep["whatsapp"] and "*Solar*" in rep["whatsapp"]
+
+        other = await server.reports(period="alltime", user=OTHER)
+        assert {"Furniture", "MAP", "D&W"} <= set(other["divisions"]) and "Solar" not in other["divisions"]
+        assert other["divisions"]["Furniture"]["leads"] == 1
+    run(go())
+
+
+def test_analytics_accepts_the_tenants_division_and_rejects_unknown_ones():
+    async def go():
+        await server.db.tenants.insert_one({"id": "acme"})
+        await server.setup_apply_pack({"pack": "healthcare"}, user=ADMIN)
+        out = await server.company_pnl(start="2026-04-01", end="2026-10-01", division="Procedures", user=ADMIN)
+        assert out is not None
+        with pytest.raises(HTTPException) as e:
+            await server.company_pnl(start="2026-04-01", end="2026-10-01", division="MAP", user=ADMIN)
+        assert e.value.status_code == 400
+    run(go())
