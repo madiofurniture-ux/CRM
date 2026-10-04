@@ -5,6 +5,7 @@ import { usePrivacyMode } from "@/context/PrivacyModeContext";
 import api, { formatApiError } from "@/lib/api";
 import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 import { Wallet, Landmark, Receipt, X, Download } from "lucide-react";
 
 const MODES = ["All", "BANK_TRANSFER", "OTHER", "SPLIT"];
@@ -16,7 +17,7 @@ const STATUS_TONE = {
 };
 
 const emptyForm = {
-  project_id: "", payment_mode: "SPLIT", receipt_date: todayIST(),
+  project_id: "", customer_id: "", payment_mode: "SPLIT", receipt_date: todayIST(),
   bt_taxable: "", gst_rate: "18", utr_reference: "", other_amount: "", wallet_id: "",
 };
 
@@ -187,9 +188,10 @@ export default function Payments() {
             </div>
             <div className="p-5 space-y-4">
               <div>
-                <label htmlFor="pay-project" className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Project ID</label>
-                <input id="pay-project" value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] text-sm" data-testid="pay-project-id" />
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Customer &amp; project</div>
+                <CustomerProjectPicker customerId={form.customer_id} projectId={form.project_id} allowNewProject={false}
+                  onChange={({ customer, project }) => setForm((f) => ({ ...f, customer_id: customer?.id || "", project_id: project?.id || "" }))}
+                  testid="pay-cpp" />
               </div>
 
               <div className="grid grid-cols-2 gap-4">

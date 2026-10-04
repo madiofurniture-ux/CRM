@@ -5,6 +5,8 @@ import api from "@/lib/api";
 import { fmtDate, todayIST } from "@/lib/format";
 import { Check, Calendar, User, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { Link, useSearchParams } from "react-router-dom";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 
 const PRIORITIES = ["Low", "Medium", "High"];
 const CATEGORIES = ["General", "Sales", "Site Visit", "Marketing", "Delivery", "Inventory", "Admin", "Procurement", "Finance"];
@@ -14,11 +16,35 @@ export default function Tasks() {
   const [filter, setFilter] = useState("Open"); // Open / Done / All
   const [show, setShow] = useState(false);
   const [saving, setSaving] = useState(false);
-  const empty = { title: "", priority: "Medium", due_date: "", assigned_to: "", category: "General", notes: "", done: false };
+  const empty = { title: "", priority: "Medium", due_date: "", assigned_to: "", category: "General", notes: "", done: false,
+                  customer_id: "", project_id: "", ref: "", ref_type: "", linked_entity_name: "" };
   const [form, setForm] = useState(empty);
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const load = async () => { const { data } = await api.get("/tasks"); setRows(data); };
   useEffect(() => { load(); }, []);
+
+  // /tasks?new=1&customer_id=…&project_id=… (customer / project page)
+  useEffect(() => {
+    if (searchParams.get("new") !== "1") return;
+    const customer_id = searchParams.get("customer_id") || "";
+    const project_id = searchParams.get("project_id") || "";
+    ["new", "customer_id", "project_id"].forEach((k) => searchParams.delete(k));
+    setSearchParams(searchParams, { replace: true });
+    setForm({ ...empty, customer_id, project_id, ...(project_id ? { ref: project_id, ref_type: "project" } : {}) });
+    setShow(true);
+    if (project_id && !customer_id) {
+      api.get(`/projects/${project_id}/context`).then(({ data }) => setForm((f) => ({
+        ...f, customer_id: data.customer?.id || "", linked_entity_name: data.customer?.name || data.project?.customer || "",
+      }))).catch(() => {});
+    }
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onPick = ({ customer, project }) => setForm((f) => ({
+    ...f, customer_id: customer?.id || "", project_id: project?.id || "",
+    ref: project?.id || "", ref_type: project ? "project" : "",
+    linked_entity_name: customer?.name || "",
+  }));
 
   const filtered = useMemo(() => {
     if (filter === "Open") return rows.filter((r) => !r.done);
@@ -93,6 +119,8 @@ export default function Tasks() {
                     </span>
                     {t.assigned_to && <span className="flex items-center gap-1"><User size={11} />{t.assigned_to}</span>}
                     <span className="px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--ink-2)]">{t.category}</span>
+                    {t.customer_id && <Link to={`/customers/${t.customer_id}`} className="text-[var(--brand)] hover:underline">{t.linked_entity_name || "Customer"}</Link>}
+                    {(t.project_id || (t.ref_type === "project" && t.ref)) && <Link to={`/projects/${t.project_id || t.ref}`} className="text-[var(--brand)] hover:underline">Project</Link>}
                   </div>
                 </div>
                 <StageBadge stage={t.priority} />
@@ -106,7 +134,7 @@ export default function Tasks() {
 
       {show && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShow(false)}>
-          <div className="bg-white rounded-xl border w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-xl border w-full max-w-xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">New Task</h3>
               <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
@@ -115,6 +143,10 @@ export default function Tasks() {
               <div className="col-span-2">
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Title</label>
                 <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" data-testid="task-title" />
+              </div>
+              <div className="col-span-2">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Customer &amp; project (optional)</label>
+                <CustomerProjectPicker customerId={form.customer_id} projectId={form.project_id} onChange={onPick} testid="task-cpp" compact />
               </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Priority</label>

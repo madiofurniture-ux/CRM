@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import { downloadPdf } from "@/lib/pdf";
 import api, { formatApiError } from "@/lib/api";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 import { inrFull, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import {
@@ -88,10 +89,8 @@ export default function QuoteBuilder() {
 
   const applyTemplate = async (templateId) => {
     try {
-      const { data: existing } = await api.get("/quotes");
-      const quote_no = `AF-${String(existing.length + 1).padStart(4, "0")}`;
       const { data } = await api.post("/quotes", {
-        quote_no, date: todayIST(), customer: "New Customer",
+        quote_no: "", date: todayIST(), customer: "New Customer",
         template_id: templateId,
       });
       setShowTemplates(false);
@@ -101,10 +100,8 @@ export default function QuoteBuilder() {
 
   const startBlank = async () => {
     try {
-      const { data: existing } = await api.get("/quotes");
-      const quote_no = `AF-${String(existing.length + 1).padStart(4, "0")}`;
       const { data } = await api.post("/quotes", {
-        quote_no, date: todayIST(), customer: "New Customer",
+        quote_no: "", date: todayIST(), customer: "New Customer",
         sections: [], layout_config: { section_order: [], visible: {} },
       });
       setShowTemplates(false);
@@ -174,6 +171,17 @@ export default function QuoteBuilder() {
     finally { setSaving(false); }
   };
 
+  // Who the quotation is for: linking fills its name / phone from the customer.
+  const setFor = async ({ customer, project }) => {
+    try {
+      const { data } = await api.put(`/quotes/${quote.id}`, {
+        customer_id: customer?.id || "", project_id: project?.id || "",
+        ...(customer ? { customer: customer.name, phone: customer.phone || "" } : {}),
+      });
+      setQuote((q) => ({ ...q, customer_id: data.customer_id, project_id: data.project_id, customer: data.customer, phone: data.phone }));
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
   const previewPdf = async () => {
     if (!quote) return;
     await save();
@@ -195,8 +203,11 @@ export default function QuoteBuilder() {
       {!loading && quote && (
         <div className="flex" style={{ height: "calc(100vh - 65px)" }}>
           {/* Palette */}
-          <div className="w-56 shrink-0 border-r border-[var(--border)] p-3 space-y-1.5 overflow-y-auto">
-            <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-1">Blocks</div>
+          <div className="w-64 shrink-0 border-r border-[var(--border)] p-3 space-y-1.5 overflow-y-auto">
+            <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-1">For</div>
+            <CustomerProjectPicker customerId={quote.customer_id || ""} projectId={quote.project_id || ""} division={quote.division || "Furniture"}
+                                   onChange={setFor} testid="qb-cpp" compact />
+            <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-1 pt-3">Blocks</div>
             {BLOCK_TYPES.map((b) => {
               const Icon = b.icon;
               return (

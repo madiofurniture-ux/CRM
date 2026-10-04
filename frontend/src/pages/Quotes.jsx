@@ -13,9 +13,28 @@ import { useAuth } from "@/context/AuthContext";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Link, useSearchParams } from "react-router-dom";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
 
 // Fallback only: the live list is the tenant's quotation workflow (Admin → Workflows).
 const DEFAULT_STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
+
+const COLUMNS = [
+  { key: "quote_no", label: "Quote #", type: "text" },
+  { key: "customer", label: "Customer", type: "text" },
+  { key: "phone", label: "Phone", type: "text" },
+  { key: "date", label: "Date", type: "date" },
+  { key: "division", label: "Division", type: "select" },
+  { key: "stage", label: "Stage", type: "select" },
+  { key: "status", label: "Status", type: "select" },
+  { key: "by_user", label: "Prepared by", type: "select" },
+  { key: "reference", label: "Reference", type: "text" },
+  { key: "value", label: "Value", type: "number" },
+  { key: "linked", label: "Customer link", type: "select", get: (r) => (r.customer_id ? "Linked" : "Not linked"), options: ["Linked", "Not linked"] },
+  { key: "on_project", label: "Project", type: "select", get: (r) => (r.project_id ? "On a project" : "No project"), options: ["On a project", "No project"] },
+];
 
 export default function Quotes() {
   const STAGES = useWorkflow("quote", DEFAULT_STAGES).labels;
@@ -35,6 +54,9 @@ export default function Quotes() {
   const canDelete = canDo("quotes", "delete");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const cf = useColumnFilters("quotes", COLUMNS);
+  const applyColumns = cf.apply;
 
   const emptyItem = { sku: "", name: "", division: "Furniture", qty: 1, unit_price: 0, discount_pct: 0, gst_pct: 18, total_amount: 0 };
 
@@ -42,6 +64,8 @@ export default function Quotes() {
     quote_no: "",
     date: todayIST(),
     customer: "",
+    customer_id: "",
+    project_id: "",
     reference: "",
     phone: "",
     division: "Furniture",
@@ -98,23 +122,51 @@ export default function Quotes() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter(
+    return applyColumns(rows.filter(
       (r) =>
         (fDiv === "All" || r.division === fDiv) &&
         (fStage === "All" || r.stage === fStage) &&
-        (!q || r.customer.toLowerCase().includes(q) || r.quote_no.toLowerCase().includes(q) || (r.reference || "").toLowerCase().includes(q))
-    );
-  }, [rows, search, fDiv, fStage]);
+        (!q || [r.customer, r.quote_no, r.reference, r.phone].some((v) => String(v || "").toLowerCase().includes(q)))
+    ));
+  }, [rows, search, fDiv, fStage, applyColumns]);
 
-  const openNew = () => {
+  const openNew = (prefill = {}) => {
     setEditing(null);
     setForm({
       ...empty,
-      quote_no: `AF-${String(rows.length + 1).padStart(4, "0")}`,
+      quote_no: "",                 // the server gives the next number in the series
       line_items: [],
+      ...prefill,
     });
     setShowForm(true);
   };
+
+  // /quotes?new=1&customer_id=…&project_id=… (from a customer or project page)
+  // opens a new quotation already for that customer / project.
+  useEffect(() => {
+    if (searchParams.get("new") !== "1" || loading) return;
+    const prefill = { customer_id: searchParams.get("customer_id") || "", project_id: searchParams.get("project_id") || "" };
+    ["new", "customer_id", "project_id"].forEach((k) => searchParams.delete(k));
+    setSearchParams(searchParams, { replace: true });
+    if (!canCreate) return;
+    if (prefill.project_id && !prefill.customer_id) {
+      api.get(`/projects/${prefill.project_id}/context`).then(({ data }) => {
+        openNew({ ...prefill, customer_id: data.customer?.id || "", customer: data.customer?.name || data.project?.customer || "",
+                  phone: data.customer?.phone || data.project?.phone || "", division: data.project?.division || "Furniture" });
+      }).catch(() => openNew(prefill));
+    } else {
+      openNew(prefill);
+    }
+  }, [searchParams, loading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onPick = ({ customer, project }) => setForm((f) => ({
+    ...f,
+    customer_id: customer?.id || "",
+    customer: customer?.name || (customer === null ? "" : f.customer),
+    phone: customer?.phone || (customer === null ? "" : f.phone),
+    project_id: project?.id || "",
+    division: project?.division || f.division,
+  }));
 
   const openEdit = (r) => {
     setEditing(r);
@@ -165,8 +217,8 @@ export default function Quotes() {
 
   const save = async () => {
     if (saving) return;
-    if (!form.customer || !form.quote_no) {
-      toast.error("Customer name and Quote # are required");
+    if (!form.customer && !form.customer_id) {
+      toast.error("Pick the customer (or add a new one)");
       return;
     }
     setSaving(true);
@@ -201,7 +253,7 @@ export default function Quotes() {
 
   return (
     <>
-      <Topbar title="Quotations Engine" subtitle={`${filtered.length} quotes · Total Value ${inrFull(total)}`} onAdd={canCreate ? openNew : undefined} addLabel="New Quotation" />
+      <Topbar title="Quotations Engine" subtitle={`${filtered.length} quotes · Total Value ${inrFull(total)}`} onAdd={canCreate ? () => openNew() : undefined} addLabel="New Quotation" />
 
       <div className="p-6" data-testid="quotes-page">
         {/* Filters */}
@@ -225,6 +277,7 @@ export default function Quotes() {
               <option key={s}>{s}</option>
             ))}
           </select>
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="quotes-filters" />
         </div>
 
         {loadError ? (
@@ -256,11 +309,16 @@ export default function Quotes() {
                 ))}
                 {!loading && filtered.map((r) => (
                   <tr key={r.id} className="hover:bg-[var(--color-surface-muted)]/50 transition">
-                    <td className="px-4 py-3 font-mono text-xs font-semibold text-[var(--color-text)]">{r.quote_no}</td>
+                    <td className="px-4 py-3 font-mono text-xs font-semibold"><Link to={`/quotes/ws/${r.id}`} className="text-[var(--color-text)] hover:text-[var(--color-primary)] hover:underline">{r.quote_no}</Link></td>
                     <td className="px-4 py-3 font-mono text-xs text-[var(--color-text-muted)]">{r.date}</td>
                     <td className="px-4 py-3">
-                      <div className="font-semibold text-[var(--color-text)]">{r.customer}</div>
-                      <div className="text-xs text-[var(--color-text-muted)]">{r.phone || r.reference}</div>
+                      {r.customer_id
+                        ? <Link to={`/customers/${r.customer_id}`} className="font-semibold text-[var(--color-text)] hover:text-[var(--color-primary)] hover:underline">{r.customer}</Link>
+                        : <div className="font-semibold text-[var(--color-text)]">{r.customer}</div>}
+                      <div className="text-xs text-[var(--color-text-muted)]">
+                        {r.phone || r.reference}
+                        {r.project_id && <Link to={`/projects/${r.project_id}`} className="ml-2 text-[var(--color-primary)] hover:underline">Project</Link>}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-[var(--color-primary-soft)] text-[var(--color-primary)]">
@@ -327,27 +385,28 @@ export default function Quotes() {
             </div>
 
             <div className="p-6 overflow-y-auto space-y-4">
+              {/* Who it's for: one customer (and project), not a typed name */}
+              <div>
+                <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Customer &amp; project *</label>
+                {!form.customer_id && form.customer && (
+                  <div className="text-xs text-[var(--color-warning)] mb-1.5" data-testid="quote-unlinked">
+                    Typed as “{form.customer}”{form.phone ? ` · ${form.phone}` : ""} — not linked to a customer. Pick or add them below to link it.
+                  </div>
+                )}
+                <CustomerProjectPicker customerId={form.customer_id} projectId={form.project_id} division={form.division}
+                                       onChange={onPick} testid="quote-cpp" />
+              </div>
+
               {/* Basic Quote Header Information */}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Quote #</label>
                   <input
                     type="text"
-                    required
+                    placeholder="Assigned on save"
                     value={form.quote_no}
                     onChange={(e) => setForm({ ...form, quote_no: e.target.value })}
                     className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] font-mono outline-none focus:border-[var(--color-primary)]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Customer Name *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Krishna Reddy"
-                    value={form.customer}
-                    onChange={(e) => setForm({ ...form, customer: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)]"
                   />
                 </div>
                 <div>
@@ -364,17 +423,7 @@ export default function Quotes() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Phone Number</label>
-                  <input
-                    type="text"
-                    placeholder="9876543210"
-                    value={form.phone}
-                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)]"
-                  />
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Architect / Reference</label>
                   <input

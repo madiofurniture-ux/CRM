@@ -5,6 +5,21 @@ import api from "@/lib/api";
 import { GST_DEFAULT, GST_SLABS } from "@/lib/constants";
 import { inrFull, fmtDate, amountInWords, todayIST } from "@/lib/format";
 import { toast } from "sonner";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
+
+const COLUMNS = [
+  { key: "invoice_no", label: "Invoice no", type: "text" },
+  { key: "customer", label: "Customer", type: "text" },
+  { key: "date", label: "Date", type: "date" },
+  { key: "due_date", label: "Due", type: "date" },
+  { key: "status", label: "Status", type: "select" },
+  { key: "division", label: "Division", type: "select" },
+  { key: "source", label: "Source", type: "select" },
+  { key: "total", label: "Total", type: "number" },
+  { key: "balance", label: "Balance", type: "number" },
+];
 import { Trash2, Edit2, Printer, X, Plus, IndianRupee } from "lucide-react";
 import ProductPicker, { StockBadge, rateFromMrp } from "@/components/ProductPicker";
 
@@ -72,13 +87,15 @@ export default function Invoices() {
     return { subtotal, discount_total: disc, cgst, sgst, igst, round_off, total, balance };
   }, [form.line_items, isIgst, form.paid]);
 
+  const cf = useColumnFilters("invoices", COLUMNS);
+  const applyColumns = cf.apply;
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) =>
+    return applyColumns(rows.filter((r) =>
       (fStatus === "All" || r.status === fStatus) &&
-      (!q || (r.customer || "").toLowerCase().includes(q) || (r.invoice_no || "").toLowerCase().includes(q))
-    );
-  }, [rows, search, fStatus]);
+      (!q || [r.customer, r.invoice_no, r.phone, r.gstin].some((v) => String(v || "").toLowerCase().includes(q)))
+    ));
+  }, [rows, search, fStatus, applyColumns]);
 
   const totals = useMemo(() => ({
     total: filtered.reduce((a, b) => a + (b.total || 0), 0),
@@ -147,6 +164,7 @@ export default function Invoices() {
           <select value={fStatus} onChange={(e) => setFStatus(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             <option>All</option><option>Draft</option><option>Sent</option><option>Paid</option><option>Cancelled</option>
           </select>
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="invoices-filters" />
         </div>
 
         <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
@@ -216,7 +234,17 @@ export default function Invoices() {
                 <Fld l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />
                 <Fld l="Due date" t="date" v={form.due_date} oc={(v) => setForm({ ...form, due_date: v })} />
                 <Fld l="By" v={form.by_user} oc={(v) => setForm({ ...form, by_user: v })} />
-                <Fld l="Customer" v={form.customer} oc={(v) => setForm({ ...form, customer: v })} cls="col-span-2 md:col-span-3" t2="inv-cust" />
+                <div className="col-span-2 md:col-span-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-1">Customer &amp; project</div>
+                  <CustomerProjectPicker customerId={form.customer_id || ""} projectId={form.project_id || ""} allowNewProject={false}
+                    onChange={({ customer, project }) => setForm((f) => ({
+                      ...f, customer_id: customer?.id || "", project_id: project?.id || "",
+                      ...(customer ? { customer: customer.company || customer.name, phone: customer.phone || f.phone,
+                                       billing_address: f.billing_address || customer.address || "", gstin: f.gstin || customer.gstin || "" } : {}),
+                    }))}
+                    testid="inv-cpp" />
+                </div>
+                <Fld l="Bill to (as printed)" v={form.customer} oc={(v) => setForm({ ...form, customer: v })} cls="col-span-2 md:col-span-3" t2="inv-cust" />
                 <Fld l="Billing Address" v={form.billing_address} oc={(v) => setForm({ ...form, billing_address: v })} cls="col-span-2 md:col-span-3" />
                 <Fld l="Phone" v={form.phone} oc={(v) => setForm({ ...form, phone: v })} />
                 <Fld l="GSTIN" v={form.gstin} oc={(v) => setForm({ ...form, gstin: v })} />

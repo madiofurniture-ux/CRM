@@ -7,6 +7,19 @@ import api from "@/lib/api";
 import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { X, Plus, Trash2, FileText } from "lucide-react";
 import { toast } from "sonner";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
+
+const PO_COLUMNS = [
+  { key: "po_no", label: "PO no", type: "text" },
+  { key: "vendor_name", label: "Vendor", type: "select" },
+  { key: "date", label: "Date", type: "date" },
+  { key: "expected_date", label: "Expected", type: "date" },
+  { key: "status", label: "Status", type: "select" },
+  { key: "division", label: "Division", type: "select" },
+  { key: "by_user", label: "Raised by", type: "select" },
+  { key: "grand_total", label: "Value", type: "number" },
+];
 
 const STATUSES = ["Draft", "Issued", "Received", "Cancelled"];
 // Mirrors models.GST_SLABS — quick-select instead of typing a rate, with 0%
@@ -72,15 +85,17 @@ export default function PurchaseOrders() {
     id: p.id, label: p.project_no, sub: p.customer,
   })), [projects]);
 
+  const cf = useColumnFilters("purchase-orders", PO_COLUMNS);
+  const applyColumns = cf.apply;
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) =>
+    return applyColumns(rows.filter((r) =>
       (fStatus === "All" || r.status === fStatus) &&
       (!q || (r.po_no || "").toLowerCase().includes(q) ||
         (r.vendor_name || "").toLowerCase().includes(q) ||
         (r.vendor_code || "").toLowerCase().includes(q))
-    );
-  }, [rows, fStatus, search]);
+    ));
+  }, [rows, fStatus, search, applyColumns]);
 
   const totals = totalsOf(form.line_items || []);
 
@@ -174,6 +189,7 @@ export default function PurchaseOrders() {
             <option>All</option>
             {STATUSES.map((s) => <option key={s}>{s}</option>)}
           </select>
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="po-filters" />
         </div>
 
         <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">

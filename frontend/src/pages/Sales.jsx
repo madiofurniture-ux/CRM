@@ -4,7 +4,22 @@ import StageBadge from "@/components/StageBadge";
 import WhatsAppButton from "@/components/WhatsAppButton";
 import api from "@/lib/api";
 import { inrFull, fmtDate } from "@/lib/format";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
+
+const COLUMNS = [
+  { key: "sale_no", label: "Sale no", type: "text" },
+  { key: "customer", label: "Customer", type: "text" },
+  { key: "date", label: "Date", type: "date" },
+  { key: "division", label: "Division", type: "select" },
+  { key: "by_user", label: "By", type: "select" },
+  { key: "stage", label: "Stage", type: "select" },
+  { key: "status", label: "Payment status", type: "select" },
+  { key: "value", label: "Value", type: "number" },
+  { key: "balance", label: "Balance", type: "number" },
+  { key: "quote_ref", label: "Quotation", type: "text" },
+];
 import { toast } from "sonner";
 import { FileText, IndianRupee } from "lucide-react";
 import RecordPaymentModal from "@/components/RecordPaymentModal";
@@ -12,6 +27,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 
 export default function Sales() {
+  const cf = useColumnFilters("sales", COLUMNS);
+  const applyColumns = cf.apply;
   const [rows, setRows] = useState([]);
   // ?q= pre-fills the search (the quote workspace links to its sale this way).
   const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get("q") || "");
@@ -62,11 +79,11 @@ export default function Sales() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) =>
+    return applyColumns(rows.filter((r) =>
       (fDiv === "All" || r.division === fDiv) &&
-      (!q || (r.customer || "").toLowerCase().includes(q) || (r.sale_no || "").toLowerCase().includes(q))
-    );
-  }, [rows, search, fDiv]);
+      (!q || [r.customer, r.sale_no, r.quote_ref, r.phone].some((v) => String(v || "").toLowerCase().includes(q)))
+    ));
+  }, [rows, search, fDiv, applyColumns]);
 
   const totals = useMemo(() => ({
     value: filtered.reduce((a, b) => a + (b.value || 0), 0),
@@ -84,6 +101,7 @@ export default function Sales() {
             <option>All</option>
             {divisions.map((d) => <option key={d.id} value={d.slug}>{d.slug}</option>)}
           </select>
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="sales-filters" />
         </div>
         <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">
           <div className="overflow-x-auto">
@@ -107,7 +125,10 @@ export default function Sales() {
                   <tr key={s.id} className="border-t border-[var(--border-light)] hover:bg-[var(--surface-2)]/50">
                     <td className="px-4 py-3 font-mono text-xs">{s.sale_no}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)]">{fmtDate(s.date)}</td>
-                    <td className="px-4 py-3 font-medium">{s.customer}</td>
+                    <td className="px-4 py-3 font-medium">
+                      {s.customer_id ? <Link to={`/customers/${s.customer_id}`} className="hover:text-[var(--brand)] hover:underline">{s.customer}</Link> : s.customer}
+                      {s.project_id && <Link to={`/projects/${s.project_id}`} className="ml-2 text-[11px] font-normal text-[var(--brand)] hover:underline">Project</Link>}
+                    </td>
                     <td className="px-4 py-3 text-[var(--ink-2)]">{s.division}</td>
                     <td className="px-4 py-3 text-[var(--ink-2)]">{s.by_user}</td>
                     <td className="px-4 py-3"><StageBadge stage={s.stage} /></td>

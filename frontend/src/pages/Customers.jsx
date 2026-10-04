@@ -3,7 +3,9 @@ import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import JourneyDrawer from "@/components/JourneyDrawer";
 import CustomerOverviewDrawer from "@/components/CustomerOverviewDrawer";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
 import StarRating from "@/components/StarRating";
 import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
@@ -29,6 +31,21 @@ const emptyForm = {
   alt_contact_name: "", alt_phone: "", team_id: "", custom_fields: {},
 };
 
+const COLUMNS = [
+  { key: "name", label: "Name", type: "text" },
+  { key: "phone", label: "Phone", type: "text" },
+  { key: "code", label: "Customer no.", type: "text" },
+  { key: "company", label: "Company", type: "text" },
+  { key: "email", label: "Email", type: "text" },
+  { key: "stage", label: "Stage", type: "select" },
+  { key: "division", label: "Division", type: "select" },
+  { key: "source", label: "Source", type: "select" },
+  { key: "customer_since", label: "Customer since", type: "date" },
+  { key: "created_at", label: "Added", type: "date" },
+  { key: "lifetime_value", label: "Lifetime value", type: "number" },
+  { key: "balance", label: "Balance", type: "number" },
+];
+
 export default function Customers() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +68,8 @@ export default function Customers() {
   const canCreate = canDo("customers", "create");
   const canEdit = canDo("customers", "edit");
   const [loadError, setLoadError] = useState(null);
+  const cf = useColumnFilters("customers", COLUMNS);
+  const applyColumns = cf.apply;
 
   const load = async () => {
     setLoading(true);
@@ -118,16 +137,26 @@ export default function Customers() {
   const stages = useMemo(() => ["All", ...new Set(rows.map((r) => r.stage).filter(Boolean))], [rows]);
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) => {
+    return applyColumns(rows.filter((r) => {
       if (fStage !== "All" && r.stage !== fStage) return false;
-      if (q && !(r.name || "").toLowerCase().includes(q) && !(r.phone || "").includes(q)) return false;
+      if (q && ![r.name, r.phone, r.code, r.email, r.company].some((v) => String(v || "").toLowerCase().includes(q))) return false;
       for (const [key, val] of Object.entries(customFilters)) {
         if (!val) continue;
         if (String((r.custom_fields || {})[key] ?? "") !== String(val)) return false;
       }
       return true;
-    });
-  }, [rows, search, fStage, customFilters]);
+    }));
+  }, [rows, search, fStage, customFilters, applyColumns]);
+
+  // /customers?edit=<id> (from the customer page) opens the edit form.
+  useEffect(() => {
+    const id = searchParams.get("edit");
+    if (!id || !rows.length) return;
+    const c = rows.find((x) => x.id === id);
+    if (c) openEdit(c);
+    searchParams.delete("edit");
+    setSearchParams(searchParams, { replace: true });
+  }, [searchParams, rows]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
@@ -146,7 +175,7 @@ export default function Customers() {
       <div className="p-6" data-testid="customers-page">
         <div className="flex flex-wrap gap-2 mb-4">
           <input
-            placeholder="Search name, phone…"
+            placeholder="Search name, phone, code, email, company…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm outline-none focus:border-[var(--color-primary)] w-72"
@@ -170,9 +199,12 @@ export default function Customers() {
         <div className="mb-4">
           <SavedViewsBar
             entity="customers"
-            filters={{ search, fStage, customFilters }}
-            onApply={(f) => { setSearch(f.search || ""); setFStage(f.fStage || "All"); setCustomFilters(f.customFilters || {}); }}
+            filters={{ search, fStage, customFilters, columns: cf.values }}
+            onApply={(f) => { setSearch(f.search || ""); setFStage(f.fStage || "All"); setCustomFilters(f.customFilters || {}); cf.setValues(f.columns || {}); }}
           />
+        </div>
+        <div className="mb-4">
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="customers-filters" />
         </div>
 
         {loadError ? (
@@ -216,7 +248,10 @@ export default function Customers() {
                 ))}
                 {!loading && filtered.map((c) => (
                   <tr key={c.id} className="border-t border-[var(--color-border)] hover:bg-[var(--color-surface-muted)]" data-testid={`customer-${c.id}`}>
-                    <td className="px-4 py-3 font-medium text-[var(--color-text)]">{c.name}</td>
+                    <td className="px-4 py-3">
+                      <Link to={`/customers/${c.id}`} className="font-medium text-[var(--color-text)] hover:text-[var(--color-primary)] hover:underline" data-testid={`customer-open-${c.id}`}>{c.name}</Link>
+                      {(c.code || c.company) && <div className="text-[11px] text-[var(--color-text-muted)]">{[c.code, c.company].filter(Boolean).join(" · ")}</div>}
+                    </td>
                     <td className="hidden md:table-cell px-4 py-3 font-mono text-[var(--color-text-muted)]">{c.phone}</td>
                     <td className="px-4 py-3">
                       <select value={c.stage || ""} onChange={(e) => updateStage(c, e.target.value)} disabled={!canEdit} className="px-2 py-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] text-xs disabled:opacity-60 disabled:cursor-not-allowed" data-testid={`customer-stage-${c.id}`}>

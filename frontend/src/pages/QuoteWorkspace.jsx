@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
 import StageProgressBar from "@/components/StageProgressBar";
@@ -213,7 +213,18 @@ export default function QuoteWorkspace() {
           </div>
         } />
       <div className="p-6 space-y-4" data-testid="quote-workspace">
-        <button onClick={() => nav("/quotes")} className="text-sm text-[var(--ink-2)] inline-flex items-center gap-1"><ChevronLeft size={14} /> All deals</button>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <button onClick={() => nav("/quotes")} className="text-[var(--ink-2)] inline-flex items-center gap-1"><ChevronLeft size={14} /> All deals</button>
+          <span className="text-[var(--ink-3)]" data-testid="quote-context">
+            For{" "}
+            {q.customer_id
+              ? <Link to={`/customers/${q.customer_id}`} className="text-[var(--brand)] hover:underline" title="Open the customer">{q.customer || "customer"}</Link>
+              : <span title="Not linked to a customer record">{q.customer || "—"} <span className="text-[var(--warn)]">(not linked)</span></span>}
+            {q.project_id && <> · <Link to={`/projects/${q.project_id}`} className="text-[var(--brand)] hover:underline">Project</Link></>}
+            {q.phone && <span> · {q.phone}</span>}
+            <span className="ml-1 text-[11px]" title="Name and phone as issued on this quotation; the customer record holds the current details">(as issued)</span>
+          </span>
+        </div>
         {pipeline && <StageProgressBar stages={pipeline} />}
 
         <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="quote-validity">

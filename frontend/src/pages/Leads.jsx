@@ -1,5 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
 import usePersistedState from "@/hooks/usePersistedState";
 import Topbar from "@/components/Topbar";
 import StageBadge from "@/components/StageBadge";
@@ -43,6 +45,22 @@ const PRIORITIES = ["Low", "Medium", "High", "Hot"];
 const PRIORITY_TONE = { Hot: "bg-red-50 text-red-700", High: "bg-amber-50 text-amber-700", Medium: "", Low: "" };
 const isKnownSource = (s) => SOURCES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 
+const COLUMNS = [
+  { key: "date", label: "Date", type: "date" },
+  { key: "name", label: "Name", type: "text" },
+  { key: "phone", label: "Phone", type: "text" },
+  { key: "source", label: "Source", type: "select" },
+  { key: "reference", label: "Reference", type: "select" },
+  { key: "architect_name", label: "Architect", type: "select" },
+  { key: "stage", label: "Stage", type: "select", get: (r) => r.stage || "New" },
+  { key: "division", label: "Division", type: "select" },
+  { key: "priority", label: "Priority", type: "select" },
+  { key: "follow_up_date", label: "Follow up", type: "date" },
+  { key: "assigned_to", label: "Attended by", type: "select" },
+  { key: "location", label: "Location", type: "text" },
+  { key: "value", label: "Value", type: "number" },
+];
+
 export default function Leads() {
   const [rows, setRows] = useState([]);
   const [architects, setArchitects] = useState([]);
@@ -57,6 +75,8 @@ export default function Leads() {
   const [logLead, setLogLead] = useState(null);
   const { defs: customFieldDefs } = useCustomFields("lead");
   const [customFilters, setCustomFilters] = useState({});
+  const cf = useColumnFilters("leads", COLUMNS);
+  const applyColumns = cf.apply;
   const [fDivision, setFDivision] = usePersistedState("leads.division", "All");
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -158,7 +178,7 @@ export default function Leads() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) => {
+    return applyColumns(rows.filter((r) => {
       const stage = String(r.stage || "New").trim().toLowerCase();
       if (fStage !== "All" && stage !== fStage.toLowerCase()) return false;
       if (fDivision !== "All" && (r.division || "") !== fDivision) return false;
@@ -173,8 +193,8 @@ export default function Leads() {
         if (String((r.custom_fields || {})[key] ?? "") !== String(val)) return false;
       }
       return true;
-    });
-  }, [rows, search, fStage, fDivision, customFilters]);
+    }));
+  }, [rows, search, fStage, fDivision, customFilters, applyColumns]);
 
   const today = todayIST();
 
@@ -315,9 +335,12 @@ export default function Leads() {
         <div className="mb-4">
           <SavedViewsBar
             entity="leads"
-            filters={{ search, fStage, customFilters }}
-            onApply={(f) => { setSearch(f.search || ""); setFStage(f.fStage || "All"); setCustomFilters(f.customFilters || {}); }}
+            filters={{ search, fStage, customFilters, columns: cf.values }}
+            onApply={(f) => { setSearch(f.search || ""); setFStage(f.fStage || "All"); setCustomFilters(f.customFilters || {}); cf.setValues(f.columns || {}); }}
           />
+        </div>
+        <div className="mb-4">
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="leads-filters" />
         </div>
 
         {loadError ? (
@@ -375,6 +398,7 @@ export default function Leads() {
                         <div className="flex flex-wrap items-center gap-1 mt-0.5">
                           {l.division && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-primary-soft)] text-[var(--color-primary)] font-semibold">{l.division}</span>}
                           {l.priority && PRIORITY_TONE[l.priority] && <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PRIORITY_TONE[l.priority]}`}>{l.priority}</span>}
+                          {l.customer_id && <Link to={`/customers/${l.customer_id}`} className="text-[10px] text-[var(--color-primary)] hover:underline" title="Open the customer">Customer →</Link>}
                           <span className={`md:hidden text-[10px] ${overdue ? "text-[var(--color-danger)] font-semibold" : "text-[var(--color-text-muted)]"}`}>{l.follow_up_date ? `FU ${fmtDate(l.follow_up_date)}` : ""}</span>
                         </div>
                       </td>

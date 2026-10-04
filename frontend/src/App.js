@@ -70,6 +70,8 @@ const RolesPermissions = lazy(() => import("@/pages/RolesPermissions"));
 
 // Operational flow: Customer
 const Customers = lazy(() => import("@/pages/Customers"));
+const CustomerPage = lazy(() => import("@/pages/CustomerPage"));
+const ProjectPage = lazy(() => import("@/pages/ProjectPage"));
 const QuoteFollowups = lazy(() => import("@/pages/QuoteFollowups"));
 const ProjectPnL = lazy(() => import("@/pages/ProjectPnL"));
 const Incentives = lazy(() => import("@/pages/Incentives"));
@@ -143,6 +145,7 @@ function App() {
           <Route path="/tasks" element={<ProtectedRoute page="tasks"><Layout><Tasks /></Layout></ProtectedRoute>} />
           <Route path="/daily-planner" element={<ProtectedRoute page="daily-planner"><Layout><DailyPlanner /></Layout></ProtectedRoute>} />
           <Route path="/projects" element={<ProtectedRoute page="projects"><Layout><Projects /></Layout></ProtectedRoute>} />
+          <Route path="/projects/:id" element={<ProtectedRoute page="projects"><Layout><ProjectPage /></Layout></ProtectedRoute>} />
           <Route path="/service" element={<ProtectedRoute page="projects"><Layout><Service /></Layout></ProtectedRoute>} />
           <Route path="/follow-ups" element={<ProtectedRoute page="leads"><Layout><FollowUps /></Layout></ProtectedRoute>} />
           <Route path="/attendance" element={<ProtectedRoute page="attendance"><Layout><Attendance /></Layout></ProtectedRoute>} />
@@ -182,6 +185,7 @@ function App() {
           <Route path="/admin/teams" element={<ProtectedRoute page="teams"><Layout><Teams /></Layout></ProtectedRoute>} />
           <Route path="/admin/roles-permissions" element={<ProtectedRoute page="roles-permissions"><Layout><RolesPermissions /></Layout></ProtectedRoute>} />
           <Route path="/customers" element={<ProtectedRoute page="customers"><Layout><Customers /></Layout></ProtectedRoute>} />
+          <Route path="/customers/:id" element={<ProtectedRoute page="customers"><Layout><CustomerPage /></Layout></ProtectedRoute>} />
           <Route path="/quotes/followups" element={<ProtectedRoute page="quote-followups"><Layout><QuoteFollowups /></Layout></ProtectedRoute>} />
           <Route path="/reports/project-pnl" element={<ProtectedRoute page="project-pnl"><Layout><ProjectPnL /></Layout></ProtectedRoute>} />
           <Route path="/incentives" element={<ProtectedRoute page="incentives"><Layout><Incentives /></Layout></ProtectedRoute>} />

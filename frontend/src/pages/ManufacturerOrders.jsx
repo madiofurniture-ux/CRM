@@ -11,6 +11,21 @@ import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { GST_SLABS } from "@/lib/constants";
 import { X, Factory, ImagePlus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
+
+const MO_COLUMNS = [
+  { key: "order_code", label: "Order no", type: "text" },
+  { key: "vendor_code", label: "Manufacturer code", type: "select" },
+  { key: "description", label: "Description", type: "text" },
+  { key: "site_location", label: "Site", type: "text" },
+  { key: "status", label: "Status", type: "select" },
+  { key: "final_total", label: "Value", type: "number" },
+  { key: "date", label: "Date", type: "date" },
+  { key: "promised_date", label: "Promised", type: "date" },
+  { key: "delivered_date", label: "Delivered", type: "date" },
+  { key: "by_user", label: "Raised by", type: "select" },
+];
 
 // Mirrors models.MO_STATUSES. "Quoted" is this document's draft state and is
 // the one status that does NOT reach project P&L.
@@ -52,6 +67,7 @@ export default function ManufacturerOrders() {
   const [pos, setPos] = useState([]);
 
   const [fStatus, setFStatus] = useState("All");
+  const cf = useColumnFilters("manufacturer-orders", MO_COLUMNS);
   const [fDivision, setFDivision] = useState("All");
 
   const [show, setShow] = useState(false);
@@ -190,7 +206,8 @@ export default function ManufacturerOrders() {
     }
   };
 
-  const totals = rows.reduce((a, r) => ({
+  const shown = cf.apply(rows);
+  const totals = shown.reduce((a, r) => ({
     final: a.final + (r.final_total || 0),
     // A masked row contributes nothing to a running total, so the footer is
     // shown as unavailable rather than as a smaller, wrong-looking number.
@@ -202,7 +219,7 @@ export default function ManufacturerOrders() {
     <>
       <Topbar
         title="Manufacturer Orders"
-        subtitle={`${rows.length} orders · ${inrFull(totals.final)} ordered`}
+        subtitle={`${shown.length} orders · ${inrFull(totals.final)} ordered`}
         onAdd={openNew}
         addLabel="New Order"
       />
@@ -221,6 +238,7 @@ export default function ManufacturerOrders() {
             <option>All</option>
             {divisions.map((d) => <option key={d.id} value={d.slug}>{d.name}</option>)}
           </select>
+          <ColumnFilters filters={cf} rows={rows} shown={shown.length} testid="mo-filters" />
           <div className="flex-1" />
           <div className="text-sm text-[var(--ink-3)] self-center">
             Outstanding:{" "}
@@ -256,7 +274,7 @@ export default function ManufacturerOrders() {
                 </tr>
               </thead>
               <tbody>
-                {!loading && rows.map((o) => (
+                {!loading && shown.map((o) => (
                   <tr key={o.id} className="border-t border-[var(--border-light)] hover:bg-[var(--surface-2)]/50"
                     data-testid={`mo-${o.id}`}>
                     <td className="px-4 py-2">

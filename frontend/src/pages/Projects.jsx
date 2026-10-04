@@ -21,6 +21,25 @@ import api from "@/lib/api";
 import { inrFull, fmtDate, marginTone, todayIST } from "@/lib/format";
 import { HardHat, Compass, FileText, Wrench, CheckCircle2, Flag, ChevronRight, X, UserCheck, Calendar, Pencil, Trash2, FolderOpen, Phone, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
+
+const COLUMNS = [
+  { key: "project_no", label: "Project #", type: "text" },
+  { key: "project_name", label: "Project name", type: "text" },
+  { key: "customer", label: "Customer", type: "text" },
+  { key: "phone", label: "Phone", type: "text" },
+  { key: "site_address", label: "Site", type: "text" },
+  { key: "stage", label: "Stage", type: "select" },
+  { key: "project_type", label: "Type", type: "select" },
+  { key: "assigned_engineer", label: "Engineer", type: "select" },
+  { key: "project_manager", label: "Project manager", type: "select" },
+  { key: "start_date", label: "Start", type: "date" },
+  { key: "target_date", label: "Target", type: "date" },
+  { key: "value", label: "Value", type: "number" },
+  { key: "linked", label: "Customer link", type: "select", get: (r) => (r.customer_id ? "Linked" : "Not linked"), options: ["Linked", "Not linked"] },
+];
 
 const STAGES = [
   { id: "Survey", label: "Survey", icon: Compass, color: "#D48B30" },
@@ -41,6 +60,8 @@ export default function Projects() {
   const [rows, setRows] = useState([]);
   const [activeStage, setActiveStage] = usePersistedState("projects.stage", "All");
   const [search, setSearch] = useState("");
+  const cf = useColumnFilters("projects", COLUMNS);
+  const applyColumns = cf.apply;
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -65,6 +86,7 @@ export default function Projects() {
   const emptyForm = {
     project_no: `PRJ-${Math.floor(1000 + Math.random() * 9000)}`,
     customer: "",
+    customer_id: "",
     phone: "",
     division: "Furniture",
     value: 0,
@@ -130,7 +152,7 @@ export default function Projects() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) => {
+    const base = rows.filter((r) => {
       const matchStage = activeStage === "All" || r.stage === activeStage;
       const matchDivision = divisionFilter === "All" || r.division === divisionFilter;
       const matchQuery =
@@ -143,7 +165,8 @@ export default function Projects() {
         (r.assigned_engineer || "").toLowerCase().includes(q);
       return matchStage && matchDivision && matchQuery;
     });
-  }, [rows, activeStage, divisionFilter, search]);
+    return applyColumns(base);
+  }, [rows, activeStage, divisionFilter, search, applyColumns]);
 
   const advanceStage = async (p, nextStage) => {
     try {
@@ -173,8 +196,8 @@ export default function Projects() {
   const handleSave = async (e) => {
     e.preventDefault();
     if (saving) return;
-    if (!form.customer || !form.project_no) {
-      toast.error("Please fill required fields");
+    if ((!form.customer && !form.customer_id) || !form.project_no) {
+      toast.error("Pick the customer (or add a new one) and give the project a number");
       return;
     }
     setSaving(true);
@@ -308,6 +331,9 @@ export default function Projects() {
             ))}
           </select>
         </div>
+        <div className="mb-5 -mt-2">
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="projects-filters" />
+        </div>
 
         {/* Project Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -353,7 +379,13 @@ export default function Projects() {
                     </div>
                   </div>
 
-                  {p.phone ? (
+                  {p.customer_id ? (
+                    <Link to={`/customers/${p.customer_id}`}
+                      className="block font-heading font-bold text-base text-[var(--ink)] mb-1 hover:text-[var(--brand)] hover:underline"
+                      title={`Open ${p.customer}`} data-testid={`project-customer-${p.id}`}>
+                      {p.customer}
+                    </Link>
+                  ) : p.phone ? (
                     <button
                       type="button"
                       onClick={() => setJny({ phone: p.phone, name: p.customer })}
@@ -368,7 +400,9 @@ export default function Projects() {
                     // stays plain text rather than a control that does nothing.
                     <h3 className="font-heading font-bold text-base text-[var(--ink)] mb-1">{p.customer}</h3>
                   )}
-                  {p.project_name && <div className="text-xs text-[var(--ink-2)] -mt-0.5 mb-1">{p.project_name}</div>}
+                  <Link to={`/projects/${p.id}`} className="block text-xs text-[var(--brand)] hover:underline -mt-0.5 mb-1" data-testid={`project-open-${p.id}`}>
+                    {p.project_name || "Open project"} →
+                  </Link>
                   <div className="text-xs text-[var(--ink-2)] mb-3 flex items-center gap-1.5">
                     <span className="font-medium text-[var(--brand)] bg-[var(--brand-light)] px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider">
                       {p.division}
@@ -530,28 +564,18 @@ export default function Projects() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Customer Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Krishna Reddy"
-                  value={form.customer}
-                  onChange={(e) => setForm({ ...form, customer: e.target.value })}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]"
-                />
+                <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Customer *</label>
+                {!form.customer_id && form.customer && (
+                  <div className="text-xs text-[var(--warn)] mb-1.5">Typed as “{form.customer}”{form.phone ? ` · ${form.phone}` : ""} — not linked. Pick or add the customer to link it.</div>
+                )}
+                <CustomerProjectPicker customerId={form.customer_id} withProject={false} division={form.division}
+                  onChange={({ customer }) => setForm((f) => ({ ...f, customer_id: customer?.id || "",
+                    customer: customer ? customer.name : "", phone: customer ? (customer.phone || "") : "",
+                    site_address: f.site_address || customer?.address || "" }))}
+                  testid="project-cpp" />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Phone Number</label>
-                  <input
-                    type="text"
-                    placeholder="9876543210"
-                    value={form.phone}
-                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]"
-                  />
-                </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Assigned Lead/Engineer</label>
                   <input

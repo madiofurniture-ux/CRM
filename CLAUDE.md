@@ -84,6 +84,14 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   sales carry `tax_total`). See `docs/FINANCE.md`.
 - Furniture quotes can print as a picture price list (`quote.print_layout =
   "pricelist"`, line `mrp` before GST beside the offer rate).
+- Connected records: every record carries `customer_id` (and `project_id`
+  where it applies), kept right by `backend/relations.py` (`link` on every
+  save and conversion, `propagate_customer` for live copies, `backfill` once).
+  Quotations/orders/invoices/payments keep a snapshot of name/phone. Customer
+  and project pages (`/customers/:id`, `/projects/:id`, `GET
+  /customers|projects/{id}/context`), `CustomerProjectPicker`, and per-column
+  list filters (`useColumnFilters` + `ColumnFilters`). See
+  `docs/CONNECTED_RECORDS.md`.
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.

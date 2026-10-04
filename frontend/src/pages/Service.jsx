@@ -6,6 +6,21 @@ import AttachmentPanel from "@/components/AttachmentPanel";
 import api from "@/lib/api";
 import { fmtDate } from "@/lib/format";
 import { toast } from "sonner";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
+
+const COLUMNS = [
+  { key: "ticket_no", label: "Ticket", type: "text" },
+  { key: "customer", label: "Customer", type: "text" },
+  { key: "phone", label: "Phone", type: "text" },
+  { key: "project_no", label: "Project", type: "text" },
+  { key: "ticket_type", label: "Type", type: "select" },
+  { key: "priority", label: "Priority", type: "select" },
+  { key: "status", label: "Status", type: "select" },
+  { key: "assigned_to", label: "Assigned to", type: "select" },
+  { key: "visit_date", label: "Visit date", type: "date" },
+  { key: "created_at", label: "Raised", type: "date" },
+];
 import { LifeBuoy, Phone, MessageCircle, X, ShieldCheck } from "lucide-react";
 
 const STATUSES = ["OPEN", "ASSIGNED", "VISIT SCHEDULED", "IN PROGRESS", "WAITING", "RESOLVED", "CLOSED"];
@@ -53,12 +68,14 @@ export default function Service() {
     api.get("/projects").then(({ data }) => setProjects(data)).catch(() => setProjects([]));
   }, []);
 
+  const cf = useColumnFilters("service", COLUMNS);
+  const applyColumns = cf.apply;
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((r) =>
+    return applyColumns(rows.filter((r) =>
       (filter === "all" || (filter === "open" ? OPEN.has(r.status) : r.status === filter)) &&
-      (!q || [r.ticket_no, r.customer, r.phone, r.project_no, r.complaint, r.assigned_to].some((v) => String(v || "").toLowerCase().includes(q))));
-  }, [rows, filter, search]);
+      (!q || [r.ticket_no, r.customer, r.phone, r.project_no, r.complaint, r.assigned_to].some((v) => String(v || "").toLowerCase().includes(q)))));
+  }, [rows, filter, search, applyColumns]);
 
   const counts = useMemo(() => {
     const c = { open: 0 };
@@ -83,7 +100,8 @@ export default function Service() {
           ))}
         </div>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search ticket, customer, phone, project…"
-          className="w-full sm:w-96 mb-4 px-3 py-2 rounded-xl bg-white border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)]" />
+          className="w-full sm:w-96 mb-2 px-3 py-2 rounded-xl bg-white border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)]" />
+        <div className="mb-4"><ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="service-filters" /></div>
 
         {loading && <div className="text-sm text-[var(--ink-3)] py-10 text-center">Loading…</div>}
         {!loading && failed && (

@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
+
+const COLUMNS = [
+  { key: "date", label: "Date", type: "date" },
+  { key: "name", label: "Name", type: "text" },
+  { key: "phone", label: "Phone", type: "text" },
+  { key: "company", label: "Company", type: "text" },
+  { key: "location", label: "Location", type: "text" },
+  { key: "division", label: "Division", type: "select" },
+  { key: "call_type", label: "Call type", type: "select" },
+  { key: "outcome", label: "Outcome", type: "select" },
+  { key: "by_user", label: "Caller", type: "select" },
+  { key: "callback_date", label: "Callback", type: "date" },
+  { key: "converted", label: "Lead", type: "select", get: (r) => (r.lead_id ? "Converted" : "Not converted"), options: ["Converted", "Not converted"] },
+];
 import Topbar from "@/components/Topbar";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
@@ -80,14 +96,16 @@ export default function Calls() {
 
   const callers = useMemo(() => [...new Set(rows.map((r) => r.by_user).filter(Boolean))].sort(), [rows]);
 
+  const cf = useColumnFilters("calls", COLUMNS);
+  const applyColumns = cf.apply;
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((r) =>
+    return applyColumns(rows.filter((r) =>
       (!since || String(r.date || "") >= since)
       && (fOutcome === "All" || r.outcome === fOutcome)
       && (fCaller === "All" || r.by_user === fCaller)
-      && (!q || [r.name, r.phone, r.company, r.location, r.notes].some((v) => String(v || "").toLowerCase().includes(q))));
-  }, [rows, since, fOutcome, fCaller, search]);
+      && (!q || [r.name, r.phone, r.company, r.location, r.notes].some((v) => String(v || "").toLowerCase().includes(q)))));
+  }, [rows, since, fOutcome, fCaller, search, applyColumns]);
 
   const stats = useMemo(() => {
     const total = filtered.length;
@@ -235,6 +253,7 @@ export default function Calls() {
           </select>
           <input className={`${field} flex-1 min-w-[12rem]`} placeholder="Search name, number, notes" aria-label="Search calls"
                  value={search} onChange={(e) => setSearch(e.target.value)} />
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="calls-filters" />
         </div>
 
         {loadError ? (

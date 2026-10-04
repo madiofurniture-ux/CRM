@@ -8,6 +8,20 @@ import useWorkflow, { stageErrorMessage } from "@/hooks/useWorkflow";
 import { fmtDate, inrFull, todayIST } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
+import ColumnFilters from "@/components/ColumnFilters";
+import useColumnFilters from "@/hooks/useColumnFilters";
+
+const COLUMNS = [
+  { key: "date", label: "Date", type: "date" },
+  { key: "name", label: "Name", type: "text" },
+  { key: "phone", label: "Phone", type: "text" },
+  { key: "requirement", label: "Requirement", type: "text" },
+  { key: "reference", label: "Reference", type: "select" },
+  { key: "attend_person", label: "Attended by", type: "select" },
+  { key: "division", label: "Division", type: "select" },
+  { key: "stage", label: "Stage", type: "select", get: (r) => r.stage || "New" },
+  { key: "ticket_value", label: "Value", type: "number" },
+];
 import { Trash2, X, Phone, Pencil, Sparkles, CheckCircle2 } from "lucide-react";
 import CustomerResolver from "@/components/CustomerResolver";
 
@@ -106,14 +120,16 @@ export default function Visitors() {
     finally { setConverting(null); }
   };
 
+  const cf = useColumnFilters("visitors", COLUMNS);
+  const applyColumns = cf.apply;
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return rows.filter((r) => {
+    return applyColumns(rows.filter((r) => {
       const stage = String(r.stage || "New").trim().toLowerCase();
       return (fStage === "All" || stage === fStage.toLowerCase()) &&
-        (!q || (r.name || "").toLowerCase().includes(q) || (r.requirement || "").toLowerCase().includes(q) || (r.reference || "").toLowerCase().includes(q));
-    });
-  }, [rows, search, fStage]);
+        (!q || [r.name, r.requirement, r.reference, r.phone].some((v) => String(v || "").toLowerCase().includes(q)));
+    }));
+  }, [rows, search, fStage, applyColumns]);
 
   const phoneCheck = useMemo(() => validateIndianPhone(form.phone), [form.phone]);
 
@@ -176,6 +192,7 @@ export default function Visitors() {
             <option value="All">All</option>
             {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+          <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="visitors-filters" />
         </div>
 
         <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl overflow-hidden">

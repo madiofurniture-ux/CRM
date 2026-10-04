@@ -6,8 +6,8 @@ import api from "@/lib/api";
 
 // Where a search hit opens. Functions deep-link to the record itself.
 const RESULT_ROUTE = {
-  customer: (r) => `/customers?open=${r.id}`, lead: (r) => `/leads?open=${r.id}`,
-  quotation: (r) => `/quotes/ws/${r.id}`, project: (r) => `/projects?open=${r.id}`,
+  customer: (r) => `/customers/${r.id}`, lead: (r) => `/leads?open=${r.id}`,
+  quotation: (r) => `/quotes/ws/${r.id}`, project: (r) => `/projects/${r.id}`,
   service_ticket: (r) => `/service?ticket=${r.id}`, architect: () => "/architects",
   inventory: () => "/inventory", employee: () => "/admin/roles",
 };

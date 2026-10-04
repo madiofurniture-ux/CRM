@@ -4,6 +4,8 @@ import api from "@/lib/api";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, MapPin, Users as UsersIcon, X, Trash2 } from "lucide-react";
 import { todayIST, isoDateIST } from "@/lib/format";
+import { Link, useSearchParams } from "react-router-dom";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 
 const HOURS = Array.from({ length: 12 }, (_, i) => 8 + i); // 8..19
 
@@ -23,11 +25,38 @@ export default function Meets() {
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const empty = { title: "", date: todayIST(), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Internal", ref_name: "", agenda: "", status: "Scheduled", attendees: [] };
+  const empty = { title: "", date: todayIST(), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Internal", ref_name: "", agenda: "", status: "Scheduled", attendees: [], customer_id: "", project_id: "" };
   const [form, setForm] = useState(empty);
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const load = async () => { const { data } = await api.get("/meets"); setRows(data); };
   useEffect(() => { load(); }, []);
+
+  // /meets?new=1&customer_id=…&project_id=… (customer / project page)
+  // opens a new meeting already for that customer / project.
+  useEffect(() => {
+    if (searchParams.get("new") !== "1") return;
+    const customer_id = searchParams.get("customer_id") || "";
+    const project_id = searchParams.get("project_id") || "";
+    ["new", "customer_id", "project_id"].forEach((k) => searchParams.delete(k));
+    setSearchParams(searchParams, { replace: true });
+    setEditing(null);
+    setForm({ ...empty, customer_id, project_id, ref_type: "Customer" });
+    setShow(true);
+    if (project_id && !customer_id) {
+      api.get(`/projects/${project_id}/context`).then(({ data }) => setForm((f) => ({
+        ...f, customer_id: data.customer?.id || "", ref_name: data.customer?.name || data.project?.customer || "",
+        location: f.location || data.project?.site_address || "",
+        title: f.title || `Meeting · ${data.project?.project_name || data.project?.project_no || ""}`,
+      }))).catch(() => {});
+    }
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onPick = ({ customer, project }) => setForm((f) => ({
+    ...f, customer_id: customer?.id || "", project_id: project?.id || "",
+    ref_type: customer ? "Customer" : f.ref_type, ref_name: customer ? customer.name : f.ref_name,
+    location: f.location || project?.site_address || "",
+  }));
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart); d.setDate(d.getDate() + i); return d;
@@ -153,6 +182,8 @@ export default function Meets() {
                     <span className="font-mono">{m.start_time}–{m.end_time}</span>
                     {m.location && <span className="flex items-center gap-1"><MapPin size={11} />{m.location}</span>}
                     {m.with_person && <span className="flex items-center gap-1"><UsersIcon size={11} />{m.with_person}</span>}
+                    {m.customer_id && <Link to={`/customers/${m.customer_id}`} onClick={(e) => e.stopPropagation()} className="text-[var(--brand)] hover:underline">{m.ref_name || "Customer"}</Link>}
+                    {m.project_id && <Link to={`/projects/${m.project_id}`} onClick={(e) => e.stopPropagation()} className="text-[var(--brand)] hover:underline">Project</Link>}
                   </div>
                   {m.agenda && <div className="text-xs text-[var(--ink-3)] mt-1.5 line-clamp-2">{m.agenda}</div>}
                 </div>
@@ -166,13 +197,17 @@ export default function Meets() {
 
       {show && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-3" onClick={() => setShow(false)}>
-          <div className="bg-white rounded-xl border w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-xl border w-full max-w-xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">{editing ? "Edit Meeting" : "Schedule Meeting"}</h3>
               <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
             </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <F l="Title" v={form.title} oc={(v) => setForm({ ...form, title: v })} cls="col-span-2" t2="meet-title" />
+              <div className="col-span-2">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Customer &amp; project (optional)</label>
+                <CustomerProjectPicker customerId={form.customer_id} projectId={form.project_id} onChange={onPick} testid="meet-cpp" compact />
+              </div>
               <F l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />
               <div className="grid grid-cols-2 gap-2">
                 <F l="Start" t="time" v={form.start_time} oc={(v) => setForm({ ...form, start_time: v })} />
