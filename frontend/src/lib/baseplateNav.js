@@ -94,6 +94,7 @@ export const ALL_BASEPLATE_SUBNAV = {
     { code: "DC", label: "Data Centre", to: "/data-centre", page: "data-centre", adminOnly: true },
     { code: "DH", label: "Data Health", to: "/admin/data-health", page: "data-health", adminOnly: true },
     { code: "FY", label: "Financial Year", to: "/admin/financial-year", page: "financial-year", adminOnly: true },
+    { code: "BS", label: "Business Setup", to: "/admin/setup", page: "setup", adminOnly: true },
     { code: "WF", label: "Workflows", to: "/admin/workflows", page: "workflows", adminOnly: true },
     { code: "FL", label: "Flows", to: "/admin/flows", page: "flows", adminOnly: true },
     { code: "GL", label: "Go-live Data", to: "/admin/go-live", page: "go-live", adminOnly: true },

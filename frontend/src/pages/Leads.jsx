@@ -18,6 +18,7 @@ import CsvImportModal from "@/components/CsvImportModal";
 import RemarksTimeline from "@/components/RemarksTimeline";
 import StarRating from "@/components/StarRating";
 import EmptyState from "@/components/EmptyState";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 import ErrorState from "@/components/ErrorState";
 import { useAuth } from "@/context/AuthContext";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,15 +34,8 @@ import WhatsAppButton from "@/components/WhatsAppButton";
 // (Admin → Workflows), loaded by useWorkflow below.
 const DEFAULT_STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation", "Won", "Lost"];
 
-// "Architect Ref"/"WhatsApp"/etc are pre-existing source values seeded/used
-// before this became a dropdown — kept as real options rather than dropped,
-// same "unrecognized" fallback pattern as STAGES above covers anything else.
-const SOURCES = ["Walk-in", "Architect", "Referral", "Website", "WhatsApp", "Instagram", "Facebook", "Google",
-  "Phone", "Existing Customer", "Social Media", "Site Visit", "Cold Call", "Other"];
-const DIVISIONS = ["Furniture", "D&W", "MAP"];
 const PRIORITIES = ["Low", "Medium", "High", "Hot"];
 const PRIORITY_TONE = { Hot: "bg-red-50 text-red-700", High: "bg-amber-50 text-amber-700", Medium: "", Low: "" };
-const isKnownSource = (s) => SOURCES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 
 export default function Leads() {
   const [rows, setRows] = useState([]);
@@ -67,6 +61,12 @@ export default function Leads() {
   const canEdit = canDo("leads", "edit");
   const lw = useWorkflow("lead", DEFAULT_STAGES);
   const STAGES = lw.labels;
+  // Divisions and lead sources are the tenant's own (Business Settings /
+  // industry pack), not one company's hardcoded lists. A lead whose source
+  // isn't in the list still shows it, marked "(unrecognized)".
+  const { divisions: tenantDivisions, leadSources: SOURCES } = useTenantConfig();
+  const DIVISIONS = tenantDivisions.map((d) => d.slug);
+  const isKnownSource = (src) => SOURCES.some((x) => x.toLowerCase() === String(src || "").trim().toLowerCase());
   const isKnownStage = lw.isKnownStage;
   const canDelete = canDo("leads", "delete");
   // null = the inline "new architect" sub-form is closed. It lives in its own

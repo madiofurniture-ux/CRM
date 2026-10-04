@@ -31,7 +31,10 @@ export function AuthProvider({ children }) {
   const [tenant, setTenant] = useState(null); // entity config: branding + enabled_modules
   const [roles, setRoles] = useState([]);
 
-  const loadTenant = () => api.get("/tenants/me").then((r) => setTenant(r.data)).catch(() => setTenant(null));
+  // skipCache: refreshTenant() is called right after a change (modules,
+  // branding, industry pack) made through another url, which the GET cache
+  // can't know invalidates /tenants/me.
+  const loadTenant = () => api.get("/tenants/me", { skipCache: true }).then((r) => setTenant(r.data)).catch(() => setTenant(null));
 
   // Business Settings' brand colours drive the theme, not just the record.
   useEffect(() => { applyTenantTheme(tenant); }, [tenant]);

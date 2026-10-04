@@ -82,6 +82,11 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   (`_cash_books`; `pnl_exclude` marks transfers and PO-covered vendor
   payments). P&L is stated before GST (`lc.net_of_gst`, `po_net`, `mo_net`;
   sales carry `tax_total`). See `docs/FINANCE.md`.
+- Business Setup (`/admin/setup`): industry starter packs
+  (`backend/industry_packs.py`), the Indian company/GST profile and the go-live
+  checklist (`/api/setup/*`); Indian rules (GSTIN checksum, states, amounts in
+  words) in `backend/india.py` / `frontend/src/lib/india.js`. Lead divisions and
+  sources come from the business profile. See `docs/BUSINESS_SETUP.md`.
 - Furniture quotes can print as a picture price list (`quote.print_layout =
   "pricelist"`, line `mrp` before GST beside the offer rate).
 

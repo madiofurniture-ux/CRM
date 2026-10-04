@@ -41,7 +41,14 @@ function invalidateResource(url) {
 
 const rawGet = api.get.bind(api);
 api.get = (url, config) => {
-  if (config?.skipCache) return rawGet(url, config);
+  // A forced fetch also refreshes the cache, so screens that read the same
+  // url afterwards don't get the copy from before it.
+  if (config?.skipCache) {
+    return rawGet(url, config).then((response) => {
+      _cache.set(url, { response, expiry: Date.now() + CACHE_TTL_MS });
+      return response;
+    });
+  }
   const cached = _cache.get(url);
   if (cached) {
     if (Date.now() >= cached.expiry) {
