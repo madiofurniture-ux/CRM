@@ -32,7 +32,8 @@ BUNDLES: dict[str, dict] = {
     "showroom": {"label": "Showroom & walk-ins", "modules": ["visitors"]},
     "partners": {"label": "Architects & referral partners", "modules": ["architects"]},
     "inventory": {"label": "Stock & purchasing", "modules": ["inventory", "stock-ledger", "inv-analytics", "purchase-orders"]},
-    "projects": {"label": "Projects & site work", "modules": ["projects", "project-pnl", "dwsurvey"]},
+    "projects": {"label": "Projects & site work", "modules": ["projects", "project-pnl"]},
+    "openings_survey": {"label": "Openings survey & BOQ (doors/windows)", "modules": ["dwsurvey"]},
     "vendors": {"label": "Vendor / manufacturer orders", "modules": ["manufacturer-orders", "purchase-orders"]},
     "quote_builder": {"label": "Visual quote builder", "modules": ["quote-builder"]},
     "incentives": {"label": "Sales incentives", "modules": ["incentives", "commissions"]},
@@ -147,7 +148,7 @@ PACKS: dict[str, dict] = {
             ("lead", "Profile", "select", ["uPVC", "Aluminium", "System aluminium", "Steel", "Wood"]),
             ("lead", "Glass", "select", ["5mm clear", "Toughened", "DGU", "Laminated", "Reflective"]),
         ],
-        "bundles": ["partners", "showroom", "inventory", "projects", "vendors", "petty_cash"],
+        "bundles": ["openings_survey", "partners", "showroom", "inventory", "projects", "vendors", "petty_cash"],
         "terms": "60% advance with order, 30% before dispatch, 10% after installation.\n" + _GST_TERMS,
     },
     "manufacturing_b2b": {
