@@ -135,6 +135,7 @@ export default function QuoteWorkspace() {
         quote_id: id, version: q.version || 1, w: 0, h: 0, qty: 1, group: curGroup,
         description: [item.name, item.model_no, item.material_finish].filter(Boolean).join(" · "),
         rate: rateFromMrp(item.mrp, item.gst_pct ?? taxPct), sku: item.sku, unit: item.unit, hsn: item.hsn,
+        price_auto: true,           // the server prices it from the item's quantity breaks
         // Same basis as the rate (before GST): the price-list quotation prints both.
         mrp: rateFromMrp(item.mrp, item.gst_pct ?? taxPct),
       });
@@ -309,6 +310,7 @@ export default function QuoteWorkspace() {
                             <div className="mt-1 flex items-center gap-1.5 text-[10px] text-[var(--ink-3)]" data-testid={`quote-line-sku-${l.id}`}>
                               <span className="font-mono">{l.sku}</span>
                               <StockBadge item={stock[l.sku]} qty={l.qty} />
+                              <PriceHints line={l} item={stock[l.sku]} taxPct={q.tax_pct ?? 18} />
                             </div>
                           )}
                         </td>
@@ -317,7 +319,12 @@ export default function QuoteWorkspace() {
                         {mm && <td className="px-3 py-2 text-right font-mono text-[var(--ink-3)]">{(l.sft_each || 0).toFixed(2)}</td>}
                         <td className="px-3 py-2 w-16"><I t="number" v={l.qty} oc={(v) => patchLine(l, { qty: parseFloat(v) || 0 })} right /></td>
                         <td className="px-3 py-2 text-right font-mono text-[var(--ink-3)]">{(l.sft || 0).toFixed(2)}</td>
-                        <td className="px-3 py-2 w-24"><I t="number" v={l.rate} oc={(v) => patchLine(l, { rate: parseFloat(v) || 0 })} right /></td>
+                        <td className="px-3 py-2 w-24"><I t="number" v={l.rate} oc={(v) => patchLine(l, { rate: parseFloat(v) || 0, price_auto: false })} right />
+                          {l.sku && !l.price_auto && stock[l.sku]?.price_tiers?.length > 0 && (
+                            <button type="button" className="text-[10px] text-[var(--brand)]" onClick={() => patchLine(l, { price_auto: true })}
+                                    title="Price this line from the item's quantity pricing again">use qty price</button>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono font-semibold">{inrFull(l.amount)}</td>
                         <td className="px-2 py-2"><button onClick={() => removeLine(l.id)} className="p-1 rounded hover:bg-[var(--danger-soft)] text-[var(--danger)]"><Trash2 size={13} /></button></td>
                       </tr>
@@ -504,4 +511,33 @@ function Cell({ label, value, strong }) {
 }
 function I({ v, oc, t = "text", right }) {
   return <input type={t} value={v ?? ""} onChange={(e) => oc(e.target.value)} className={`w-full px-2 py-1 rounded border border-[var(--border)] bg-white text-xs outline-none focus:border-[var(--brand)] ${right ? "text-right font-mono" : ""}`} />;
+}
+
+
+// Under a stock line: which quantity price applies (and the next break), and
+// for people allowed to see it, the landing price and margin at this rate.
+function PriceHints({ line, item, taxPct }) {
+  if (!item) return null;
+  const tiers = item.price_tiers || [];
+  const qty = Number(line.qty) || 0;
+  const next = tiers.find((t) => qty < t.min_qty);
+  const active = [...tiers].reverse().find((t) => qty >= t.min_qty);
+  const gst = item.gst_pct ?? taxPct ?? 18;
+  const landing = "cost" in item ? Number(item.cost) || 0 : null;      // landing price, before GST like the rate
+  const margin = landing > 0 && line.rate > 0 ? Math.round(((line.rate - landing) / line.rate) * 100) : null;
+  return (
+    <>
+      {line.price_auto && tiers.length > 0 && (
+        <span className="text-[var(--moss)]" data-testid={`qty-price-${line.id}`}
+              title={tiers.map((t) => `${t.min_qty}+ : ₹${t.price}`).join(" · ")}>
+          {active ? `qty price ${active.min_qty}+` : "MRP"}{next ? ` · ${next.min_qty}+ ₹${Math.round(rateFromMrp(next.price, gst))}` : ""}
+        </span>
+      )}
+      {landing != null && (
+        <span className={margin != null && margin < 0 ? "text-[var(--danger)]" : ""} data-testid={`landing-${line.id}`}>
+          landing ₹{Math.round(landing).toLocaleString("en-IN")}{margin != null ? ` · margin ${margin}%` : ""}
+        </span>
+      )}
+    </>
+  );
 }

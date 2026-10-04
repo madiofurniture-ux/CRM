@@ -35,7 +35,7 @@ export default function StakeholderLinkModal({ role, onLink, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4" onClick={onClose}>
-      <div ref={trapRef} role="dialog" aria-modal="true" aria-labelledby="stakeholder-link-title" className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div ref={trapRef} role="dialog" aria-modal="true" aria-labelledby="stakeholder-link-title" className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <h3 id="stakeholder-link-title" className="font-heading font-semibold text-sm">Link stakeholder</h3>
           <button onClick={onClose} aria-label="Close link stakeholder dialog" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>

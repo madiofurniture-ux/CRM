@@ -123,3 +123,18 @@ stay unlinked — name matching would guess; link them from the order.
   edit changes their projects and leads).
 
 Tests: `backend/tests/test_relations.py`.
+
+## People, partners and pricing
+
+- **Staff** are CRM users with their own login. Seeded role logins
+  (Promoter, MF, MAP…) are marked `shared_login` and don't appear in
+  "Handled by / Assigned to" pickers; Role Manager has the toggle.
+- **Applicator / Supplier**: vendors carry a type; a MAP project picks its
+  Applicator, other projects their Supplier (Projects form, project page,
+  column filter). Master Data → Vendors & Applicators manages the list.
+- **Landing price** shows to admin, accounts and anyone with "Can see
+  landing price" (Role Manager): on stock, and per quotation line with the
+  margin at the quoted rate.
+- **Quantity pricing**: Inventory → item → Quantity pricing ("from 10 units:
+  ₹…", MRP basis). Lines picked from stock follow it as qty changes ("qty
+  price" hint); typing a rate stops that ("use qty price" turns it back on).

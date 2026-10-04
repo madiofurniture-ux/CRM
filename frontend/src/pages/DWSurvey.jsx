@@ -5,6 +5,7 @@ import { fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 import { X, Trash2, Plus, ChevronLeft, FileText, Camera, ImageOff } from "lucide-react";
 import { shrinkImage, dataUrlKb } from "@/lib/image";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 
 const TYPES = ["Window", "Door", "Sliding", "French Door", "Ventilator", "Partition"];
 const FRAMES = ["uPVC", "Aluminium", "Wood", "MS", "WPC"];
@@ -146,8 +147,18 @@ export default function DWSurvey() {
           </div>
 
           <div className="bg-[var(--surface)] border border-blue-100/80 rounded-2xl p-5 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <F l="Customer" v={current.customer} oc={(v) => patchSurvey({ customer: v })} />
-            <F l="Phone" v={current.phone} oc={(v) => patchSurvey({ phone: v })} />
+            <div className="col-span-2">
+              <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Customer &amp; project</label>
+              {!current.customer_id && current.customer && (
+                <div className="text-xs text-[var(--warn)] mb-1">Typed as “{current.customer}”{current.phone ? ` · ${current.phone}` : ""} — pick or add the customer to link it.</div>
+              )}
+              <CustomerProjectPicker key={current.id} customerId={current.customer_id || ""} projectId={current.project_id || ""} division="D&W"
+                onChange={({ customer, project }) => patchSurvey({
+                  customer_id: customer?.id || "", project_id: project?.id || "",
+                  ...(customer ? { customer: customer.name, phone: customer.phone || "" } : {}),
+                  ...(project?.site_address && !current.site_address ? { site_address: project.site_address } : {}),
+                })} testid="dws-cpp" />
+            </div>
             <F l="Site address" v={current.site_address} oc={(v) => patchSurvey({ site_address: v })} cls="col-span-2" />
 
             {/* Site remarks — free-text notes from the visit */}

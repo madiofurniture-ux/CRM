@@ -63,7 +63,7 @@ async def _quote_to_sale(qty=2):
     return out["sales_order"]
 
 
-def test_lookup_finds_by_name_sku_or_model_with_stock_and_no_cost():
+def test_lookup_finds_by_name_sku_or_model_with_stock_and_cost_only_for_allowed():
     async def go():
         await _item()
         await _item(sku="TB-9", name="Dining table", model_no="DT6")
@@ -71,7 +71,9 @@ def test_lookup_finds_by_name_sku_or_model_with_stock_and_no_cost():
         assert [r["sku"] for r in rows] == ["WR-1"]
         r = rows[0]
         assert (r["on_hand"], r["reserved"], r["available"], r["hsn"], r["mrp"]) == (10, 0, 10, "9403", 50000)
-        assert "cost" not in r
+        assert "cost" in r                                   # admin sees the landing price
+        floor = {**ADMIN, "id": "floor", "role": "user", "role_id": ""}
+        assert "cost" not in (await server.inventory_lookup(q="w3d", user=floor))[0]
         assert await server.inventory_lookup(q="wardrobe", user=OTHER) == []      # other company sees nothing
         assert len(await server.inventory_lookup(q="", user=ADMIN)) == 2
         await server.inventory_lookup(q="(.*", user=ADMIN)                         # regex input is escaped

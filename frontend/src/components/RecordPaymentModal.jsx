@@ -54,7 +54,7 @@ export default function RecordPaymentModal({ target, onClose, onSaved }) {
   return (
     <>
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-[var(--border)] w-full max-w-sm shadow-xl overflow-hidden">
+          <div className="bg-white rounded-2xl border border-[var(--border)] w-full max-w-sm shadow-xl overflow-hidden max-h-[92vh] overflow-y-auto">
             <div className="px-6 py-4 border-b border-[var(--border)] flex items-center justify-between bg-[var(--surface-2)]">
               <div>
                 <h3 className="font-heading font-bold text-base text-[var(--ink)]">Record Payment</h3>

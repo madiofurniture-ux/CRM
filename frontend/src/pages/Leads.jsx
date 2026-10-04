@@ -462,7 +462,7 @@ export default function Leads() {
             </div>
             <div className="px-5 pt-4">
               <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Search Existing Customer</label>
-              <CustomerResolver onSelect={(c) => setForm({ ...form, name: c.name, phone: c.phone })} />
+              <CustomerResolver onSelect={(c) => setForm({ ...form, name: c.name, phone: c.phone, customer_id: c.id })} />
             </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <Fld l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />

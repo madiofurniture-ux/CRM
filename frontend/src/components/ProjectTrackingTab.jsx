@@ -99,7 +99,7 @@ export default function ProjectTrackingTab({ project, onProjectUpdated }) {
 
       {showForm && (
         <div className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4" onClick={() => setShowForm(false)}>
-          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-sm">Log Daily Progress</h3>
               <button onClick={() => setShowForm(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>

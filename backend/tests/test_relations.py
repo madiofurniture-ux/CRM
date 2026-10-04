@@ -353,3 +353,58 @@ def test_project_partner_applicator_for_map_supplier_otherwise():
         with pytest.raises(HTTPException):
             await update_project(pf["id"], ProjectUpdate(partner_id="nope"), user=ADMIN)
     run(go())
+
+
+def test_quantity_price_breaks_and_landing_price_permission():
+    import lifecycle as lc
+    from models import InventoryCreate, QuoteLineCreate
+    assert lc.tier_price(1180, [{"min_qty": 10, "price": 1062}, {"min_qty": 5, "price": 1121}], 7) == 1121
+    assert lc.tier_price(1180, [{"min_qty": 10, "price": 1062}], 12) == 1062
+    assert lc.tier_price(1180, [{"min_qty": 1, "price": 5}, {"min_qty": 0, "price": 1}], 3) == 1180
+
+    async def go():
+        create_item = _route("/api/inventory", "POST")
+        lookup = _route("/api/inventory/lookup")
+        create_line = _route("/api/quote-lines", "POST")
+        update_line = _route("/api/quote-lines/{item_id}", "PUT")
+        await create_item(InventoryCreate(sku="SOFA-1", name="Sofa", vendor_code="V1", mrp=11800, cost=6000, gst_pct=18,
+                                          price_tiers=[{"min_qty": 10, "price": 10620}, {"min_qty": "x"}]), user=ADMIN)
+        q = await _quote(customer="A", phone="9000000021", tax_pct=18)
+        line = await create_line(QuoteLineCreate(quote_id=q["id"], sku="SOFA-1", qty=1, rate=1, price_auto=True), user=ADMIN)
+        assert line["rate"] == 10000                       # 11,800 incl. GST -> 10,000 before GST
+        line = await update_line(line["id"], {**line, "qty": 12}, user=ADMIN)
+        assert line["rate"] == 9000                        # the 10+ break: 10,620 incl. GST
+        line = await update_line(line["id"], {**line, "rate": 8500, "price_auto": False}, user=ADMIN)
+        assert line["rate"] == 8500                        # typed by hand: stays
+        rep = {"id": "u7", "tenant_id": "acme", "name": "Rep", "role": "admin", "username": "rep7"}
+        manager = {"id": "u8", "tenant_id": "acme", "name": "Furniture Manager", "role": "user", "role_id": "",
+                   "username": "fm", "can_view_cost": True}
+        floor = {**manager, "id": "u9", "username": "fl", "can_view_cost": False}
+        assert (await lookup(q="Sofa", user=manager))[0]["cost"] == 6000
+        assert "cost" not in (await lookup(q="Sofa", user=floor))[0]
+        assert (await lookup(q="Sofa", user=floor))[0]["price_tiers"] == [{"min_qty": 10.0, "price": 10620.0}]
+        assert server._can_see_cost_prices(rep)
+    run(go())
+
+
+def test_starter_flows_switch_on_once_for_a_company_with_none(monkeypatch):
+    monkeypatch.setenv("GO_LIVE_SHAREPOINT_TENANT", "acme")
+    async def go():
+        first = await server.go_live_auto_starter_flows()
+        assert len(first["added"]) >= 5
+        n = await server.db.flows.count_documents({"tenant_id": "acme"})
+        assert n == len(first["added"])
+        again = await server.go_live_auto_starter_flows()
+        assert "skipped" in again and await server.db.flows.count_documents({"tenant_id": "acme"}) == n
+    run(go())
+
+
+def test_new_user_keeps_team_role_and_access_flags():
+    from models import UserCreate
+    async def go():
+        u = await server.create_user(UserCreate(username="FM1", name="Furniture Manager", pin="1234", role="user",
+                                                team_id="t1", role_id="r1", can_view_cost=True), user=ADMIN)
+        stored = await server.db.users.find_one({"id": u["id"]})
+        assert (stored["team_id"], stored["role_id"], stored["can_view_cost"], stored["shared_login"]) == ("t1", "r1", True, False)
+        assert server._can_see_cost_prices(stored)
+    run(go())

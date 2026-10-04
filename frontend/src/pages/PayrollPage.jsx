@@ -472,7 +472,7 @@ function Payslip({ r, name, onClose }) {
   const month = r.period_start ? new Date(`${r.period_start}T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" }) : "";
   return (
     <div className="fixed inset-0 bg-white z-[60] overflow-auto print-view" data-testid="payslip">
-      <div className="max-w-3xl mx-auto p-8 print:p-0" id="print-area">
+      <div className="max-w-3xl mx-auto p-8 print:p-0 max-h-[92vh] overflow-y-auto" id="print-area">
         <div className="flex justify-between items-start mb-6">
           <div>
             <div className="font-heading font-bold text-xl">{office.name || ""}</div>

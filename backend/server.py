@@ -348,6 +348,12 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
         "color": payload.color,
         "pages": payload.pages,
         "reports_to": payload.reports_to or "",
+        # Team, permission role, contact and access flags set on the Add User
+        # form (these used to be dropped and only stuck after an edit).
+        "team_id": payload.team_id or "", "role_id": payload.role_id or "",
+        "phone": payload.phone or "", "email": payload.email or "",
+        "active": payload.active, "shared_login": payload.shared_login,
+        "can_view_cost": payload.can_view_cost,
         "created_at": now_iso(),
     }
     # New colleagues join the tenant of the admin creating them. Without this the
@@ -2052,7 +2058,9 @@ def redact_manufacturer_name(item: dict, user: dict) -> dict:
 # the margin — so it is enforced here, server-side, and the field is absent
 # from the response rather than blanked in the UI.
 def _can_see_cost_prices(user: dict) -> bool:
-    return (user or {}).get("role") in ("admin", "accountant")
+    """Landing price: admin, accountant, or someone granted it in Role
+    Manager ("Can see landing price" — e.g. the Furniture Manager)."""
+    return (user or {}).get("role") in ("admin", "accountant") or bool((user or {}).get("can_view_cost"))
 
 
 # `cost` is not the only field that carries it. `margin` is stored as
@@ -2142,6 +2150,8 @@ def _inv_num(doc: dict, field: str, label: str, minimum: float = 0.0):
 async def normalize_inventory(doc: dict, existing: dict | None, user: dict) -> None:
     """Server-side guard for every inventory write (create AND update).
 
+    * price_tiers (quantity price breaks) are cleaned: sorted, positive,
+      one price per minimum quantity.
     * vendor/vendor_code are always derived from vendor_id — never trust
       client-supplied text for them, or a redacted user could write a vendor
       name into inventory that they can't even see themselves.
@@ -2152,6 +2162,8 @@ async def normalize_inventory(doc: dict, existing: dict | None, user: dict) -> N
       MRP here, so it can't drift from the figures it is derived from.
     * quantities, prices and dimensions are range-checked, status is checked
       against the known list and SKU is unique within the tenant."""
+    if "price_tiers" in doc:
+        doc["price_tiers"] = lc.clean_price_tiers(doc.get("price_tiers"))
     for f in TALLY_INVENTORY_FIELDS:      # only the Tally import writes these
         doc.pop(f, None)
     if not _can_see_cost_prices(user):
@@ -3312,7 +3324,8 @@ async def _stock_positions(user: dict, skus: list | None = None) -> dict:
 @api.get("/inventory/lookup")
 async def inventory_lookup(q: str = "", limit: int = 20, skus: str = "", user: dict = Depends(get_current_user)):
     """Product picker for quotation and invoice lines: search by name, SKU or
-    model, with live stock. Never returns cost. Open to anyone who can work
+    model, with live stock and quantity price breaks; landing cost only for
+    those allowed to see it. Open to anyone who can work
     on quotations, invoices or inventory."""
     allowed = False
     for module in ("quotes", "invoice-gen", "inventory"):
@@ -3339,8 +3352,12 @@ async def inventory_lookup(q: str = "", limit: int = 20, skus: str = "", user: d
         "category": i.get("category", ""), "division": i.get("division", ""),
         "mrp": lc.money(i.get("mrp")), "hsn": i.get("hsn") or "", "unit": i.get("unit") or "pcs",
         "gst_pct": i.get("gst_pct"), "material_finish": i.get("material_finish", ""),
+        "price_tiers": lc.clean_price_tiers(i.get("price_tiers")),
         **pos.get(i.get("sku"), lc.stock_position(i.get("qty"), 0)),
         "tally_qty": i.get("tally_qty"),
+        # Landing price only for those allowed to see it (admin, accounts,
+        # anyone granted "Can see landing price").
+        **({"cost": lc.money(i.get("cost"))} if _can_see_cost_prices(user) else {}),
     } for i in items]
 
 
@@ -3462,6 +3479,10 @@ async def normalize_invoice(doc: dict, existing: dict | None, user: dict) -> Non
     if "place_of_supply" in doc:
         office = await _get_settings(user)
         doc["is_igst"] = lc.is_interstate(doc.get("place_of_supply"), office.get("home_state") or "Telangana")
+    if "line_items" in doc:
+        for line in doc.get("line_items") or []:
+            if isinstance(line, dict):
+                await _auto_price(line, line.get("tax_pct") if line.get("tax_pct") is not None else 18, user)
     if "line_items" in doc or "is_igst" in doc or existing is None:
         lines = doc.get("line_items", prev.get("line_items") or [])
         is_igst = doc.get("is_igst", prev.get("is_igst", False))
@@ -7220,7 +7241,30 @@ from models import (
     CustomerCreate, Customer, GST_DOC_DEFAULT, GST_SLABS,
 )
 
-make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
+async def _auto_price(line: dict, gst_default, user: dict) -> None:
+    """A stock-picked line priced from the item's quantity price breaks."""
+    if not line.get("price_auto") or not line.get("sku"):
+        return
+    item = await db.inventory.find_one(tenancy.scope({"sku": line["sku"]}, "inventory", user),
+                                       {"_id": 0, "mrp": 1, "price_tiers": 1, "gst_pct": 1})
+    if not item:
+        return
+    gst = item.get("gst_pct") if item.get("gst_pct") not in (None, "") else gst_default
+    line["rate"] = lc.pre_gst(lc.tier_price(item.get("mrp"), item.get("price_tiers"), line.get("qty") or 1), gst)
+
+
+async def normalize_quote_line(doc: dict, existing: dict | None, user: dict) -> None:
+    """Lines picked from stock (price_auto) take the rate of their quantity's
+    price break; the screen clears price_auto when someone types a rate."""
+    merged = {**(existing or {}), **doc}
+    if merged.get("price_auto") and merged.get("sku"):
+        quote = await db.quotes.find_one(tenancy.scope({"id": merged.get("quote_id")}, "quotes", user),
+                                         {"_id": 0, "tax_pct": 1}) or {}
+        await _auto_price(merged, quote.get("tax_pct") if quote.get("tax_pct") is not None else 18, user)
+        doc["rate"] = merged["rate"]
+
+
+make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine, normalize=normalize_quote_line)
 make_crud(api, "dw-openings", "dw_openings", DWOpeningCreate, DWOpening)
 make_crud(api, "commission-rules", "commission_rules", CommissionRuleCreate, CommissionRule)
 async def normalize_customer(doc: dict, existing: dict | None, user: dict) -> None:
@@ -10102,6 +10146,36 @@ async def go_live_restore(reset_id: str, payload: dict, user: dict = Depends(req
 @api.post("/admin/go-live/starter-flows")
 async def go_live_starter_flows(user: dict = Depends(require_admin)):
     """Add MADIO's follow-up flows (any already present by name are left alone)."""
+    return await _install_starter_flows(user)
+
+
+async def go_live_auto_starter_flows():
+    """Once per company at startup: a company with no flows at all gets
+    MADIO's starter follow-up flows switched on. Records loaded from the
+    sheets carry no stage-entered date, so stale-stage flows only act on
+    records created or moved from now on — nothing floods at start."""
+    run_key = "starter-flows-1"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
+    if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    await db.go_live_picture_runs.insert_one(
+        tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
+    try:
+        if await db.flows.count_documents(tenancy.scope({}, "flows", system_user)):
+            result = {"skipped": "the company already has flows"}
+        else:
+            result = await _install_starter_flows(system_user)
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key}, {"$set": {"result": result}})
+        logger.info("Starter flows for %s: %s", tid, result)
+        return result
+    except Exception as e:  # never take the server down over this
+        logger.exception("Starter flows failed: %s", e)
+        await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key})
+    return None
+
+
+async def _install_starter_flows(user: dict) -> dict:
     have = {f.get("name") for f in await db.flows.find(tenancy.scope({}, "flows", user), {"_id": 0, "name": 1})
             .to_list(flowlib.MAX_FLOWS)}
     added, skipped = [], []
@@ -10268,6 +10342,7 @@ async def startup():
             await go_live_auto_cash_books()
             await go_live_auto_sale_gst()
             await go_live_auto_relations()
+            await go_live_auto_starter_flows()
         asyncio.create_task(_auto())
 
 

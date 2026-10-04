@@ -43,6 +43,7 @@ class UserBase(BaseModel):
     email: Optional[str] = ""
     active: bool = True
     shared_login: bool = False   # a role login shared by several people, not a person (left out of staff pickers)
+    can_view_cost: bool = False  # may see landing price / margin (admin and accountant always can)
     # --- Payroll (all optional with defaults: every account that existed
     # before this feature reads back as an unpaid 'monthly' record with a zero
     # rate, which produces a zero payout rather than a crash or a guess.) ---
@@ -77,6 +78,7 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     active: Optional[bool] = None
     shared_login: Optional[bool] = None
+    can_view_cost: Optional[bool] = None
     division: Optional[str] = None
     pay_model: Optional[str] = None
     base_pay_rate: Optional[float] = None
@@ -436,6 +438,7 @@ class InventoryBase(BaseModel):
     qty: int = 1
     cost: float = 0
     mrp: float = 0
+    price_tiers: List[dict] = Field(default_factory=list)   # [{min_qty, price}] — quantity price breaks, MRP basis
     margin: float = 0
     status: str = "In Stock"  # In Stock / Display / Sold / Missing / Reserved
     location: Optional[str] = "Warehouse"
@@ -552,6 +555,7 @@ class LineItem(BaseModel):
     unit: Optional[str] = ""
     discount_pct: Optional[float] = 0
     tax_pct: Optional[float] = GST_DOC_DEFAULT  # GST slab for this line (HSN/SAC dependent)
+    price_auto: Optional[bool] = False   # rate follows the stock item's quantity price breaks
 
 
 # ------- Purchase Orders (outbound: what WE buy from a vendor) -------
@@ -1608,6 +1612,9 @@ class QuoteLineBase(BaseModel):
     # Optional heading the line sits under on the quotation (a floor, a room,
     # "Doors" / "Windows"); lines print grouped with a subtotal per group.
     group: Optional[str] = ""
+    # Picked from stock and not re-priced by hand: the rate follows the item's
+    # quantity price breaks (inventory.price_tiers) whenever qty changes.
+    price_auto: Optional[bool] = False
 
 class DWOpeningBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

@@ -123,7 +123,9 @@ export default function Invoices() {
     const gst = item.gst_pct ?? GST_DEFAULT;
     const line = { ...emptyItem(), sku: item.sku, hsn: item.hsn || emptyItem().hsn, unit: item.unit || "pcs",
       description: [item.name, item.model_no].filter(Boolean).join(" · "), qty: 1,
-      rate: rateFromMrp(item.mrp, gst), tax_pct: gst };
+      rate: rateFromMrp(item.mrp, gst), tax_pct: gst,
+      // Priced from the item's quantity breaks (the server re-checks on save).
+      price_auto: true, _mrp: item.mrp, _tiers: item.price_tiers || [] };
     const blankOnly = f.line_items.length === 1 && !f.line_items[0].description && !f.line_items[0].rate;
     return { ...f, line_items: blankOnly ? [line] : [...f.line_items, line] };
   });
@@ -147,7 +149,16 @@ export default function Invoices() {
     if (!window.confirm("Delete invoice?")) return;
     await api.delete(`/invoices/${id}`); toast.success("Deleted"); load();
   };
-  const setItem = (idx, k, v) => setForm((f) => ({ ...f, line_items: f.line_items.map((it, i) => i === idx ? { ...it, [k]: v } : it) }));
+  const setItem = (idx, k, v) => setForm((f) => ({ ...f, line_items: f.line_items.map((it, i) => {
+    if (i !== idx) return it;
+    const next = { ...it, [k]: v };
+    if (k === "rate") next.price_auto = false;                       // typed by hand
+    if (k === "qty" && it.price_auto && it._mrp != null) {
+      const tier = [...(it._tiers || [])].reverse().find((t) => (Number(v) || 0) >= t.min_qty);
+      next.rate = rateFromMrp(tier ? tier.price : it._mrp, it.tax_pct);
+    }
+    return next;
+  }) }));
   const addItem = () => setForm((f) => ({ ...f, line_items: [...f.line_items, emptyItem()] }));
   const delItem = (idx) => setForm((f) => ({ ...f, line_items: f.line_items.filter((_, i) => i !== idx) }));
 
@@ -397,7 +408,7 @@ function RecordPayment({ invoice, onClose, onSaved }) {
   };
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl border w-full max-w-sm" onClick={(e) => e.stopPropagation()} data-testid="inv-pay-modal">
+      <div className="bg-white rounded-xl border w-full max-w-sm max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()} data-testid="inv-pay-modal">
         <div className="px-5 py-4 border-b font-heading font-semibold">Record payment · {invoice.invoice_no}</div>
         <div className="p-5 space-y-3">
           <div className="text-sm text-[var(--ink-2)]">Balance due {inrFull(invoice.balance)}</div>
@@ -436,7 +447,7 @@ function InvoicePrint({ invoice, office, onClose }) {
   const tax = (invoice.cgst || 0) + (invoice.sgst || 0) + (invoice.igst || 0);
   return (
     <div className="fixed inset-0 bg-white z-[60] overflow-auto print-view">
-      <div className="max-w-4xl mx-auto p-8 print:p-0" id="print-area">
+      <div className="max-w-4xl mx-auto p-8 print:p-0 max-h-[92vh] overflow-y-auto" id="print-area">
         <div className="flex justify-between items-start mb-8 print:mb-6">
           <div>
             <div className="w-16 h-16 rounded-xl bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold text-2xl mb-3">M</div>

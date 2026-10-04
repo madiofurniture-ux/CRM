@@ -108,7 +108,7 @@ export default function PettyCash() {
 
       {show && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-3" onClick={() => setShow(false)}>
-          <div className="bg-white rounded-xl border w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-xl border w-full max-w-lg max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">New Petty Cash Entry</h3>
               <button onClick={() => setShow(false)} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>

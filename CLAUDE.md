@@ -92,6 +92,20 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   /customers|projects/{id}/context`), `CustomerProjectPicker`, and per-column
   list filters (`useColumnFilters` + `ColumnFilters`). See
   `docs/CONNECTED_RECORDS.md`.
+- People and partners: each staff member has their own login; seeded role
+  logins carry `shared_login` and are left out of staff pickers
+  (`StaffPicker`, "Handled by / Assigned to"). Vendors have `vendor_type`
+  (Supplier / Applicator / Manufacturer; Master Data); projects carry a
+  partner (`partner_id`, role Applicator for MAP else Supplier). Supplier
+  names stay admin/accounting-only; applicator names are shown.
+- Pricing: landing price (`cost`) is visible to admin, accountant and users
+  with `can_view_cost` (Role Manager — e.g. the Furniture Manager), gated in
+  `_can_see_cost_prices`. Stock items carry quantity price breaks
+  (`price_tiers` [{min_qty, price}], MRP basis); quotation/invoice lines
+  picked from stock (`price_auto`) take the break for their qty
+  (`lc.tier_price`, server-side); a typed rate turns it off.
+- Starter flows switch on once at startup for a company with none
+  (`go_live_auto_starter_flows`, run key `starter-flows-1`).
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.

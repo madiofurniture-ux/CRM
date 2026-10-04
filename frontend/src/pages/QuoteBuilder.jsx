@@ -383,7 +383,7 @@ export default function QuoteBuilder() {
 
       {showTemplates && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => quote && setShowTemplates(false)}>
-          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-2xl p-5" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-xl border border-[var(--border)] w-full max-w-2xl p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-heading font-semibold text-lg">Choose a Starting Point</h3>
               {quote && <button onClick={() => setShowTemplates(false)}><X size={16} /></button>}

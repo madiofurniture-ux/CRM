@@ -162,6 +162,7 @@ export default function Inventory() {
     sku: "", name: "", category: "", vendor_id: "", vendor: "", vendor_code: "", model_no: "",
     qty: 1, cost: 0, mrp: 0, margin: 0, status: "In Stock", location: "", image_url: "",
     width_mm: "", height_mm: "", depth_mm: "", dimension_unit: "mm", material_finish: "",
+    price_tiers: [],
   };
   const [form, setForm] = useState(empty);
 
@@ -187,6 +188,7 @@ export default function Inventory() {
       status: item.status || "In Stock", location: item.location || "", image_url: item.image_url || "",
       width_mm: item.width_mm ?? "", height_mm: item.height_mm ?? "", depth_mm: item.depth_mm ?? "",
       dimension_unit: item.dimension_unit || "mm", material_finish: item.material_finish || "",
+      price_tiers: item.price_tiers || [],
     });
     setEditingId(item.id);
     setShow(true);
@@ -439,7 +441,7 @@ export default function Inventory() {
 
       {show && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => { setShow(false); setEditingId(null); }}>
-          <div className="bg-white rounded-xl border w-full max-w-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-xl border w-full max-w-xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 className="font-heading font-semibold text-lg">{editingId ? `Edit Item — ${form.sku}` : "Add Item"}</h3>
               <button onClick={() => { setShow(false); setEditingId(null); }} className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>
@@ -485,6 +487,8 @@ export default function Inventory() {
               <F l="Qty" t="number" v={form.qty} oc={(v) => setForm({ ...form, qty: parseInt(v) || 0 })} />
               {showCost && <F l="Cost" t="number" v={form.cost} oc={(v) => setForm({ ...form, cost: parseFloat(v) || 0 })} t2="if-cost" />}
               <F l="MRP" t="number" v={form.mrp} oc={(v) => setForm({ ...form, mrp: parseFloat(v) || 0 })} />
+              <PriceBreaks tiers={form.price_tiers || []} mrp={form.mrp} cost={showCost ? form.cost : null}
+                           onChange={(price_tiers) => setForm((f) => ({ ...f, price_tiers }))} />
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Status</label>
                 <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">{STATUSES.map((s) => <option key={s}>{s}</option>)}</select>
@@ -579,3 +583,38 @@ function F({ l, v, oc, t = "text", cls = "", t2, placeholder = "" }) {
   );
 }
 
+
+
+// Quantity price breaks: from `min_qty` units the price per unit is `price`
+// (same basis as MRP, GST included). Quotation and invoice lines picked
+// from stock follow them as the quantity changes.
+function PriceBreaks({ tiers, mrp, cost, onChange }) {
+  const set = (i, k, v) => onChange(tiers.map((t, j) => (j === i ? { ...t, [k]: v } : t)));
+  const cls = "px-2 py-1.5 rounded-md border border-[var(--border)] bg-white text-sm";
+  return (
+    <div className="col-span-2" data-testid="price-breaks">
+      <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Quantity pricing</label>
+      <div className="text-xs text-[var(--ink-3)] mb-1.5">Lower price per unit from a quantity onwards (MRP basis). Below the first break the MRP{mrp ? ` (${inrFull(mrp)})` : ""} applies.</div>
+      {tiers.map((t, i) => {
+        const p = Number(t.price) || 0;
+        return (
+          <div key={i} className="flex flex-wrap items-center gap-2 mb-1.5">
+            <span className="text-xs text-[var(--ink-3)]">From</span>
+            <input type="number" min="2" className={`${cls} w-20`} value={t.min_qty ?? ""} aria-label="From quantity"
+                   onChange={(e) => set(i, "min_qty", e.target.value === "" ? "" : Number(e.target.value))} data-testid={`price-break-qty-${i}`} />
+            <span className="text-xs text-[var(--ink-3)]">units: ₹</span>
+            <input type="number" min="0" className={`${cls} w-32`} value={t.price ?? ""} aria-label="Price per unit"
+                   onChange={(e) => set(i, "price", e.target.value === "" ? "" : Number(e.target.value))} data-testid={`price-break-price-${i}`} />
+            {mrp > 0 && p > 0 && <span className="text-xs text-[var(--ink-3)]">{Math.round((1 - p / mrp) * 100)}% off</span>}
+            {cost != null && cost > 0 && p > 0 && p < cost && <span className="text-xs text-[var(--danger)]">below landing price</span>}
+            <button type="button" className="text-xs text-[var(--danger)] ml-auto" onClick={() => onChange(tiers.filter((_, j) => j !== i))}>Remove</button>
+          </div>
+        );
+      })}
+      <button type="button" className="text-xs font-medium text-[var(--brand)]" data-testid="price-break-add"
+              onClick={() => onChange([...tiers, { min_qty: tiers.length ? (Number(tiers[tiers.length - 1].min_qty) || 1) * 2 : 5, price: "" }])}>
+        + Add a quantity price
+      </button>
+    </div>
+  );
+}

@@ -573,7 +573,7 @@ function SettleModal({ order, onClose, onDone, masked, onUnlock }) {
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-labelledby="mo-settle-title"
-        className="bg-white rounded-2xl border border-[var(--border)] w-full max-w-md"
+        className="bg-white rounded-2xl border border-[var(--border)] w-full max-w-md max-h-[92vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <h3 id="mo-settle-title" className="font-heading font-semibold text-lg">Record Settlement</h3>

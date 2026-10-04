@@ -619,7 +619,7 @@ function PolicyForm({ policy, onClose, onSaved }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <form onSubmit={save} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Expense policy"
-            className="w-full max-w-md rounded-[var(--radius-lg)] bg-[var(--color-surface)] shadow-2xl">
+            className="w-full max-w-md rounded-[var(--radius-lg)] bg-[var(--color-surface)] shadow-2xl max-h-[92vh] overflow-y-auto">
         <header className="px-5 py-4 border-b border-[var(--color-border)] font-heading font-semibold text-lg">Expense policy</header>
         <div className="p-5 space-y-4">
           <div>

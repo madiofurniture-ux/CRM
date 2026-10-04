@@ -115,7 +115,7 @@ export default function Teams() {
 
       {show && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShow(false)} onKeyDown={(e) => e.key === "Escape" && setShow(false)}>
-          <div role="dialog" aria-modal="true" aria-labelledby="team-modal-title" className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-labelledby="team-modal-title" className="bg-white rounded-xl border border-[var(--border)] w-full max-w-md shadow-2xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b">
               <h3 id="team-modal-title" className="font-heading font-semibold text-lg">{editing ? "Edit Team" : "New Team"}</h3>
               <button onClick={() => setShow(false)} aria-label="Close" className="p-1.5 rounded-md hover:bg-[var(--surface-hover)]"><X size={16} /></button>

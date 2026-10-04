@@ -17,7 +17,7 @@ export default function RoleManager() {
   const pages = tenant?.enabled_modules
     ? ALL_PAGES.filter((p) => tenant.enabled_modules.includes(p.id))
     : ALL_PAGES;
-  const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: pages.map((p) => p.id), team_id: "", role_id: "", reports_to: "", active: true, shared_login: false };
+  const empty = { username: "", name: "", pin: "", role: "user", icon: "U", color: "#C85A32", pages: pages.map((p) => p.id), team_id: "", role_id: "", reports_to: "", active: true, shared_login: false, can_view_cost: false };
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -39,7 +39,7 @@ export default function RoleManager() {
     setForm({
       username: u.username, name: u.name, pin: "", role: u.role, icon: u.icon, color: u.color,
       pages: u.pages ?? pages.map((p) => p.id), team_id: u.team_id || "", role_id: u.role_id || "",
-      reports_to: u.reports_to || "", active: u.active !== false, shared_login: !!u.shared_login,
+      reports_to: u.reports_to || "", active: u.active !== false, shared_login: !!u.shared_login, can_view_cost: !!u.can_view_cost,
     });
     setShow(true);
   };
@@ -57,7 +57,7 @@ export default function RoleManager() {
           name: form.name, role: form.role, icon: form.icon, color: form.color,
           pages: form.role === "admin" ? null : form.pages,
           team_id: form.team_id, role_id: form.role_id, reports_to: form.reports_to, active: form.active,
-          shared_login: form.shared_login,
+          shared_login: form.shared_login, can_view_cost: form.can_view_cost,
         };
         if (form.pin) payload.pin = form.pin;
         await api.put(`/auth/users/${editing.id}`, payload);
@@ -112,6 +112,9 @@ export default function RoleManager() {
                   )}
                   {u.active === false && (
                     <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--danger)]">Inactive</span>
+                  )}
+                  {u.can_view_cost && u.role !== "admin" && u.role !== "accountant" && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--moss)]">Landing price</span>
                   )}
                   {u.shared_login && (
                     <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--warn)]" title="A role login shared by several people — not listed as a staff member">Shared login</span>
@@ -199,6 +202,14 @@ export default function RoleManager() {
                 <label className="flex items-center gap-2 text-sm col-span-2">
                   <input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} className="accent-[var(--brand)]" />
                   Active
+                </label>
+              )}
+              {form.role !== "admin" && form.role !== "accountant" && (
+                <label className="flex items-start gap-2 text-sm col-span-2">
+                  <input type="checkbox" checked={!!form.can_view_cost} onChange={(e) => setForm({ ...form, can_view_cost: e.target.checked })} className="accent-[var(--brand)] mt-0.5" data-testid="user-can-view-cost" />
+                  <span>Can see landing price
+                    <span className="block text-xs text-[var(--ink-3)]">Landing (cost) price and margin on stock and quotations — e.g. the Furniture Manager. Admins and Accountants always see it.</span>
+                  </span>
                 </label>
               )}
               <label className="flex items-start gap-2 text-sm col-span-2">

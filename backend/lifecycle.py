@@ -170,6 +170,37 @@ def days_until(value: Any) -> Optional[int]:
     return (d - date.today()).days
 
 
+def clean_price_tiers(tiers) -> list:
+    """Quantity price breaks [{min_qty, price}]: price per unit (same basis
+    as the item's MRP) once the quantity reaches min_qty. Sorted, one per
+    quantity, only positive values; a break at 1 or below is the MRP itself
+    and is dropped."""
+    out = {}
+    for t in tiers or []:
+        if not isinstance(t, dict):
+            continue
+        q, p = money(t.get("min_qty")), money(t.get("price"))
+        if q > 1 and p > 0:
+            out[q] = round(p, 2)
+    return [{"min_qty": q, "price": out[q]} for q in sorted(out)]
+
+
+def tier_price(mrp, tiers, qty) -> float:
+    """Unit price for this quantity: the price of the highest break the
+    quantity reaches, else the MRP."""
+    price, q = money(mrp), money(qty)
+    for t in clean_price_tiers(tiers):
+        if q >= t["min_qty"]:
+            price = t["price"]
+    return round(price, 2)
+
+
+def pre_gst(price, gst_pct) -> float:
+    """MRP-basis prices include GST; documents add GST on their total."""
+    g = money(gst_pct)
+    return round(money(price) / (1 + g / 100), 2) if g > 0 else round(money(price), 2)
+
+
 def money(value: Any) -> float:
     """Coerce to a float, treating timestamp corruption as zero.
 
