@@ -157,6 +157,9 @@ class RemarkEntry(BaseModel):
 
 class LeadBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    # Who / which project this record is for (relations.py keeps these right).
+    customer_id: Optional[str] = ""
+    project_id: Optional[str] = ""
     date: str
     name: str
     phone: Optional[str] = ""
@@ -287,6 +290,9 @@ class Architect(ArchitectBase):
 # ------- Quotes -------
 class QuoteBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    # Who / which project this record is for (relations.py keeps these right).
+    customer_id: Optional[str] = ""
+    project_id: Optional[str] = ""
     quote_no: str
     date: str
     customer: str
@@ -361,6 +367,9 @@ class Quote(QuoteBase):
 # order's balance_due) -------
 class SaleBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    # Who / which project this record is for (relations.py keeps these right).
+    customer_id: Optional[str] = ""
+    project_id: Optional[str] = ""
     sale_no: str
     date: str
     customer: str
@@ -480,6 +489,9 @@ class InventoryItem(InventoryBase):
 # ------- Tasks -------
 class TaskBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    # Who / which project this record is for (relations.py keeps these right).
+    customer_id: Optional[str] = ""
+    project_id: Optional[str] = ""
     title: str
     priority: str = "Medium"  # Low / Medium / High / Urgent
     due_date: Optional[str] = ""
@@ -545,6 +557,7 @@ PO_COMMITTED_STATUSES = {"Issued", "Received"}
 
 class PurchaseOrderBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    customer_id: Optional[str] = ""   # from its project (relations.py)
     po_no: Optional[str] = ""        # PO-YYMM-NNN, assigned server-side
     date: str = ""
     vendor_id: str = ""
@@ -650,6 +663,7 @@ class ManufacturerPayment(BaseModel):
 
 class ManufacturerOrderBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    customer_id: Optional[str] = ""   # from its project (relations.py)
     order_code: Optional[str] = ""    # MO-YYMM-NNN, assigned server-side
     date: str = ""
     division: Optional[str] = ""      # Division.slug — "Furniture" / "MAP" / "D&W"
@@ -821,6 +835,7 @@ class Invoice(InvoiceBase):
 # ------- Meet Planner -------
 class MeetBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    customer_id: Optional[str] = ""   # from its project (relations.py)
     title: str
     date: str  # ISO date
     start_time: str = "10:00"
@@ -1651,6 +1666,9 @@ class DWOpening(DWOpeningBase):
 
 class PaymentBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    # Who / which project this record is for (relations.py keeps these right).
+    customer_id: Optional[str] = ""
+    project_id: Optional[str] = ""
     date: str
     division: str = "Furniture"
     direction: str = "In"               # In / Out / Refund
@@ -1782,6 +1800,9 @@ CALL_TYPES = ["Cold call", "Follow-up", "Inbound"]
 
 class CallBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    # Who / which project this record is for (relations.py keeps these right).
+    customer_id: Optional[str] = ""
+    project_id: Optional[str] = ""
     date: str = ""                        # YYYY-MM-DD; defaults to today server-side
     phone: str = ""
     name: Optional[str] = ""
@@ -1876,6 +1897,9 @@ class MoneyRequestTransfer(BaseModel):
 # ------- Customers (post-sale lifecycle record) -------
 class CustomerBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
+    code: Optional[str] = ""        # customer number, "C-0042" (server-assigned)
+    company: Optional[str] = ""
+    source: Optional[str] = ""
     name: str
     phone: str
     email: Optional[str] = ""

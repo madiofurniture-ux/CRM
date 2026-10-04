@@ -37,6 +37,7 @@ import api_hr
 import api_wallets
 import api_budget
 import operations as ops
+import relations as rel
 import lifecycle as lc
 import permissions as perm
 import notifications as notif
@@ -699,6 +700,14 @@ def _merge_visibility(query: dict, fragment: dict) -> dict:
     return {"$and": [query, fragment]}
 
 
+async def _link(collection: str, doc: dict, user: dict, existing: dict | None = None) -> dict:
+    """relations.link with its refusal turned into a 400 the screen can show."""
+    try:
+        return await rel.link(db, collection, doc, user, existing)
+    except rel.RelationError as e:
+        raise HTTPException(status_code=400, detail=str(e) or "These records don't belong together")
+
+
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
               after_write=None, module: str = None, owner_field: str = None, on_create=None,
               normalize=None, redact=None, mask=None, personal: bool = False,
@@ -799,6 +808,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
             doc["created_by_id"] = user.get("id", "")
         if normalize:
             await normalize(doc, None, user)
+        if collection in rel.LINKED:
+            await _link(collection, doc, user)
         await validate_stage(collection, doc, user)
         stamp_fy(doc, collection)
         stamp_closure(doc, collection)
@@ -845,6 +856,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
             payload.pop("created_by_id", None)
         if normalize:
             await normalize(payload, existing, user)
+        if collection in rel.LINKED:
+            await _link(collection, payload, user, existing)
         payload = validate_partial_update(create_model, existing, payload)
         await validate_stage(collection, payload, user, existing)
         stamp_fy(payload, collection)
@@ -6113,6 +6126,7 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
     doc = data.model_dump()
     doc["id"] = new_id()
     doc["created_at"] = doc["updated_at"] = now_iso()
+    await _link("projects", doc, user)
     await _check_project_integrity(doc, None, user)
     if not doc.get("milestones"):
         doc["milestones"] = ops.division_milestones(doc["division"])
@@ -6141,6 +6155,7 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
     existing = await db.projects.find_one(owned, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Project not found")
+    await _link("projects", patch, user, existing)
     await _check_project_integrity(patch, existing, user)
     if "division" in patch and patch["division"] != ops.normalize_division(existing.get("division")):
         # Carry recorded progress over to the new division's checklist.
@@ -6899,7 +6914,21 @@ from models import (
 make_crud(api, "quote-lines", "quote_lines", QuoteLineCreate, QuoteLine)
 make_crud(api, "dw-openings", "dw_openings", DWOpeningCreate, DWOpening)
 make_crud(api, "commission-rules", "commission_rules", CommissionRuleCreate, CommissionRule)
-make_crud(api, "customers", "customers", CustomerCreate, Customer, module="customers")
+async def normalize_customer(doc: dict, existing: dict | None, user: dict) -> None:
+    if existing is None:
+        await rel.assign_code(db, doc, user)
+    else:
+        doc.pop("code", None)                 # a customer number never changes
+
+
+async def _customer_written(doc: dict, user: dict) -> None:
+    # Live copies (leads, projects, meetings, calls…) follow the customer;
+    # issued quotations, orders and invoices keep what they said.
+    await rel.propagate_customer(db, doc, user)
+
+
+make_crud(api, "customers", "customers", CustomerCreate, Customer, module="customers",
+          normalize=normalize_customer, after_write=_customer_written, entity="customer")
 # No owner-name field exists on Customer (it's a post-sale lifecycle record,
 # not something one salesperson "owns") — "own"/"team" scope on the
 # Customers module currently behaves like "all". Documented limitation, not
@@ -6929,6 +6958,10 @@ async def record_activity(entity: str, entity_id: str, action: str, user: dict,
         doc = {"id": new_id(), "entity": entity, "entity_id": entity_id, "action": action,
                "before": before or {}, "after": after or {}, "note": note,
                "by_user": user.get("name", ""), "by_id": user.get("id", ""), "at": now_iso()}
+        # The customer / project it belongs to, so a timeline is one query.
+        src = {**(before or {}), **(after or {})}
+        doc["customer_id"] = entity_id if entity == "customer" else (src.get("customer_id") or "")
+        doc["project_id"] = entity_id if entity == "project" else (src.get("project_id") or "")
         tenancy.stamp(doc, "activities", user)
         await db.activities.insert_one(doc)
     except Exception as e:
@@ -7331,12 +7364,14 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         "division": quote.get("division", "Furniture"),
         "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id,
         "lead_id": quote.get("lead_id", ""),
+        "customer_id": quote.get("customer_id", ""), "project_id": quote.get("project_id", ""),
         "by_user": user.get("name", ""), "value": value, "paid": 0, "balance": value,
         # GST inside `value` (what the customer pays): P&L counts value − tax.
         "tax_total": _gst_in(quote, value),
         "status": "PENDING", "stage": "Confirmed", "remarks": "",
         "line_items": [{k: v for k, v in l.items() if k != "_id"} for l in lines],
     }
+    await _link("sales", sale, user)
     stamp_fy(sale, "sales")
     tenancy.stamp(sale, "sales", user)
     await db.sales.insert_one(dict(sale))
@@ -7350,10 +7385,20 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
     # than minting a second one for the same lead: fill in what only exists
     # once there's a sale, keep whatever site/engineer/milestone progress the
     # team already logged.
+    # A quotation made on a project's page belongs to that project: its
+    # order joins it instead of starting another.
     lead_id = quote.get("lead_id", "")
     adopted = await db.projects.find_one(
-        tenancy.scope({"lead_id": lead_id}, "projects", user), {"_id": 0}) if lead_id else None
+        tenancy.scope({"id": quote["project_id"]}, "projects", user), {"_id": 0}) if quote.get("project_id") else None
+    if adopted and adopted.get("sale_id") and adopted["sale_id"] != sale["id"]:
+        # The project already has its order (this is an additional one):
+        # link it, leave the project's own order and figures as they are.
+        return sale, adopted
+    if adopted is None and lead_id:
+        adopted = await db.projects.find_one(
+            tenancy.scope({"lead_id": lead_id, "sale_id": {"$in": [None, ""]}}, "projects", user), {"_id": 0})
     if adopted:
+        await _link_sale_project(sale, quote_id, adopted["id"], user)
         owned = tenancy.scope({"id": adopted["id"]}, "projects", user)
         patch = {"sale_id": sale["id"], "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id,
                  "value": value}
@@ -7380,15 +7425,25 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         "lead_id": lead_id, "customer_id": quote.get("customer_id", ""),
         "milestones": ops.division_milestones(quote.get("division")),
     }
+    await _link("projects", project, user)
     stamp_fy(project, "projects")
     tenancy.stamp(project, "projects", user)
     await db.projects.insert_one(dict(project))
     project.pop("_id", None)
+    await _link_sale_project(sale, quote_id, project["id"], user)
     await run_stage_automation("projects", None, project, user, created=True)
     project = await _ensure_project_artifacts(project, user)
     project = await _provision_project_wallet_and_incentives(project, quote, user)
 
     return sale, project
+
+
+async def _link_sale_project(sale: dict, quote_id: str, project_id: str, user: dict) -> None:
+    """The order and its quotation point at the project they became."""
+    sale["project_id"] = project_id
+    await db.sales.update_one(tenancy.scope({"id": sale["id"]}, "sales", user), {"$set": {"project_id": project_id}})
+    await db.quotes.update_one(tenancy.scope({"id": quote_id, "project_id": {"$in": [None, ""]}}, "quotes", user),
+                               {"$set": {"project_id": project_id}})
 
 
 def _gst_in(quote: dict, value: float) -> float:
@@ -7593,6 +7648,15 @@ async def _settle_sale_balance(sale: dict, user: dict) -> dict:
         # line for the same phone at once could each pass the find_one and
         # insert two customer rows. $setOnInsert only applies on the branch
         # that actually creates the doc, so a concurrent upsert can't double it.
+        cid = (out or sale).get("customer_id")
+        if cid and await db.customers.find_one(tenancy.scope({"id": cid}, "customers", user), {"_id": 1}):
+            # The order's own customer — not whoever else shares the number.
+            await db.customers.update_one(tenancy.scope({"id": cid}, "customers", user),
+                                          {"$set": {"stage": active}})
+            await notif.notify(db, user, "payment_cleared", to=phone,
+                                customer_name=(out or sale).get("customer", ""),
+                                ref_type="sale", ref_id=(out or sale).get("sale_no", ""))
+            return out or sale
         cust_owned = tenancy.scope({"phone": phone}, "customers", user)
         on_insert = {
             "id": new_id(), "created_at": now_iso(), "phone": phone,
@@ -7603,6 +7667,10 @@ async def _settle_sale_balance(sale: dict, user: dict) -> dict:
         tenancy.stamp(on_insert, "customers", user)
         await db.customers.update_one(
             cust_owned, {"$set": {"stage": active}, "$setOnInsert": on_insert}, upsert=True)
+        cust = await db.customers.find_one(cust_owned, {"_id": 0, "id": 1})
+        if cust:
+            await db.sales.update_one(tenancy.scope({"id": sale["id"], "customer_id": {"$in": [None, ""]}},
+                                                    "sales", user), {"$set": {"customer_id": cust["id"]}})
         await notif.notify(db, user, "payment_cleared", to=phone,
                             customer_name=(out or sale).get("customer", ""),
                             ref_type="sale", ref_id=(out or sale).get("sale_no", ""))
@@ -7619,6 +7687,7 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
     existing = await db.payments.find(
         tenancy.scope({}, "payments", user), {"payment_id": 1, "_id": 0}).to_list(5000)
     doc["payment_id"] = lc.next_payment_id(existing)
+    await _link("payments", doc, user)
     stamp_fy(doc, "payments")
     tenancy.stamp(doc, "payments", user)
     await db.payments.insert_one(doc)
@@ -7796,6 +7865,7 @@ async def create_order_payment(payload: PaymentCreate, user: dict = Depends(get_
     existing = await db.payments.find(
         tenancy.scope({}, "payments", user), {"payment_id": 1, "_id": 0}).to_list(5000)
     doc["payment_id"] = lc.next_payment_id(existing)
+    await _link("payments", doc, user)
     stamp_fy(doc, "payments")
     tenancy.stamp(doc, "payments", user)
     await db.payments.insert_one(doc)
@@ -8393,8 +8463,9 @@ async def visitor_to_lead(visitor_id: str, user: dict = Depends(get_current_user
         "assigned_to": visitor.get("attend_person", ""),
         "assigned_to_id": visitor.get("attend_person_id", ""),
         "value": visitor.get("ticket_value", 0),
-        "visitor_id": visitor_id,
+        "visitor_id": visitor_id, "customer_id": visitor.get("customer_id", ""),
     }
+    await _link("leads", lead, user)
     stamp_fy(lead, "leads")
     tenancy.stamp(lead, "leads", user)
     await db.leads.insert_one(dict(lead))
@@ -8425,6 +8496,7 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
         "reference": lead.get("source", ""), "division": (lead.get("division") or "Furniture"),
         "by_user": user.get("name", ""), "stage": "Quoted", "status": "Sent",
         "value": 0, "version": 1, "lead_id": lead_id,
+        "customer_id": lead.get("customer_id", ""), "project_id": lead.get("project_id", ""),
     }
     # The lead's requirement goes on the quote's timeline, not into remarks:
     # remarks are the quotation's terms and print on the customer's PDF.
@@ -8434,6 +8506,7 @@ async def lead_to_quote(lead_id: str, user: dict = Depends(get_current_user)):
     # Same defaults as a quote created on its own screen: the division's
     # terms and GST rate, and the validity date.
     await normalize_quote_template(quote, None, user)
+    await _link("quotes", quote, user)
     stamp_fy(quote, "quotes")
     tenancy.stamp(quote, "quotes", user)
     await db.quotes.insert_one(dict(quote))
@@ -8473,14 +8546,17 @@ async def start_project(lead_id: str, user: dict = Depends(get_current_user)):
         "division": (lead.get("division") or "Furniture"), "value": 0, "paid": 0,
         "stage": "Survey", "site_address": "", "assigned_engineer": "",
         "start_date": lc.today_iso(), "target_date": "", "remarks": "",
-        "quote_ref": "", "sale_id": "", "lead_id": lead_id,
+        "quote_ref": "", "sale_id": "", "lead_id": lead_id, "customer_id": lead.get("customer_id", ""),
         "milestones": ops.division_milestones(lead.get("division")),
     }
+    await _link("projects", project, user)
     stamp_fy(project, "projects")
     tenancy.stamp(project, "projects", user)
     await db.projects.insert_one(dict(project))
     project.pop("_id", None)
     await record_activity("project", project["id"], "convert", user, note=f"From lead {lead_id}")
+    await db.leads.update_one(tenancy.scope({"id": lead_id, "project_id": {"$in": [None, ""]}}, "leads", user),
+                              {"$set": {"project_id": project["id"]}})
     return project
 
 
@@ -8520,10 +8596,12 @@ async def survey_to_quote(survey_id: str, user: dict = Depends(get_current_user)
         "customer": survey.get("customer", ""), "phone": survey.get("phone", ""),
         "division": "D&W", "by_user": user.get("name", ""),
         "stage": "Quoted", "status": "Sent", "value": 0, "version": 1,
+        "customer_id": survey.get("customer_id", ""), "project_id": survey.get("project_id", ""),
         "log": [{"at": now_iso(), "by": user.get("name", ""), "by_id": user.get("id", ""), "kind": "note",
                  "text": f"From survey {survey.get('survey_id')} · {len(openings)} openings · {total_area} sqft"}],
     }
     await normalize_quote_template(quote, None, user)
+    await _link("quotes", quote, user)
     stamp_fy(quote, "quotes")
     tenancy.stamp(quote, "quotes", user)
     await db.quotes.insert_one(dict(quote))
@@ -9016,6 +9094,7 @@ async def _go_live_apply(named_files: list, user: dict, *, include_hr: bool, app
     made = await _projects_for_open_sales(user)
     if made:
         loaded["projects"] = made
+    links = await rel.backfill(db, user)
 
     office_applied = {}
     if apply_office and result.get("office"):
@@ -9029,7 +9108,7 @@ async def _go_live_apply(named_files: list, user: dict, *, include_hr: bool, app
     await _audit("go_live_load", user, f"Reset {reset_id}: archived {sum(archived.values())} records, "
                                       f"loaded {sum(loaded.values())} from {', '.join(result['files'])}")
     return {"reset_id": reset_id, "archived": archived, "loaded": loaded, "office": office_applied,
-            "floors": floors_note, "report": result["report"], "warnings": result["warnings"]}
+            "floors": floors_note, "links": links, "report": result["report"], "warnings": result["warnings"]}
 
 
 async def _go_live_floors(user: dict, inventory: list) -> dict:
@@ -9220,10 +9299,12 @@ async def _projects_for_open_sales(user: dict) -> int:
             "quote_id": sale.get("quote_id", ""), "sale_id": sale.get("id", ""), "lead_id": sale.get("lead_id", ""),
             "customer_id": sale.get("customer_id", ""), "milestones": ops.division_milestones(sale.get("division")),
         }
+        await _link("projects", project, user)
         stamp_fy(project, "projects")
         tenancy.stamp(project, "projects", user)
         await db.projects.insert_one(dict(project))
         project.pop("_id", None)
+        await _link_sale_project(sale, sale.get("quote_id", ""), project["id"], user)
         projects.append({"project_no": project["project_no"], "sale_id": project["sale_id"]})
         await _ensure_project_artifacts(project, user)
         made += 1
@@ -9480,6 +9561,37 @@ async def go_live_auto_cash_books():
     except Exception as e:  # never take the server down over this
         logger.exception("Go-live cash books failed: %s", e)
     await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key, "result": {"$exists": False}})
+    return None
+
+
+@api.post("/admin/relations/backfill")
+async def relations_backfill(user: dict = Depends(require_admin)):
+    """Link existing records to their customer and project (only empty links
+    are filled, so running it again changes nothing)."""
+    report = await rel.backfill(db, user)
+    await _audit("relations_backfill", user, f"Linked records: {report}")
+    return {"linked": report}
+
+
+async def go_live_auto_relations():
+    """Once per company at startup: existing records get customer_id /
+    project_id from their conversion chain or a unique phone match."""
+    run_key = "relations-1"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
+    if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    await db.go_live_picture_runs.insert_one(
+        tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
+    try:
+        report = await rel.backfill(db, system_user)
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
+                                                 {"$set": {"result": report}})
+        logger.info("Relations backfill for %s: %s", tid, report)
+        return report
+    except Exception as e:  # never take the server down over this
+        logger.exception("Relations backfill failed: %s", e)
+        await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key})
     return None
 
 
@@ -9828,6 +9940,7 @@ async def startup():
             await go_live_auto_sale_report()
             await go_live_auto_cash_books()
             await go_live_auto_sale_gst()
+            await go_live_auto_relations()
         asyncio.create_task(_auto())
 
 
