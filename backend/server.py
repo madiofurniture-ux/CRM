@@ -2693,7 +2693,7 @@ async def normalize_quote_template(doc: dict, existing: dict | None, user: dict)
     if existing is None and not doc.get("valid_until"):
         doc["valid_until"] = lc.quote_valid_until(doc.get("date"))
     if existing is None:
-        preset = quotation_templates.division_preset(tenancy.tenant_of(user), doc.get("division"))
+        preset = await _company_quote_preset(user, doc.get("division"))
         # A new quote starts with its division's standard terms and GST rate (both editable).
         if not doc.get("terms") and not str(doc.get("remarks") or "").strip() and preset.get("terms"):
             doc["terms"], doc["remarks"] = lc.quote_terms(list(preset["terms"]), None)
@@ -7337,6 +7337,27 @@ async def _quote_lines(quote_id: str, user: dict) -> list:
     return await db.quote_lines.find(
         tenancy.scope({"quote_id": quote_id}, "quote_lines", user), {"_id": 0}
     ).sort("created_at", 1).to_list(500)
+
+
+async def _company_quote_preset(user: dict, division: str) -> dict:
+    """division_preset plus, for a company without a hand-built preset in
+    quotation_templates.COMPANY_PRESETS, its own standard terms from the
+    business profile: the division's terms_and_conditions, else the
+    industry pack's default_terms (Admin → Business Setup)."""
+    tid = tenancy.tenant_of(user)
+    preset = quotation_templates.division_preset(tid, division)
+    if tid in quotation_templates.COMPANY_PRESETS or preset.get("terms"):
+        return preset
+    profile = await _get_business_profile(user)
+    div = next((d for d in profile.get("divisions") or []
+                if str(d.get("slug") or "").strip().lower() == str(division or "").strip().lower()), {})
+    text = div.get("terms_and_conditions") or profile.get("default_terms") or ""
+    terms = [t.strip() for t in str(text).splitlines() if t.strip()]
+    if terms:
+        preset["terms"] = terms
+    if div.get("name") and not preset.get("name"):
+        preset["name"] = div["name"]
+    return preset
 
 
 def _quote_preset(q: dict, user: dict) -> dict:

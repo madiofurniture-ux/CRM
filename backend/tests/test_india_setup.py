@@ -281,3 +281,22 @@ def test_analytics_accepts_the_tenants_division_and_rejects_unknown_ones():
             await server.company_pnl(start="2026-04-01", end="2026-10-01", division="MAP", user=ADMIN)
         assert e.value.status_code == 400
     run(go())
+
+
+def test_new_quote_starts_with_the_packs_terms():
+    async def go():
+        await server.db.tenants.insert_one({"id": "acme"})
+        await server.setup_apply_pack({"pack": "doors_windows"}, user=ADMIN)
+        doc = {"quote_no": "Q-1", "date": "2026-10-04", "customer": "Ravi", "division": "uPVC"}
+        await server.normalize_quote_template(doc, None, ADMIN)
+        assert doc["terms"][0].startswith("60% advance")
+        assert any("GST" in t for t in doc["terms"])
+        # a division's own terms win over the pack default
+        prof = await server.get_business_profile(user=ADMIN)
+        divs = prof["divisions"]
+        divs[0]["terms_and_conditions"] = "Full advance.\nNo returns."
+        await server.db.business_profiles.update_one({"tenant_id": "acme"}, {"$set": {"divisions": divs}})
+        doc2 = {"quote_no": "Q-2", "date": "2026-10-04", "customer": "Ravi", "division": "uPVC"}
+        await server.normalize_quote_template(doc2, None, ADMIN)
+        assert doc2["terms"] == ["Full advance.", "No returns."]
+    run(go())
