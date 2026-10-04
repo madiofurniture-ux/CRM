@@ -7,7 +7,7 @@ import {
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
   LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare, PhoneOutgoing,
-  AlarmClock, LifeBuoy, Workflow, Zap, Rocket,
+  AlarmClock, LifeBuoy, Workflow, Zap, Rocket, Globe,
 } from "lucide-react";
 
 // app: the switcher group · id: unique key · to: route · label/icon: display
@@ -72,6 +72,8 @@ export const NAV = [
   { app: "command", id: "record-chain", to: "/record-chain", label: "Record Chain", icon: TrendingUp },
   { app: "command", id: "audit-trail", to: "/audit", label: "Audit Trail", icon: AlertTriangle, adminOnly: true },
   { app: "command", id: "roles", to: "/admin/roles", label: "Role Manager", icon: Users, adminOnly: true },
+  // ownerOnly: the platform operator's own company only (tenant.is_platform_owner).
+  { app: "command", id: "platform", to: "/platform", label: "Customers", icon: Globe, adminOnly: true, ownerOnly: true },
   { app: "command", id: "setup", to: "/admin/setup", label: "Business Setup", icon: Rocket, adminOnly: true },
   { app: "command", id: "workflows", to: "/admin/workflows", label: "Workflows", icon: Workflow, adminOnly: true },
   { app: "command", id: "flows", to: "/admin/flows", label: "Flows", icon: Zap, adminOnly: true },

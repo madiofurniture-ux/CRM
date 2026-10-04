@@ -86,7 +86,11 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   (`backend/industry_packs.py`), the Indian company/GST profile and the go-live
   checklist (`/api/setup/*`); Indian rules (GSTIN checksum, states, amounts in
   words) in `backend/india.py` / `frontend/src/lib/india.js`. Lead divisions and
-  sources come from the business profile. See `docs/BUSINESS_SETUP.md`.
+  sources come from the business profile. Platform → Customers (`/platform`,
+  owner tenant only) onboards companies; plans, trials, seats and suspension in
+  `backend/plans.py`, enforced in `auth.get_current_user`. Division rollups
+  (reports, analytics, P&L) use the tenant's roster via `lc.use_divisions`.
+  See `docs/BUSINESS_SETUP.md`.
 - Furniture quotes can print as a picture price list (`quote.print_layout =
   "pricelist"`, line `mrp` before GST beside the offer rate).
 

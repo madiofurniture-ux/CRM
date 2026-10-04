@@ -29,7 +29,8 @@ CORE_MODULES = [
     "record-chain",
 ]
 BUNDLES: dict[str, dict] = {
-    "showroom": {"label": "Showroom & walk-ins", "modules": ["visitors", "architects"]},
+    "showroom": {"label": "Showroom & walk-ins", "modules": ["visitors"]},
+    "partners": {"label": "Architects & referral partners", "modules": ["architects"]},
     "inventory": {"label": "Stock & purchasing", "modules": ["inventory", "stock-ledger", "inv-analytics", "purchase-orders"]},
     "projects": {"label": "Projects & site work", "modules": ["projects", "project-pnl", "dwsurvey"]},
     "vendors": {"label": "Vendor / manufacturer orders", "modules": ["manufacturer-orders", "purchase-orders"]},
@@ -79,7 +80,7 @@ PACKS: dict[str, dict] = {
             ("lead", "Property type", "select", ["Apartment", "Villa", "Independent House", "Office", "Commercial"]),
             ("lead", "Possession date", "date", []),
         ],
-        "bundles": ["showroom", "inventory", "projects", "vendors", "quote_builder", "incentives", "petty_cash"],
+        "bundles": ["partners", "showroom", "inventory", "projects", "vendors", "quote_builder", "incentives", "petty_cash"],
         "terms": "50% advance with order, balance before dispatch.\n" + _GST_TERMS,
     },
     "interior_design": {
@@ -102,7 +103,7 @@ PACKS: dict[str, dict] = {
             ("lead", "Budget range", "select", ["Under ₹5L", "₹5–15L", "₹15–40L", "Above ₹40L"]),
             ("project", "Design fee (₹)", "number", []),
         ],
-        "bundles": ["projects", "vendors", "quote_builder", "field_team", "petty_cash"],
+        "bundles": ["partners", "projects", "vendors", "quote_builder", "field_team", "petty_cash"],
         "terms": "Design fee payable before drawings are released.\n"
                  "Execution billed in stages: 40% / 40% / 20% at handover.\n" + _GST_TERMS,
     },
@@ -124,7 +125,7 @@ PACKS: dict[str, dict] = {
             ("lead", "Customer type", "select", ["Home owner", "Contractor", "Builder", "Institution"]),
             ("customer", "Credit days", "number", []),
         ],
-        "bundles": ["showroom", "inventory", "projects", "incentives", "petty_cash"],
+        "bundles": ["partners", "showroom", "inventory", "projects", "incentives", "petty_cash"],
         "terms": "Material once sold will not be taken back.\nShade variation between batches is possible.\n" + _GST_TERMS,
     },
     "doors_windows": {
@@ -146,7 +147,7 @@ PACKS: dict[str, dict] = {
             ("lead", "Profile", "select", ["uPVC", "Aluminium", "System aluminium", "Steel", "Wood"]),
             ("lead", "Glass", "select", ["5mm clear", "Toughened", "DGU", "Laminated", "Reflective"]),
         ],
-        "bundles": ["showroom", "inventory", "projects", "vendors", "petty_cash"],
+        "bundles": ["partners", "showroom", "inventory", "projects", "vendors", "petty_cash"],
         "terms": "60% advance with order, 30% before dispatch, 10% after installation.\n" + _GST_TERMS,
     },
     "manufacturing_b2b": {

@@ -54,6 +54,7 @@ import flows as flowlib
 import analytics as an
 import expenses as ex
 import finance_lineage as fl
+import plans
 import india
 import industry_packs as packs
 from models import TallyConnectionUpdate
@@ -272,6 +273,9 @@ async def login(payload: LoginRequest, request: Request):
     if not verify_pin(payload.pin, user["pin_hash"]):
         _login_fail(key, username)
         raise HTTPException(status_code=401, detail="Invalid username or PIN")
+    tenant = await db.tenants.find_one({"id": user.get("tenant_id") or ""}, {"_id": 0}) if user.get("tenant_id") else None
+    if tenant and not plans.state(tenant)["can_read"]:
+        raise HTTPException(status_code=403, detail=plans.state(tenant)["reason"])
     _login_fails.pop(key, None)           # a good PIN clears both counters
     _login_fails_by_user.pop(username, None)
     token = create_token(user["id"], user["username"], user["role"])
@@ -335,6 +339,13 @@ async def create_user(payload: UserCreate, user: dict = Depends(require_admin)):
         raise HTTPException(status_code=400, detail="Username already exists")
     if not payload.pin or len(payload.pin) < 4:
         raise HTTPException(status_code=400, detail="PIN must be at least 4 digits")
+    tid = tenancy.tenant_of(user) or DEFAULT_TENANT
+    left = plans.seats_left(await db.tenants.find_one({"id": tid}, {"_id": 0}),
+                            await db.users.count_documents({"tenant_id": tid}))
+    if left == 0:
+        raise HTTPException(status_code=402, detail={
+            "message": "Your plan's user limit is reached. Upgrade the plan or remove a user first.",
+            "code": "seat_limit"})
     if payload.reports_to and not await db.users.find_one(
             {"id": payload.reports_to, "tenant_id": tenancy.tenant_of(user) or "__no_tenant__"}):
         raise HTTPException(status_code=400, detail="That manager isn't a user in your company.")
@@ -917,6 +928,8 @@ ALL_MODULE_IDS = [
     "audit-trail", "data-health", "discussions", "record-chain",
     # Business Setup wizard (industry packs, GST profile) — industry_packs.py.
     "setup",
+    # Platform console (owner tenant only, server-enforced) — plans.py.
+    "platform",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -937,7 +950,7 @@ RETIRED_MODULE_IDS = {"requirements", "configurator"}
 # Every module id added after seen_modules tracking began goes in this tuple.
 MODULES_ADDED_AFTER_TRACKING = ("calls", "analytics", "expenses", "pnl", "flows", "go-live",
                                 "audit-trail", "data-health", "discussions", "record-chain",
-                                "setup")
+                                "setup", "platform")
 MODULES_BEFORE_SEEN_TRACKING = [m for m in ALL_MODULE_IDS if m not in MODULES_ADDED_AFTER_TRACKING]
 
 
@@ -1010,6 +1023,8 @@ async def tenant_me(user: dict = Depends(get_current_user)):
         t.setdefault(k, v)
     t["enabled_modules"] = effective_enabled_modules(t)
     t.pop("seen_modules", None)
+    t["subscription"] = plans.state(t)
+    t["is_platform_owner"] = tid == DEFAULT_TENANT
     return t
 
 
@@ -1049,8 +1064,66 @@ async def tenants_list(user: dict = Depends(require_admin)):
         t["users"] = await db.users.count_documents({"tenant_id": t["id"]})
         t["records"] = sum([await db[c].count_documents({"tenant_id": t["id"]})
                             for c in ("leads", "quotes", "sales", "inventory")])
+        t["subscription"] = plans.state(t)
+        t.pop("seen_modules", None)
+        t.pop("enabled_modules", None)
         out.append(t)
     return out
+
+
+@api.get("/platform/plans")
+async def platform_plans(user: dict = Depends(require_admin)):
+    if tenancy.tenant_of(user) != DEFAULT_TENANT:
+        raise HTTPException(status_code=403, detail="Not permitted")
+    return [{"id": k, **v} for k, v in plans.PLANS.items() if k != "owner"]
+
+
+@api.patch("/platform/tenants/{tid}")
+async def platform_update_tenant(tid: str, payload: dict, user: dict = Depends(require_admin)):
+    """The operator changes a customer's plan, status, trial end or seat cap."""
+    if tenancy.tenant_of(user) != DEFAULT_TENANT:
+        raise HTTPException(status_code=403, detail="Not permitted")
+    if tid == DEFAULT_TENANT:
+        raise HTTPException(status_code=400, detail="The platform owner's own account can't be changed here")
+    if not await db.tenants.find_one({"id": tid}):
+        raise HTTPException(status_code=404, detail="No such company")
+    update: dict = {}
+    if "plan" in payload:
+        plan = str(payload["plan"] or "")
+        if plan not in plans.PLANS or plan == "owner":
+            raise HTTPException(status_code=400, detail=f"Unknown plan '{plan}'")
+        update["plan"] = plan
+        if plan == "trial" and "trial_ends_at" not in payload:
+            update["trial_ends_at"] = plans.trial_end()
+    if "status" in payload:
+        if payload["status"] not in plans.STATUSES:
+            raise HTTPException(status_code=400, detail="status must be active or suspended")
+        update["status"] = payload["status"]
+    if "trial_ends_at" in payload:
+        v = str(payload["trial_ends_at"] or "")
+        if v and not lc.parse_date(v):
+            raise HTTPException(status_code=400, detail="trial_ends_at must be a date")
+        update["trial_ends_at"] = v[:10]
+    if "max_users" in payload:
+        v = payload["max_users"]
+        if v in (None, ""):
+            update["max_users"] = None
+        else:
+            try:
+                update["max_users"] = max(1, int(v))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="max_users must be a whole number")
+    for k in ("notes", "contact_name", "contact_phone", "city"):
+        if k in payload:
+            update[k] = str(payload[k] or "")[:500]
+    if not update:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    update["updated_at"] = now_iso()
+    await db.tenants.update_one({"id": tid}, {"$set": update})
+    await _audit("tenant_plan_changed", user, f"{tid}: {update}")
+    t = await db.tenants.find_one({"id": tid}, {"_id": 0, "seen_modules": 0, "enabled_modules": 0})
+    t["subscription"] = plans.state(t)
+    return t
 
 
 @api.post("/tenants")
@@ -1081,10 +1154,16 @@ async def tenant_create(payload: dict, user: dict = Depends(require_admin)):
         import secrets as _s
         pin = f"{_s.randbelow(9000) + 1000}"
 
+    plan = str(payload.get("plan") or "trial")
+    if plan not in plans.PLANS or plan == "owner":
+        raise HTTPException(status_code=400, detail=f"Unknown plan '{plan}'")
     await db.tenants.insert_one({
-        "id": tid, "slug": tid, "name": name,
-        "plan": str(payload.get("plan") or "trial"),
-        "status": "active", "created_at": now_iso(),
+        "id": tid, "slug": tid, "name": name, "display_name": name,
+        "plan": plan, "status": "active", "created_at": now_iso(),
+        "trial_ends_at": plans.trial_end() if plan == "trial" else "",
+        "contact_name": str(payload.get("contact_name") or "").strip(),
+        "contact_phone": str(payload.get("contact_phone") or "").strip(),
+        "city": str(payload.get("city") or "").strip(),
     })
     await db.users.insert_one({
         "id": new_id(), "username": admin_user, "name": "Admin",

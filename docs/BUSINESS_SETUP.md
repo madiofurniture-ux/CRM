@@ -53,3 +53,32 @@ codes, so "TS", "36" and "Telangana" count as the same state.
 
 `Leads.jsx` reads divisions and lead sources from `TenantConfigContext`
 (the business profile), not hardcoded MADIO lists.
+
+## Plans and the platform console — `backend/plans.py`, `/platform`
+
+The platform owner (`DEFAULT_TENANT`) sells the CRM to other companies from
+Platform → Customers (`frontend/src/pages/Platform.jsx`):
+
+- **New customer** — `POST /api/tenants` with `name`, `industry` (pack),
+  `plan`, admin username/PIN (auto if blank), contact and city. A trial gets
+  `trial_ends_at` = today + 14 days. The handover text (login URL, username,
+  PIN) can be copied or shared on WhatsApp; the PIN is shown once.
+- **Plan, status, trial, seats** — `PATCH /api/platform/tenants/{id}`
+  (`plan`, `status` active/suspended, `trial_ends_at`, `max_users`, notes).
+  The owner's own tenant can't be changed. `GET /api/platform/plans`.
+
+Plans: trial (5 users, 14 days), starter (5), growth (25), business (100),
+enterprise (unlimited). Prices are not stored; `max_users` overrides a plan's
+seat limit per company.
+
+Enforcement, all server-side:
+
+- `auth.get_current_user` → `enforce_subscription`: a **suspended** company
+  gets 403 on every request (and at login); an **ended trial** is read-only —
+  GETs work, writes get 402 `{code: "trial_ended"}`.
+- `create_user` refuses a user beyond the seat limit (402 `seat_limit`).
+- `/tenants/me` returns `subscription` and `is_platform_owner`;
+  `SubscriptionBanner` shows the last 7 trial days and the read-only state.
+
+A tenant record without `plan` (older installs) counts as an active owner
+account, so nothing existing changes.

@@ -41,12 +41,12 @@ const SECTIONS = [
   { label: "Delivery", ids: ["projects", "dwsurvey", "service", "outstanding"] },
   { label: "Inventory", ids: ["inventory", "stock-ledger", "purchase-orders", "manufacturer-orders", "inv-analytics"] },
   { label: "Finance", ids: ["expenses", "cashbook", "pnl", "project-pnl", "finance-payments", "invoice-gen", "incentives", "petty"] },
-  { label: "Admin", ids: ["setup", "data-centre", "discussions", "audit-trail", "workflows", "flows", "go-live"] },
+  { label: "Admin", ids: ["platform", "setup", "data-centre", "discussions", "audit-trail", "workflows", "flows", "go-live"] },
 ];
 
 export default function LightSidebar({ collapsed = false, onNavigate }) {
   const location = useLocation();
-  const { user, canAccess } = useAuth();
+  const { user, tenant, canAccess } = useAuth();
   const byId = Object.fromEntries(NAV.map((n) => [n.id, n]));
 
   const isVisible = (id) => {
@@ -54,6 +54,7 @@ export default function LightSidebar({ collapsed = false, onNavigate }) {
     if (!item) return false;
     if (id in ITEM_FLAG && !ITEM_FLAG[id]) return false;
     if (item.adminOnly && user?.role !== "admin") return false;
+    if (item.ownerOnly && !tenant?.is_platform_owner) return false;
     return canAccess(item.perm || item.id);
   };
 

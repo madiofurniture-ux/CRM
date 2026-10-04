@@ -77,7 +77,29 @@ async def get_current_user(request: Request) -> dict:
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "pin_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    await enforce_subscription(db, user, request.method)
     return user
+
+
+_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+async def enforce_subscription(db, user: dict, method: str = "GET") -> None:
+    """The company's plan decides what this request may do (plans.py): a
+    suspended company is refused, an ended trial is read-only."""
+    import plans
+    tid = str(user.get("tenant_id") or "")
+    if not tid:
+        return
+    tenant = await db.tenants.find_one({"id": tid}, {"_id": 0, "plan": 1, "status": 1,
+                                                       "trial_ends_at": 1, "max_users": 1})
+    if not tenant:
+        return
+    st = plans.state(tenant)
+    if not st["can_read"]:
+        raise HTTPException(status_code=403, detail={"message": st["reason"], "code": "tenant_suspended"})
+    if not st["can_write"] and method.upper() not in _READ_METHODS:
+        raise HTTPException(status_code=402, detail={"message": st["reason"], "code": "trial_ended"})
 
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import LightSidebar from "@/components/light/LightSidebar";
 import LightTopbar from "@/components/light/LightTopbar";
+import SubscriptionBanner from "@/components/SubscriptionBanner";
 
 /** The light theme's app shell: spacious left sidebar (desktop) that
  * collapses to icon-only on tablet and to an overlay drawer on mobile, plus
@@ -40,6 +41,7 @@ export default function LightAppShell({ children }) {
             else setCollapsed((v) => !v);
           }}
         />
+        <SubscriptionBanner />
         <main id="main-content" tabIndex={-1} className="flex-1 min-w-0 outline-none overflow-x-hidden">
           {children}
         </main>
