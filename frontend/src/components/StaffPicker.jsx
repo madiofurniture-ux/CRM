@@ -25,9 +25,11 @@ export default function StaffPicker({ value = "", onChange, placeholder = "Pick 
   useEffect(() => { let live = true; loadStaff().then((s) => live && setStaff(s)); return () => { live = false; }; }, []);
 
   const options = useMemo(() => {
-    const opts = staff.filter((u) => u.name).map((u) => ({ id: u.name, label: u.name, user: u }))
+    // People only: shared role logins and deactivated staff aren't offered.
+    const opts = staff.filter((u) => u.name && !u.shared_login && u.active !== false)
+      .map((u) => ({ id: u.name, label: u.name, user: u }))
       .sort((a, b) => a.label.localeCompare(b.label));
-    if (value && !opts.some((o) => o.id === value)) opts.unshift({ id: value, label: value, sub: "not a current user" });
+    if (value && !opts.some((o) => o.id === value)) opts.unshift({ id: value, label: value, sub: "not a current staff member" });
     return opts;
   }, [staff, value]);
 

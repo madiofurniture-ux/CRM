@@ -14,9 +14,11 @@ import lifecycle as lc
 DATA_DIR = Path(__file__).parent / "data"
 
 
-# ── Logins are ROLES, not people ──────────────────────────────────────────
-# Staff share a role login, so someone joining or leaving never means editing
-# users. Names appear on records (via "attend person" / owner fields), not here.
+# ── Shared role logins ────────────────────────────────────────────────────
+# These accounts are created as SHARED logins (`shared_login: True`): they
+# give a role access but are not a person, so staff pickers ("Handled by",
+# "Assigned to") leave them out. Each staff member gets their own named login
+# in Role Manager; an admin retires the shared ones once everyone has theirs.
 #
 # PINs are NEVER hardcoded — this file is in a public repo, and a committed PIN
 # is the same as no PIN at all. Supply them at deploy time:
@@ -131,6 +133,9 @@ async def seed_users(db):
     for u in SEED_USERS:
         existing = await db.users.find_one({"username": u["username"]})
         if existing:
+            # Mark the seeded role logins as shared (once; an admin can untick it).
+            await db.users.update_one({"username": u["username"], "shared_login": {"$exists": False}},
+                                      {"$set": {"shared_login": True}})
             if u["pages"] is not None:
                 await db.users.update_one({"username": u["username"]}, {"$addToSet": {"pages": {"$each": ["projects", "attendance"]}}})
             continue
@@ -143,6 +148,7 @@ async def seed_users(db):
             "icon": u["icon"],
             "color": u["color"],
             "pages": u["pages"],
+            "shared_login": True,
             "created_at": now_iso(),
         }
         await db.users.insert_one(doc)

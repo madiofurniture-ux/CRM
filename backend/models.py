@@ -42,6 +42,7 @@ class UserBase(BaseModel):
     phone: Optional[str] = ""
     email: Optional[str] = ""
     active: bool = True
+    shared_login: bool = False   # a role login shared by several people, not a person (left out of staff pickers)
     # --- Payroll (all optional with defaults: every account that existed
     # before this feature reads back as an unpaid 'monthly' record with a zero
     # rate, which produces a zero payout rather than a crash or a guess.) ---
@@ -75,6 +76,7 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     active: Optional[bool] = None
+    shared_login: Optional[bool] = None
     division: Optional[str] = None
     pay_model: Optional[str] = None
     base_pay_rate: Optional[float] = None
@@ -398,10 +400,18 @@ class Sale(SaleBase):
 
 
 # ------- Vendors -------
+VENDOR_TYPES = ("Supplier", "Applicator", "Manufacturer")
+
+
 class VendorBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
     name: str
     code: Optional[str] = ""  # VEN-NNN, assigned server-side (see lifecycle.next_vendor_code)
+    vendor_type: Optional[str] = "Supplier"   # Supplier / Applicator (MAP painting crews) / Manufacturer
+    division: Optional[str] = ""              # "" = any division
+    phone: Optional[str] = ""
+    contact_person: Optional[str] = ""
+    active: bool = True
 
 
 class VendorCreate(VendorBase):
@@ -1422,6 +1432,12 @@ class ProjectBase(BaseModel):
     # {estimated: {Material: n, ...}, actual: {...}} — written only through
     # PUT /projects/{id}/costing so categories/negatives are validated.
     costing: Optional[dict] = None
+    # Who does the work: the Applicator on a MAP project, the Supplier
+    # otherwise — a vendors row (vendor_type Applicator / Supplier).
+    partner_id: Optional[str] = ""
+    partner_code: Optional[str] = ""
+    partner_name: Optional[str] = ""
+    partner_role: Optional[str] = ""      # "Applicator" (MAP) / "Supplier"
 
 
 class ProjectCreate(ProjectBase):
@@ -1455,6 +1471,7 @@ class ProjectUpdate(BaseModel):
     estimated_value: Optional[float] = None
     completion_date: Optional[str] = None
     next_payment_due: Optional[str] = None
+    partner_id: Optional[str] = None
 
 
 class ProjectStageUpdate(BaseModel):

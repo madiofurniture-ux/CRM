@@ -58,6 +58,7 @@ import finance_lineage as fl
 from models import TallyConnectionUpdate
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
+    VENDOR_TYPES,
     new_id, now_iso,
     LoginRequest, LoginResponse, UserCreate, UserUpdate, UserPublic,
     VisitorCreate, Visitor,
@@ -325,7 +326,7 @@ async def users_directory(user: dict = Depends(get_current_user)):
     tid = tenancy.tenant_of(user) or "__no_tenant__"
     return await db.users.find(
         {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1, "team_id": 1, "icon": 1, "color": 1,
-                             "reports_to": 1}).to_list(200)
+                             "reports_to": 1, "active": 1, "shared_login": 1}).to_list(500)
 
 
 @api.post("/auth/users")
@@ -418,7 +419,8 @@ async def list_staff(user: dict = Depends(get_current_user)):
     """
     tid = tenancy.tenant_of(user) or "__no_tenant__"
     users = await db.users.find(
-        {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1, "username": 1, "icon": 1, "color": 1}
+        {"tenant_id": tid}, {"_id": 0, "id": 1, "name": 1, "username": 1, "icon": 1, "color": 1,
+                             "active": 1, "shared_login": 1}
     ).sort("name", 1).to_list(500)
     return users
 
@@ -2015,8 +2017,8 @@ def redact_vendor(item: dict, user: dict) -> dict:
     """Vendor list/create/update responses — code always shown, name only to
     admin/accountant. This is the only place a vendor's name is dropped from a
     /vendors response; inventory's own redaction is separate (see below)."""
-    if _can_see_vendor_names(user):
-        return item
+    if _can_see_vendor_names(user) or item.get("vendor_type") == "Applicator":
+        return item                       # applicators work on site with the team: their name is shown
     item = dict(item)
     item.pop("name", None)
     return item
@@ -2081,6 +2083,11 @@ def redact_inventory(item: dict, user: dict) -> dict:
 
 
 async def normalize_vendor(doc: dict, existing: dict | None, user: dict) -> None:
+    if "vendor_type" in doc or existing is None:
+        vt = str(doc.get("vendor_type") or "Supplier").strip().title()
+        if vt not in VENDOR_TYPES:
+            raise HTTPException(status_code=400, detail=f"Vendor type must be one of {', '.join(VENDOR_TYPES)}")
+        doc["vendor_type"] = vt
     if existing is None and not str(doc.get("code") or "").strip():
         current = await db.vendors.find(
             tenancy.scope({}, "vendors", user), {"code": 1, "_id": 0}).to_list(5000)
@@ -6131,7 +6138,8 @@ async def get_projects(user=Depends(get_current_user)):
     # {"_id": 0} is essential: without it Mongo's ObjectId reaches the JSON
     # encoder and the whole page 500s with "Unable to serialize ObjectId".
     q = await fy_query("projects", user=user)
-    return await db.projects.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    rows = await db.projects.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [redact_project_partner(r, user) for r in rows]
 
 
 @api.post("/projects", response_model=dict)
@@ -6142,6 +6150,7 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
     doc["created_at"] = doc["updated_at"] = now_iso()
     await _link("projects", doc, user)
     await _check_project_integrity(doc, None, user)
+    await _resolve_partner(doc, None, user)
     if not doc.get("milestones"):
         doc["milestones"] = ops.division_milestones(doc["division"])
     if not doc.get("project_no"):
@@ -6155,7 +6164,7 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
     doc.pop("_id", None)
     await record_activity("project", doc["id"], "create", user, after=doc)
     await run_stage_automation("projects", None, doc, user, created=True)
-    return doc
+    return redact_project_partner(doc, user)
 
 
 @api.put("/projects/{project_id}", response_model=dict)
@@ -6171,6 +6180,7 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
         raise HTTPException(404, "Project not found")
     await _link("projects", patch, user, existing)
     await _check_project_integrity(patch, existing, user)
+    await _resolve_partner(patch, existing, user)
     if "division" in patch and patch["division"] != ops.normalize_division(existing.get("division")):
         # Carry recorded progress over to the new division's checklist.
         patch["milestones"] = ops.merge_milestones(existing.get("milestones"), patch["division"])
@@ -6187,7 +6197,7 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
         await record_activity("project", project_id, "update", user,
                               before={k: existing.get(k) for k in changed if k != "milestones"},
                               after={k: patch[k] for k in changed if k != "milestones"})
-    return item
+    return redact_project_partner(item, user)
 
 
 async def _check_project_integrity(doc: dict, existing: dict | None, user: dict) -> None:
@@ -6314,6 +6324,40 @@ async def _project_received(project: dict, user: dict) -> float:
         amt = lc.money(p.get("amount"))
         total += -amt if str(p.get("direction") or "In") in ("Refund", "Out") else amt
     return round(total, 2)
+
+
+def partner_role(division) -> str:
+    """MAP projects are painted by an Applicator; the rest are supplied."""
+    return "Applicator" if ops.normalize_division(division) == "MAP" else "Supplier"
+
+
+async def _resolve_partner(doc: dict, existing: dict | None, user: dict) -> None:
+    """Fill a project's partner code / name / role from its vendors row."""
+    division = doc.get("division") or (existing or {}).get("division")
+    if "partner_id" not in doc:
+        if "division" in doc and (existing or {}).get("partner_id"):
+            doc["partner_role"] = partner_role(division)
+        return
+    pid = str(doc.get("partner_id") or "").strip()
+    if not pid:
+        doc.update({"partner_id": "", "partner_code": "", "partner_name": "", "partner_role": ""})
+        return
+    v = await db.vendors.find_one(tenancy.scope({"id": pid}, "vendors", user), {"_id": 0})
+    if not v:
+        raise HTTPException(status_code=400, detail="That applicator / supplier doesn't exist")
+    doc.update({"partner_id": pid, "partner_code": v.get("code", ""), "partner_name": v.get("name", ""),
+                "partner_role": partner_role(division)})
+
+
+def redact_project_partner(item: dict, user: dict) -> dict:
+    """A supplier's name follows the vendor-name rule (admin / accounting
+    only); an applicator's is shown to everyone."""
+    if not item or not item.get("partner_name") or item.get("partner_role") == "Applicator" \
+            or _can_see_vendor_names(user):
+        return item
+    item = dict(item)
+    item["partner_name"] = ""
+    return item
 
 
 def _project_workflow_view(project: dict) -> dict:
@@ -6958,7 +7002,7 @@ async def project_context(project_id: str, user: dict = Depends(get_current_user
                                user)
     totals = _money_totals(records.get("sales", []), records.get("payments", []), [project])
     totals.update({k: len(v) for k, v in records.items()})
-    return {"project": project, "customer": customer, "records": records, "totals": totals,
+    return {"project": redact_project_partner(project, user), "customer": customer, "records": records, "totals": totals,
             "workflow": _project_workflow_view(project),
             "timeline": _with_record_events(timeline, {**records, "projects": [project]})}
 

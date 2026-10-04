@@ -83,6 +83,12 @@ export default function ProjectPage() {
                   )}
                 </div>
                 {p.site_address && <div className="text-sm inline-flex items-center gap-1.5"><MapPin size={13} /> {p.site_address}</div>}
+                <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm" data-testid="project-people">
+                  {p.assigned_engineer && <span><span className="text-[var(--color-text-muted)]">Engineer:</span> {p.assigned_engineer}</span>}
+                  {p.project_manager && <span><span className="text-[var(--color-text-muted)]">Manager:</span> {p.project_manager}</span>}
+                  <span><span className="text-[var(--color-text-muted)]">{p.partner_role || (String(p.division).toUpperCase() === "MAP" ? "Applicator" : "Supplier")}:</span>{" "}
+                    {p.partner_name || p.partner_code || <span className="text-[var(--color-warning)]">not set</span>}</span>
+                </div>
                 <div className="rounded-lg bg-[var(--color-surface-muted)] p-3 text-sm" data-testid="project-customer">
                   {c ? (
                     <div className="flex flex-wrap items-center justify-between gap-2">

@@ -5,6 +5,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 import LocationsManager from "@/components/LocationsManager";
 import DivisionsManager from "@/components/DivisionsManager";
+import VendorsManager from "@/components/VendorsManager";
 
 // Single home for tenant-wide reference lists that get reused across
 // screens instead of each screen managing its own copy — Locations
@@ -36,6 +37,7 @@ export default function MasterData() {
           ? <div className="text-sm text-[var(--ink-3)]">Loading…</div>
           : <LocationsManager floors={floors} onChange={setFloors} />}
         <DivisionsManager divisions={divisions} onChange={setDivisions} onSaved={reloadTenantConfig} />
+        <VendorsManager />
       </div>
     </>
   );

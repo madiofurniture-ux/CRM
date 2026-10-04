@@ -25,6 +25,7 @@ import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 import ColumnFilters from "@/components/ColumnFilters";
 import useColumnFilters from "@/hooks/useColumnFilters";
 import StaffPicker from "@/components/StaffPicker";
+import PartnerPicker, { partnerRole } from "@/components/PartnerPicker";
 
 const COLUMNS = [
   { key: "project_no", label: "Project #", type: "text" },
@@ -39,6 +40,7 @@ const COLUMNS = [
   { key: "start_date", label: "Start", type: "date" },
   { key: "target_date", label: "Target", type: "date" },
   { key: "value", label: "Value", type: "number" },
+  { key: "partner", label: "Applicator / Supplier", type: "select", get: (r) => r.partner_name || r.partner_code || "" },
   { key: "linked", label: "Customer link", type: "select", get: (r) => (r.customer_id ? "Linked" : "Not linked"), options: ["Linked", "Not linked"] },
 ];
 
@@ -88,6 +90,7 @@ export default function Projects() {
     project_no: `PRJ-${Math.floor(1000 + Math.random() * 9000)}`,
     customer: "",
     customer_id: "",
+    partner_id: "",
     phone: "",
     division: "Furniture",
     value: 0,
@@ -423,6 +426,12 @@ export default function Projects() {
                         <span>Lead/Engineer: <strong>{p.assigned_engineer}</strong></span>
                       </div>
                     )}
+                    {(p.partner_name || p.partner_code) && (
+                      <div className="flex items-center gap-1.5 text-[11px]" data-testid={`project-partner-${p.id}`}>
+                        <UserCheck size={12} className="text-[var(--brand)] shrink-0" />
+                        <span>{p.partner_role || partnerRole(p.division)}: <strong>{p.partner_name || p.partner_code}</strong></span>
+                      </div>
+                    )}
                     {p.remarks && (
                       <div className="text-[11px] text-[var(--ink-3)] italic pt-1 border-t border-[var(--border-light)]">
                         "{p.remarks}"
@@ -580,6 +589,10 @@ export default function Projects() {
                 <div>
                   <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Assigned Lead/Engineer</label>
                   <StaffPicker value={form.assigned_engineer} onChange={(name) => setForm((f) => ({ ...f, assigned_engineer: name }))} testId="project-engineer" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">{partnerRole(form.division)}</label>
+                  <PartnerPicker division={form.division} value={form.partner_id || ""} onChange={(id) => setForm((f) => ({ ...f, partner_id: id }))} testId="project-partner" />
                 </div>
               </div>
 

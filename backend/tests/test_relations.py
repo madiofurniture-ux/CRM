@@ -320,3 +320,36 @@ def test_context_money_counts_order_paid_and_timeline_has_loaded_records():
         notes = [t.get("note", "") for t in cc["timeline"]]
         assert any("Order MF 9" in n for n in notes) and any("Payment" in n for n in notes)
     run(go())
+
+
+create_vendor = _route("/api/vendors", "POST")
+list_vendors = _route("/api/vendors")
+update_project = _route("/api/projects/{project_id}", "PUT")
+list_projects = _route("/api/projects")
+REP = {"id": "u5", "tenant_id": "acme", "name": "Rep", "role": "user", "role_id": "", "username": "rep5"}
+
+
+def test_project_partner_applicator_for_map_supplier_otherwise():
+    async def go():
+        from models import ProjectUpdate, VendorCreate
+        app = await create_vendor(VendorCreate(name="Ravi Painters", vendor_type="applicator", division="MAP"), user=ADMIN)
+        sup = await create_vendor(VendorCreate(name="Teak House", vendor_type="Supplier"), user=ADMIN)
+        assert app["vendor_type"] == "Applicator" and app["code"]
+        with pytest.raises(HTTPException):
+            await create_vendor(VendorCreate(name="X", vendor_type="Painter"), user=ADMIN)
+        c = await _customer()
+        pm = await _project(c, division="MAP", partner_id=app["id"])
+        assert pm["partner_role"] == "Applicator" and pm["partner_name"] == "Ravi Painters"
+        pf = await _project(c, name="Villa 2", partner_id=sup["id"])
+        assert pf["partner_role"] == "Supplier" and pf["partner_code"] == sup["code"]
+        # Supplier names stay admin/accounting-only; applicators are shown.
+        rows = {r["id"]: r for r in await list_projects(user=REP)}
+        assert rows[pm["id"]]["partner_name"] == "Ravi Painters"
+        assert rows[pf["id"]]["partner_name"] == "" and rows[pf["id"]]["partner_code"] == sup["code"]
+        names = {v.get("code"): v.get("name") for v in await list_vendors(user=REP)}
+        assert names[app["code"]] == "Ravi Painters" and names[sup["code"]] is None
+        out = await update_project(pf["id"], ProjectUpdate(partner_id=""), user=ADMIN)
+        assert out["partner_id"] == "" and out["partner_name"] == ""
+        with pytest.raises(HTTPException):
+            await update_project(pf["id"], ProjectUpdate(partner_id="nope"), user=ADMIN)
+    run(go())
