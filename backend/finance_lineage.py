@@ -10,10 +10,12 @@ the reads). The chain follows the links the records already carry:
     money requests) ─(payment.against_sale_id)─> customer payments ─> P&L
 
 Money rules, shared with csv_engine.compute_project_pnl so the two agree:
+  * everything is before GST (lc.net_of_gst / po_net / mo_net): GST charged
+    is owed to the government, GST paid is claimed back as input credit;
   * revenue = sales order value; before a sale exists, the project's contract
     value, else the latest quotation (flagged as an estimate);
-  * vendor cost = committed POs (grand_total) + committed vendor orders
-    (final_total) — drafts, quotes and cancellations are not money owed;
+  * vendor cost = committed POs + committed vendor orders — drafts, quotes
+    and cancellations are not money owed;
   * expenses = Approved CASH_OUT (excluding vendor-order payouts, which are
     already in vendor cost) + Approved petty-cash Out vouchers;
   * gross margin = revenue − vendor cost (sale value − total PO cost);
@@ -44,7 +46,7 @@ def entry_cost(entries: Iterable[dict]) -> tuple[float, float]:
     """(approved, pending) CASH_OUT spend, excluding vendor-order payouts."""
     approved = pending = 0.0
     for e in entries:
-        if e.get("type") != "CASH_OUT" or e.get("manufacturer_order_id"):
+        if e.get("type") != "CASH_OUT" or e.get("manufacturer_order_id") or e.get("pnl_exclude"):
             continue
         if e.get("status") == "Approved":
             approved += _m(e.get("amount"))
@@ -66,8 +68,8 @@ def petty_cost(vouchers: Iterable[dict]) -> tuple[float, float]:
 
 
 def vendor_cost(pos: Iterable[dict], mos: Iterable[dict]) -> float:
-    return round(sum(_m(p.get("grand_total")) for p in pos if p.get("status") in PO_COMMITTED_STATUSES)
-                 + sum(_m(m.get("final_total")) for m in mos if m.get("status") in MO_COMMITTED_STATUSES), 2)
+    return round(sum(lc.po_net(p) for p in pos if p.get("status") in PO_COMMITTED_STATUSES)
+                 + sum(lc.mo_net(m) for m in mos if m.get("status") in MO_COMMITTED_STATUSES), 2)
 
 
 def _pct(part: float, whole: float) -> Optional[float]:
@@ -86,14 +88,15 @@ def deal_lineage(*, visitor: Optional[dict], lead: Optional[dict], quotes: list,
                  requests: list, payments: list, payouts: list) -> dict:
     """The chain and P&L for one deal. Lists are already narrowed to this deal."""
     quotes = sorted(quotes, key=lambda q: str(q.get("date") or q.get("created_at") or ""))
-    sales_value = sum(_m(s.get("value")) for s in sales)
+    sales_value = sum(lc.net_of_gst(s) for s in sales)
     if sales:
         revenue, revenue_basis = sales_value, "sales order"
     elif project and _m(project.get("value")):
-        revenue, revenue_basis = _m(project.get("value")), "project contract"
+        revenue, revenue_basis = lc.net_of_gst(project), "project contract"
     elif quotes:
         latest = quotes[-1]
-        revenue = _m(latest.get("grand_total") or latest.get("value"))
+        revenue = (lc.net_of_gst(latest, "grand_total") if _m(latest.get("grand_total"))
+                   else _m(latest.get("value")))
         revenue_basis = "quotation (estimate)"
     else:
         revenue, revenue_basis = 0.0, "none yet"
@@ -129,7 +132,8 @@ def deal_lineage(*, visitor: Optional[dict], lead: Optional[dict], quotes: list,
         [{"date": e.get("approved_at") or e.get("created_at"), "title": e.get("remark") or e.get("category"),
           "category": e.get("category", ""), "amount": _m(e.get("amount")), "status": e.get("status", ""),
           "source": "Money request" if e.get("money_request_id") else "Wallet"}
-         for e in entries if e.get("type") == "CASH_OUT" and not e.get("manufacturer_order_id")]
+         for e in entries if e.get("type") == "CASH_OUT" and not e.get("manufacturer_order_id")
+         and not e.get("pnl_exclude")]
         + [{"date": v.get("date"), "title": v.get("description") or v.get("category"),
             "category": v.get("category", ""), "amount": _m(v.get("amount")),
             "status": v.get("status", "Approved"), "source": "Petty cash"}
@@ -225,7 +229,7 @@ def company_pnl(*, sales: list, pos: list, mos: list, entries: list, petty: list
     for s in sales:
         d = lc.parse_date(s.get("date"))
         if _in(d, start, end) and div_ok(s.get("division")):
-            v = _m(s.get("value"))
+            v = lc.net_of_gst(s)
             revenue += v
             add(d, "revenue", v)
             by_division[lc.norm_division(s.get("division"))]["revenue"] += v
@@ -234,14 +238,14 @@ def company_pnl(*, sales: list, pos: list, mos: list, entries: list, petty: list
     for p in pos:
         d = lc.parse_date(p.get("date"))
         if p.get("status") in PO_COMMITTED_STATUSES and _in(d, start, end) and div_ok(p.get("division")):
-            v = _m(p.get("grand_total"))
+            v = lc.po_net(p)
             vendor += v
             add(d, "vendor_cost", v)
             by_division[lc.norm_division(p.get("division"))]["vendor_cost"] += v
     for m in mos:
         d = lc.parse_date(m.get("date"))
         if m.get("status") in MO_COMMITTED_STATUSES and _in(d, start, end) and div_ok(m.get("division")):
-            v = _m(m.get("final_total"))
+            v = lc.mo_net(m)
             vendor += v
             add(d, "vendor_cost", v)
             by_division[lc.norm_division(m.get("division"))]["vendor_cost"] += v
@@ -267,9 +271,17 @@ def company_pnl(*, sales: list, pos: list, mos: list, entries: list, petty: list
             add(d, "overheads", amount)
 
     for e in entries:
-        if e.get("type") != "CASH_OUT" or e.get("status") != "Approved" or e.get("manufacturer_order_id"):
+        if (e.get("type") != "CASH_OUT" or e.get("status") != "Approved" or e.get("manufacturer_order_id")
+                or e.get("pnl_exclude")):
             continue
         d = lc.parse_date(e.get("approved_at") or e.get("created_at"))
+        if e.get("category") == "Vendor payment":
+            # Paying a vendor no PO carries the cost of: that payment is the
+            # vendor cost (the ones a PO covers are pnl_exclude, skipped above).
+            if _in(d, start, end) and not division:
+                vendor += _m(e.get("amount"))
+                add(d, "vendor_cost", _m(e.get("amount")))
+            continue
         pid = e.get("project_id") or book_project.get(e.get("cashbook_id"), "")
         spend(d, _m(e.get("amount")), pid, e.get("category"), "")
     for v in petty:

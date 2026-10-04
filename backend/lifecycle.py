@@ -500,6 +500,30 @@ def calc_line(line: dict) -> dict:
     return line
 
 
+# ── P&L is stated before GST ───────────────────────────────────────────────
+# GST charged to a customer is owed to the government and GST paid to a vendor
+# is claimed back as input credit, so neither is income or cost. A record that
+# doesn't say how much GST it carries (an imported sale) counts as booked.
+def net_of_gst(doc: dict, gross_field: str = "value", tax_field: str = "tax_total") -> float:
+    gross = money(doc.get(gross_field))
+    tax = money(doc.get(tax_field))
+    return round(gross - tax, 2) if 0 < tax < gross else gross
+
+
+def po_net(po: dict) -> float:
+    """A purchase order's cost before GST."""
+    if po.get("subtotal") not in (None, "") and money(po.get("subtotal")) > 0:
+        return money(po.get("subtotal"))
+    return net_of_gst(po, "grand_total", "tax_total")
+
+
+def mo_net(mo: dict) -> float:
+    """A vendor (manufacturer) order's cost before GST."""
+    if money(mo.get("actual_amount")) > 0:
+        return money(mo.get("actual_amount"))
+    return net_of_gst(mo, "final_total", "tax_amount")
+
+
 def lines_subtotal(lines: Iterable[dict]) -> float:
     return round(sum(money(l.get("amount")) for l in lines), 2)
 

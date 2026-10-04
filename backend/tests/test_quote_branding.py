@@ -185,3 +185,31 @@ def test_lead_requirement_goes_to_the_timeline_not_the_terms():
         assert all("wardrobe" not in t.lower() for t in q.get("terms") or [])
         assert q["terms"] and q["log"][0]["text"] == "Requirement: 3BHK wardrobes"
     run(go())
+
+
+def test_picture_price_list_prints_mrp_beside_the_offer_price(monkeypatch):
+    seen = {}
+    real = quote_pdf.render
+
+    def spy(**kw):
+        seen.update(kw)
+        return real(**kw)
+    monkeypatch.setattr(server.qpdf, "render", spy)
+
+    async def go():
+        db = server.db
+        await db.inventory.insert_one({"id": "i1", "tenant_id": "madio", "sku": "MF-0001", "name": "Sofa",
+                                       "mrp": 286000 * 1.18, "gst_pct": 18, "image_url": ""})
+        await db.quotes.insert_one({"id": "q7", "tenant_id": "madio", "quote_no": "AF-7", "date": "2026-09-12",
+                                    "customer": "Ar Swathi", "division": "Furniture", "version": 1, "tax_pct": 18,
+                                    "print_layout": "pricelist"})
+        await db.quote_lines.insert_one({"id": "l7", "tenant_id": "madio", "quote_id": "q7", "version": 1,
+                                         "description": "Outdoor sofa set", "qty": 1, "rate": 200200,
+                                         "sku": "MF-0001", "created_at": "2026-09-12T01"})
+        resp = await server.quote_pdf("q7", user=ADMIN)
+        assert resp.body[:4] == b"%PDF"
+        assert seen["preset"]["layout"] == "pricelist"
+        assert seen["lines"][0]["mrp"] == 286000                     # from stock, before GST like the rate
+        with pytest.raises(server.HTTPException):
+            await server.normalize_quote_template({"print_layout": "poster"}, {"id": "q7"}, ADMIN)
+    run(go())

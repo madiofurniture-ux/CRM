@@ -51,7 +51,7 @@ export default function ProfitLoss() {
 
   return (
     <>
-      <Topbar title="Profit & Loss" subtitle="Company profit, and every deal traced from first visit to profit" />
+      <Topbar title="Profit & Loss" subtitle="Company profit, and every deal traced from first visit to profit · all figures before GST" />
       <div className="p-4 md:p-6 space-y-5" data-testid="pnl-page">
         <div role="tablist" aria-label="Profit and loss view" className="flex gap-1 border-b border-[var(--color-border)]">
           {[["company", "Company P&L"], ["deals", "Deals"]].map(([k, l]) => (

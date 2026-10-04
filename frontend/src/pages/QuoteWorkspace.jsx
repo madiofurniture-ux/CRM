@@ -135,10 +135,17 @@ export default function QuoteWorkspace() {
         quote_id: id, version: q.version || 1, w: 0, h: 0, qty: 1, group: curGroup,
         description: [item.name, item.model_no, item.material_finish].filter(Boolean).join(" · "),
         rate: rateFromMrp(item.mrp, item.gst_pct ?? taxPct), sku: item.sku, unit: item.unit, hsn: item.hsn,
+        // Same basis as the rate (before GST): the price-list quotation prints both.
+        mrp: rateFromMrp(item.mrp, item.gst_pct ?? taxPct),
       });
       if (item.available <= 0) toast.warning(`${item.name}: none available in stock right now`);
       await load();
     } finally { setBusy(false); }
+  };
+
+  const setPrintLayout = async (value) => {
+    try { await api.put(`/quotes/${id}`, { print_layout: value }); await load(); }
+    catch { toast.error("Couldn't change the layout"); }
   };
 
   const getPdf = async () => {
@@ -248,6 +255,12 @@ export default function QuoteWorkspace() {
               <div className="p-3 border-b border-[var(--border-light)] flex justify-between items-center">
                 <div className="font-heading font-semibold text-sm">Line items</div>
                 <div className="flex items-center gap-2 flex-wrap justify-end">
+                  {(preset.print_layouts || []).length > 0 && (
+                    <select value={q.print_layout || ""} onChange={(e) => setPrintLayout(e.target.value)} title="How the PDF is laid out"
+                            className="px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white text-sm max-w-[13rem]" data-testid="quote-print-layout">
+                      {preset.print_layouts.map((o) => <option key={o.key} value={o.key}>PDF: {o.label}</option>)}
+                    </select>
+                  )}
                   <select value={curGroup} onChange={(e) => setCurGroup(e.target.value)} title="Group new lines are added under"
                           className="px-2 py-1.5 rounded-lg border border-[var(--border)] bg-white text-sm max-w-[10rem]" data-testid="quote-group-select">
                     <option value="">No group</option>
@@ -278,7 +291,7 @@ export default function QuoteWorkspace() {
                       <GroupRows key={g || "_"} name={g} grouped={grouped} cols={mm ? 9 : 8} mm={mm} summary={groupSummary[g]}>
                     {ws.lines.filter((l) => (l.group || "").trim() === g).map((l) => (
                       <LineRows key={l.id} line={l} mm={mm} specFields={specFields} patchLine={patchLine}
-                                groups={groupNames} onPicture={pickPicture}>
+                                groups={groupNames} onPicture={pickPicture} showMrp={q.print_layout === "pricelist"}>
                       <tr className="border-t border-[var(--border-light)]">
                         <td className="px-3 py-2"><I v={l.description} oc={(v) => patchLine(l, { description: v })} />
                           {l.sku && (
@@ -364,7 +377,7 @@ function GroupRows({ name, grouped, cols, mm, summary, children }) {
 
 /** A line row plus its details: group, picture (printed on the quotation)
  *  and, for Doors & Windows, the opening specification. */
-function LineRows({ line, mm, specFields, patchLine, groups, onPicture, children }) {
+function LineRows({ line, mm, specFields, patchLine, groups, onPicture, showMrp, children }) {
   const [open, setOpen] = useState(false);
   const fileRef = useRef(null);
   const specs = line.specs || {};
@@ -396,6 +409,15 @@ function LineRows({ line, mm, specFields, patchLine, groups, onPicture, children
             )}
             <input ref={fileRef} type="file" accept="image/*" className="hidden"
                    onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) onPicture(line, f); }} />
+            {showMrp && (
+              <label className="inline-flex items-center gap-1 text-[var(--ink-3)]" title="List price before GST, printed beside the offer price (the rate)">
+                MRP ₹
+                <input type="number" value={line.mrp || ""} onChange={(e) => patchLine(line, { mrp: parseFloat(e.target.value) || 0 })}
+                       className="w-24 px-1.5 py-0.5 rounded border border-[var(--border)] bg-white text-xs text-right text-[var(--ink)]"
+                       data-testid={`quote-line-mrp-${line.id}`} />
+                {line.mrp > line.rate && line.rate > 0 && <span className="text-[var(--moss)]">save {Math.round(100 * (line.mrp - line.rate) / line.mrp)}%</span>}
+              </label>
+            )}
             {groups.length > 0 && (
               <label className="inline-flex items-center gap-1 text-[var(--ink-3)]">
                 Group

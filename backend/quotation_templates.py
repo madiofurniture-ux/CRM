@@ -232,6 +232,8 @@ COMPANY_PRESETS = {
                 ]},
         "Furniture": {
             "name": "Madio Furniture", "logo": "furniture.png", "tagline": "Madio Furniture",
+            "print_layouts": [{"key": "", "label": "Catalogue (standard)"},
+                              {"key": "pricelist", "label": "Picture price list (MRP / offer price)"}],
             "note": "Thank you for considering Madio Furniture. We appreciate the opportunity to collaborate on "
                     "your project and remain committed to delivering exceptional craftsmanship, quality, and service.",
             "terms": [
@@ -251,6 +253,9 @@ COMPANY_PRESETS = {
         },
     },
 }
+
+# Optional print layouts a quote can choose (quote.print_layout), per division.
+PRINT_LAYOUTS = {"pricelist": "Picture price list (MRP / offer price)"}
 
 DIVISION_ALIASES = {"dw": "D&W", "d&w": "D&W", "doors & windows": "D&W", "doors and windows": "D&W",
                     "map": "MAP", "furniture": "Furniture"}

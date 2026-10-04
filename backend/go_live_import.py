@@ -585,6 +585,9 @@ def build(sheets: dict, today: Optional[str] = None) -> dict:
                 d["vendor_code"] = v["code"]
                 d["vendor_name" if coll == "purchase_orders" else "vendor"] = v["name"]
 
+    out["cashbooks"], out["cashbook_entries"] = [], []
+    _cash_books(sheets, rep, out, quotes_by_no)
+
     office = _office(sheets)
     recognised = [s for s in rep.sheets if s in sheets]
     if out["inventory"] and any(i["division"] == "MAP" for i in out["inventory"]):
@@ -1016,6 +1019,234 @@ def _purchase_orders(sheets, rep, out, quotes_by_no, vendor):
 
 _VENDORISH = re.compile(r"\bpvt\b|\bltd\b|\bllp\b|^\s*v\s*-?\d+|furniture|industr|mobila|casa|lifestyle|"
                         r"\bcompany\b|\bco\b|traders|enterprise", re.I)
+
+
+# ── cash books (the Receipts & Payments book's monthly sheets) ─────────────
+_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
+                                       "nov", "dec"), 1)}
+_CASH_COL = re.compile(r"^(.*?)\s*(receipts?|payments?)$", re.I)
+# Money moved between the company's own wallets or parked (not spending):
+# kept in the books, left out of P&L.
+_TRANSFER = re.compile(r"petty\s*(cash\s*)?adv|petty\s*cash$|\bcash$|\badv(ance)?$|fixed\s*deposit|"
+                       r"\boc\s*a/?c\b|jagadeesh\s*mf|^transfer|hand\s*over|hand\s*loan", re.I)
+# "Vijay Kphb Furniture cust", "Sharmila Map cust" — not "Customer Welfare Exp".
+_CUSTOMER = re.compile(r"\bcust\b|\bcustomer\b(?!\s*welfare)|\brefund", re.I)
+_SALARY = re.compile(r"\bsalar(y|ies)\b", re.I)
+
+
+def fin_year(iso: str) -> str:
+    """Indian financial year of an ISO date: 2026-05-02 -> "2026-27"."""
+    try:
+        y, m = int(iso[:4]), int(iso[5:7])
+    except (TypeError, ValueError):
+        return ""
+    start = y if m >= 4 else y - 1
+    return f"{start}-{(start + 1) % 100:02d}"
+
+
+def costed_vendor_years(pos: Iterable[dict], key=lambda p: p.get("vendor_id")) -> set:
+    """(vendor, financial year) pairs whose cost the POs already carry: a
+    payment to that vendor in that year is settling a PO, not a new cost."""
+    return {(key(p), fin_year(str(p.get("date") or ""))) for p in pos
+            if lc.money(p.get("grand_total")) > 0 and p.get("status") in ("Issued", "Received")}
+
+
+def ledger_month(title: str) -> Optional[int]:
+    """The month a cash-book sheet covers, from its title ("Apr -26", "June26", "AUG_26", "Sep-26")."""
+    m = re.match(r"\s*([a-z]{3})[a-z]*[\s_\-]*'?(\d{2})?\s*$", title, re.I)
+    return _MONTHS.get(m.group(1).lower()) if m else None
+
+
+def _ledger_date(value: Any, month: Optional[int]) -> str:
+    """A cash-book date. Excel may have read a typed day/month as month/day;
+    the sheet's own month says which reading is right."""
+    if isinstance(value, (datetime, date)):
+        d = value.date() if isinstance(value, datetime) else value
+        if month and d.month != month and d.day == month and d.month <= 31:
+            try:
+                d = date(d.year, d.day, d.month)
+            except ValueError:
+                pass
+        return d.isoformat()
+    return sheet_date(value)
+
+
+def _expense_head(desc: str) -> str:
+    """One spelling per expense head: "transport charges", "Transportation
+    charges" -> "Transport Charges"; "Map painting Exp" -> "Map Painting Expense"."""
+    d = re.sub(r"\s+", " ", desc).strip()
+    low = d.lower()
+    if low.startswith("transport"):
+        return "Transport Charges"
+    if low.startswith("map painting"):
+        return "Map Painting Materials" if "material" in low else "Map Painting Expense"
+    if _SALARY.search(d):
+        return "Salaries"
+    if low.startswith("rent") or "swarnalatha" in low:      # the showroom's landlord
+        return "Rent"
+    d = re.sub(r"\bexp\b\.?$", "Expense", d, flags=re.I)
+    return d[:1].upper() + d[1:] if d else "Other"
+
+
+def _cash_books(sheets, rep, out, quotes_by_no):
+    """Each monthly sheet: Date, Description, Q.NO, V.NO, then a Receipt /
+    Payment pair per wallet (Cash, MF2, Rooth, GK Petty, B.T = bank …),
+    Remark. A wallet's opening balance is its first month's Opening Balance."""
+    vendor_keys = {vendor_key(v["name"]): v for v in out["vendors"]}
+    costed = costed_vendor_years(out["purchase_orders"])
+    # Receipts usually name the customer, not the quotation ("Ravi Kanth
+    # Furniture cust"): link one to that customer's sale when exactly one fits.
+    def name_key(v: Any) -> str:
+        v = re.sub(r"\b(furniture|map|windows?|doors?|d&w|cust(omer)?|site|villa)\b", " ", str(v or ""), flags=re.I)
+        return re.sub(r"[^a-z0-9]", "", v.lower())
+    sales_by_name: dict[str, list] = {}
+    for sale in out["sales"]:
+        k = name_key(sale.get("customer"))
+        if len(k) >= 4:
+            sales_by_name.setdefault(k, []).append(sale)
+
+    def sale_for(desc: str) -> Optional[dict]:
+        k = name_key(desc)
+        if len(k) < 4:
+            return None
+        hits = sales_by_name.get(k) or [s for sk, ss in sales_by_name.items()
+                                         if sk.startswith(k) or k.startswith(sk) for s in ss]
+        return hits[0] if len({s["id"] for s in hits}) == 1 else None
+
+    books: dict[str, dict] = {}
+    spelling: dict[str, str] = {}
+
+    def head(desc: str) -> str:
+        h = _expense_head(desc)
+        return spelling.setdefault(re.sub(r"[^a-z0-9]", "", h.lower()), h)
+
+    found = []
+    for name, rows in sheets.items():
+        month = ledger_month(name)
+        if not month:
+            continue
+        headers, data, h = _table(rows, ["Date"])
+        if "description" not in headers:
+            continue
+        col = _getter(headers)
+        c = {k: col(*v) for k, v in {"date": ["Date"], "desc": ["Description"], "qno": ["Q.NO", "Q NO"],
+                                      "vno": ["V.NO", "V NO"], "rem": ["Remark", "Remarks"]}.items()}
+        wallets = {}
+        for i, hd in enumerate(rows[h]):
+            m = _CASH_COL.match(str(hd or "").strip())
+            if not m or not m.group(1).strip():
+                continue
+            label = re.sub(r"\s+", " ", m.group(1)).strip()
+            key = re.sub(r"[^a-z0-9]", "", label.lower())
+            key = "bt" if key in ("bt", "b.t") else key
+            label = "Bank Transfer" if key == "bt" else label.title().replace("Mf", "MF").replace("Gk", "GK")
+            wallets.setdefault(key, {"label": label})["in" if m.group(2).lower().startswith("receipt") else "out"] = i
+        if not wallets:
+            continue
+        found.append((month, name, c, data, h, wallets))
+
+    # Earliest month first, so a wallet's opening balance is its first one.
+    found.sort(key=lambda f: ((f[0] - 4) % 12))
+    for month, name, c, data, h, wallets in found:
+        seen_entries = False
+        for i, r in enumerate(data, h + 2):
+            desc = text(_cell(r, c["desc"]), 200)
+            when = _ledger_date(_cell(r, c["date"]), month)
+            if not desc and not any(amount(_cell(r, w.get(k))) for w in wallets.values() for k in ("in", "out")):
+                continue
+            low = desc.lower()
+            if low.startswith("closing balance") and not seen_entries:
+                low = "opening balance"           # last month's closing, carried in as this month's opening
+            if low.startswith("closing balance"):
+                # The book is balanced by entering each wallet's closing
+                # figure as a payment; the row after it is the totals. Check
+                # our running balance against the sheet's own figure.
+                for key, w in wallets.items():
+                    book = books.get(key)
+                    sheet_close = amount(_cell(r, w.get("out"))) - amount(_cell(r, w.get("in")))
+                    if book is not None and abs(book["current_balance"] - sheet_close) > 1:
+                        rep.note(name, f"{w['label']}: closing {sheet_close:,.0f} on the sheet, "
+                                       f"{book['current_balance']:,.0f} from its entries")
+                break
+            if not desc and not when:
+                continue                      # a totals / spacer row
+            rep.sheet(name)["rows"] += 1
+            if not low.startswith("opening balance"):
+                seen_entries = True
+            for key, w in wallets.items():
+                book = books.get(key)
+                if low.startswith("opening balance"):
+                    bal = amount(_cell(r, w.get("in"))) - amount(_cell(r, w.get("out")))
+                    if book is not None and abs(book["current_balance"] - bal) > 1:
+                        # The business carried a different figure forward:
+                        # follow the sheet, and say so in the book.
+                        diff = round(bal - book["current_balance"], 2)
+                        out["cashbook_entries"].append(_stamp({
+                            "cashbook_id": book["id"], "type": "CASH_IN" if diff > 0 else "CASH_OUT",
+                            "amount": abs(diff), "category": "Balance adjustment",
+                            "payment_mode": "ONLINE" if key == "bt" else "OTHER",
+                            "remark": f"Opening balance per {name}: {bal:,.2f} (carried {book['current_balance']:,.2f})",
+                            "entry_person": "Go-live import", "status": "Approved", "approved_by": "Go-live import",
+                            "approved_at": f"{when}T09:00:00+05:30" if when else "", "pnl_exclude": True,
+                            "quote_id": "", "date": when}, when or ""))
+                        book["current_balance"] = round(bal, 2)
+                        rep.note(name, "opening balances aligned to the sheet")
+                    if book is None:
+                        books[key] = _stamp({"book_name": w["label"], "description": "Imported cash book",
+                                             "initial_balance": round(bal, 2), "current_balance": round(bal, 2),
+                                             "status": "ACTIVE", "assigned_users": [], "project_id": "",
+                                             "imprest_limit": 0, "strict_overdraft": False},
+                                            when or "2026-04-01")
+                    continue
+                for kind, typ in (("in", "CASH_IN"), ("out", "CASH_OUT")):
+                    amt = round(amount(_cell(r, w.get(kind))), 2)
+                    if amt <= 0:
+                        continue
+                    if book is None:
+                        book = books[key] = _stamp({"book_name": w["label"], "description": "Imported cash book",
+                                                    "initial_balance": 0.0, "current_balance": 0.0,
+                                                    "status": "ACTIVE", "assigned_users": [], "project_id": "",
+                                                    "imprest_limit": 0, "strict_overdraft": False},
+                                                   when or "2026-04-01")
+                    qno = quote_no(_cell(r, c["qno"])) if text(_cell(r, c["qno"]), 40) else ""
+                    quote = quotes_by_no.get(qno) if qno else None
+                    vkey = vendor_key(desc) if desc else ""
+                    sale = None
+                    if _TRANSFER.search(desc):
+                        category, exclude = "Transfer", True
+                    elif typ == "CASH_IN" and (quote or _CUSTOMER.search(desc)):
+                        category, exclude = "Customer receipt", False
+                        sale = None if quote else sale_for(desc)
+                        if sale:
+                            quote = {"id": sale.get("quote_id", "")}
+                    elif typ == "CASH_OUT" and _CUSTOMER.search(desc):
+                        category, exclude = "Customer refund", True
+                    # A payment carrying a Q.NO is that job's site expense (kept
+                    # in P&L, linked to its quotation) — handled below.
+                    elif vkey and vkey in vendor_keys and typ == "CASH_OUT":
+                        # Out of P&L only when that year's valued POs already
+                        # carry this vendor's cost; else the payment is the cost.
+                        category = "Vendor payment"
+                        exclude = (vendor_keys[vkey]["id"], fin_year(when)) in costed
+                    else:
+                        category, exclude = head(desc), False
+                    vno = text(_cell(r, c["vno"]), 30)
+                    remark = " · ".join(x for x in (desc if category != desc else "",
+                                                    f"Q.No {qno}" if qno else "", f"V.No {vno}" if vno else "",
+                                                    text(_cell(r, c["rem"]), 300)) if x)
+                    entry = _stamp({"cashbook_id": book["id"], "type": typ, "amount": amt, "category": category,
+                                    "payment_mode": "ONLINE" if key == "bt" else "OTHER", "remark": remark[:500],
+                                    "entry_person": "Go-live import", "status": "Approved",
+                                    "approved_by": "Go-live import", "approved_at": f"{when}T10:00:00+05:30" if when else "",
+                                    "pnl_exclude": exclude, "quote_id": (quote or {}).get("id", ""),
+                                    "sale_id": sale["id"] if category == "Customer receipt" and sale else "",
+                                    "date": when}, when or "")
+                    if exclude:
+                        rep.note(name, f"{category.lower()}s kept out of P&L")
+                    out["cashbook_entries"].append(entry)
+                    book["current_balance"] = round(book["current_balance"] + (amt if typ == "CASH_IN" else -amt), 2)
+                    rep.sheet(name)["loaded"] += 1
+    out["cashbooks"] = list(books.values())
 
 
 def _closing_stock(sheets, rep, out, vendor):

@@ -3,7 +3,7 @@ archived wipe-and-load (company-scoped), undo, and the starter flows."""
 import asyncio
 import io
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
@@ -594,3 +594,90 @@ def test_large_imported_pos_arrive_signed_off():
             assert po["approval"] == "approved" and po["approved_by"] == gl.IMPORT_APPROVER
         else:
             assert po["approval"] == ""
+
+
+CASH_HDR = ("Date", "Description", "Q.NO", "V.NO", "Cash Receipt", "Cash Payment", "MF2 Receipt", "MF2 Payment",
+            "B.T Receipt", "BT Payment", "Remark")
+
+
+def _cash_book():
+    return _book({
+        "Apr -26": [CASH_HDR,
+                    (datetime(2026, 4, 1), "Opening Balance", None, None, 10000, None, 2000, None, 50000),
+                    (datetime(2026, 4, 3), "Transport charges", None, 1001, None, 500, None, None, None, None, "porter"),
+                    (datetime(2026, 4, 3), "GK Petty Adv", None, 1002, None, 1000, 1000, None, None, None),
+                    (datetime(2026, 4, 5), "Heuristic Formulations", None, None, None, None, None, None, None, 20000),
+                    (datetime(2026, 4, 5), "Narasarao pet cust", "AF-2601-026", None, None, None, None, None, 8000),
+                    (None, "Closing Balance", None, None, None, 8500, None, 3000, None, 38000),
+                    (None, None, None, None, 10000, 10000, 3000, 3000, 58000, 58000)],
+        # May opens with April's closing in the receipt column, as MADIO's book does.
+        "May": [CASH_HDR,
+                (datetime(2026, 5, 1), "Closing balance", None, None, 8500, None, 3000, None, 38000),
+                (datetime(2026, 5, 2), "transportation charges", None, None, None, 300),
+                (datetime(2026, 5, 2), "Salary A/c", None, None, None, 1200)]})
+
+
+def test_cash_books_are_read_balanced_and_classified():
+    vendor_po = _book({"Purchase Order": [("PO NO", "DATE", "VENDOR", "CLIENT", "PRODUCT", "QTY", "UNIT", "VALUE"),
+                                          ("AF/26-27/001", datetime(2026, 4, 20), "Heuristic Formulations", "X",
+                                           "Paint", 1, "Nos", 1000)]})
+    res = gl.build(gl.load_workbooks([("RP.xlsx", _cash_book()), ("PO.xlsx", vendor_po)]))
+    books = {b["book_name"]: b for b in res["records"]["cashbooks"]}
+    assert set(books) == {"Cash", "MF2", "Bank Transfer"}
+    assert (books["Cash"]["initial_balance"], books["Cash"]["current_balance"]) == (10000, 7000)
+    assert books["Bank Transfer"]["current_balance"] == 38000
+    e = res["records"]["cashbook_entries"]
+    by = {(x["category"], x["type"]): x for x in e}
+    assert sorted(x["date"] for x in e if x["category"] == "Transport Charges") == ["2026-04-03", "2026-05-02"]
+    assert by[("Transfer", "CASH_OUT")]["pnl_exclude"] and by[("Transfer", "CASH_IN")]["pnl_exclude"]
+    assert by[("Vendor payment", "CASH_OUT")]["pnl_exclude"]
+    assert by[("Customer receipt", "CASH_IN")]["amount"] == 8000
+    assert by[("Salaries", "CASH_OUT")]["amount"] == 1200
+    assert sum(1 for x in e if x["category"] == "Transport Charges") == 2           # spellings merged
+    assert not any("Total" in x["category"] or x["amount"] >= 58000 for x in e)    # totals row skipped
+    notes = {k for r in res["report"] for k in r["notes"]}
+    assert not any("closing" in n for n in notes)                                  # every month reconciles
+
+
+def test_cash_books_reach_production_once_and_stay_out_of_pnl():
+
+    async def go():
+        db = server.db
+        await db.vendors.insert_one({"id": "v1", "tenant_id": "madio", "name": "Heuristic Formulations"})
+        # Its 2026-27 POs carry its cost, so paying it that year isn't a second cost.
+        await db.purchase_orders.insert_one({"id": "po1", "tenant_id": "madio", "vendor_id": "v1", "date": "2026-04-02",
+                                             "grand_total": 20000, "status": "Issued"})
+        out = await server._go_live_cash_books([("RP.xlsx", _cash_book())], ADMIN)
+        assert (out["books"], out["entries"]) > (0, 0)
+        assert "skipped" in await server._go_live_cash_books([("RP.xlsx", _cash_book())], ADMIN)
+        entries = await db.cashbook_entries.find({"tenant_id": "madio"}, {"_id": 0}).to_list(100)
+        pnl = server.fl.company_pnl(
+            sales=[], pos=[], mos=[], entries=entries, petty=[], payouts=[], book_project={}, projects={},
+            start=date(2026, 4, 1), end=date(2026, 5, 31))
+        assert pnl["statement"]["overheads"] == 500 + 300 + 1200                     # not transfers / vendors
+    run(go())
+
+
+def test_a_vendor_payment_is_the_cost_when_no_po_carries_it():
+    assert gl.fin_year("2026-05-02") == "2026-27" and gl.fin_year("2026-03-31") == "2025-26"
+    res = gl.build(gl.load_workbooks([("RP.xlsx", _cash_book()),
+                                      ("PO.xlsx", _book({"Purchase Order": [
+                                          ("PO NO", "DATE", "VENDOR", "CLIENT", "PRODUCT", "QTY", "UNIT", "VALUE"),
+                                          ("AF/25-26/001", datetime(2025, 6, 2), "Heuristic Formulations", "X",
+                                           "Paint", 1, "Nos", 1000)]}))]))
+    pay = next(x for x in res["records"]["cashbook_entries"] if x["category"] == "Vendor payment")
+    assert pay["pnl_exclude"] is False          # last year's PO doesn't cover an April 2026 payment
+
+
+def test_uncovered_vendor_payments_are_vendor_cost_in_the_pnl():
+    entries = [{"type": "CASH_OUT", "status": "Approved", "category": "Vendor payment", "amount": 40000,
+                "approved_at": "2026-05-02T10:00:00+05:30"},
+               {"type": "CASH_OUT", "status": "Approved", "category": "Vendor payment", "amount": 9999,
+                "pnl_exclude": True, "approved_at": "2026-05-02T10:00:00+05:30"},
+               {"type": "CASH_OUT", "status": "Approved", "category": "Rent", "amount": 1000,
+                "approved_at": "2026-05-02T10:00:00+05:30"}]
+    pnl = server.fl.company_pnl(sales=[{"date": "2026-05-01", "value": 100000}], pos=[], mos=[], entries=entries,
+                                petty=[], payouts=[], book_project={}, projects={},
+                                start=date(2026, 4, 1), end=date(2026, 9, 30))["statement"]
+    assert (pnl["vendor_cost"], pnl["overheads"], pnl["net_profit"]) == (40000, 1000, 59000)
+    assert gl._expense_head("Rent - Swarnalatha") == gl._expense_head("SWARNALATHA") == "Rent"

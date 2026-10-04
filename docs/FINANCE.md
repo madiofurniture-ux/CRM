@@ -150,3 +150,40 @@ Logic: `lifecycle.py` (`invoice_totals`, `invoice_payment_state`,
    to hide it.
 6. Staff with role-based access need the new **Money Requests** and
    **Profit & Loss** pages granted in Role Manager. Admins see them already.
+
+
+## P&L is stated before GST
+
+Deal P&L, Company P&L and Project P&L all count money before GST
+(`lifecycle.net_of_gst`, `po_net`, `mo_net`): GST charged to a customer is
+owed to the government, and GST paid to a vendor is claimed back as input
+credit, so neither is income or cost.
+
+- Revenue = sale value − `tax_total`. A sale converted from a quotation
+  records the GST inside its value (`tax_total`, also on its project); sales
+  converted before this were filled in once at startup (`sale-gst-1`).
+  Imported sales don't say how much GST they include and count as booked.
+- Vendor cost = PO `subtotal` and vendor-order `actual_amount` (pre-tax).
+- Balances, collections and receivables are unchanged: they are what the
+  customer actually pays, GST included.
+
+## Cash books from the Receipts & Payments book
+
+The monthly sheets (Apr-26 … Sep-26: Date, Description, Q.NO, V.NO, a
+Receipt / Payment pair per wallet, Remark) load as Cashbook wallets and
+entries (`go_live_import._cash_books`). A wallet's opening balance is its
+first month's Opening Balance; when a later month opens on a different
+figure, a "Balance adjustment" entry follows the sheet, and every month's
+closing is checked against the sheet's Closing Balance (mismatches appear in
+the load report). Classification:
+
+| Rows | Category | In P&L |
+|---|---|---|
+| petty advances, cash handovers, Fixed Deposit, salary advances | Transfer | no |
+| a quote number or "… cust" | Customer receipt (linked to the quotation) | receipts never are |
+| payments to a vendor in the CRM | Vendor payment | as vendor cost, unless that vendor has valued POs in the same financial year (then the PO carries the cost) |
+| everything else (transport, Map painting, salaries, rent, EB…) | the expense head, spellings merged | yes |
+
+Entries carry `pnl_exclude` for the rows kept out of P&L. A full load brings
+the cash books; data loaded before this got them once at startup
+(`cash-books-1`), or Admin can run `POST /api/admin/go-live/sharepoint/cash-books`.

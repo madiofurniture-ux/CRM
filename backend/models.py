@@ -324,6 +324,8 @@ class QuoteBase(BaseModel):
     # Transport / handling, added after GST (untaxed), and the rounding that
     # makes the net payable a round figure — see lifecycle.quote_total.
     transport: Optional[float] = 0
+    # "" = the division's standard quotation; "pricelist" = picture price list.
+    print_layout: Optional[str] = ""
     round_off: Optional[float] = 0
     # "" (none needed) | "pending" | "approved" | "rejected"
     approval: Optional[str] = ""
@@ -370,6 +372,7 @@ class SaleBase(BaseModel):
     value: float = 0
     paid: float = 0
     balance: float = 0                    # balance_due
+    tax_total: Optional[float] = 0       # GST inside value; P&L counts value − tax_total
     status: str = "PENDING"               # PENDING / PARTIAL / PAID
     stage: str = "Delivered"
     remarks: Optional[str] = ""
@@ -931,6 +934,9 @@ class CashbookEntryBase(BaseModel):
     # only), so project P&L can attribute spend paid from any wallet, not just
     # a project-linked one.
     money_request_id: Optional[str] = ""
+    # Recorded in the book but not spending (a transfer between wallets, a
+    # payment to a vendor already costed through its PO): left out of P&L.
+    pnl_exclude: bool = False
     project_id: Optional[str] = ""
     sale_id: Optional[str] = ""
     quote_id: Optional[str] = ""
@@ -1364,6 +1370,7 @@ class ProjectBase(BaseModel):
     phone: Optional[str] = ""
     division: str = "Furniture"  # Furniture / MAP / D&W
     value: float = 0
+    tax_total: Optional[float] = 0      # GST inside value (from its sale); P&L counts value − tax_total
     paid: float = 0
     stage: str = "Survey"  # Survey / Quoted / Execution / Review / Closure
     site_address: Optional[str] = ""
@@ -1563,6 +1570,9 @@ class QuoteLineBase(BaseModel):
     dim_unit: Optional[str] = ""
     specs: Optional[dict] = None
     image_url: Optional[str] = ""
+    # List price beside the quoted (offer) rate; the picture price-list
+    # quotation prints both. Filled from the stock item when picked.
+    mrp: Optional[float] = 0
     # Optional heading the line sits under on the quotation (a floor, a room,
     # "Doors" / "Windows"); lines print grouped with a subtotal per group.
     group: Optional[str] = ""

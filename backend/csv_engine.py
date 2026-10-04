@@ -230,20 +230,15 @@ async def compute_project_pnl(db, user: dict) -> dict:
             continue
         pid = po.get("project_id") or ""
         material_by_project[pid] = round(
-            material_by_project.get(pid, 0.0) + (po.get("grand_total") or 0), 2)
-    # Tax-INCLUSIVE (`final_total`, not `actual_amount`), deliberately, and
-    # for one reason: the PO line directly above already books grand_total,
-    # which is tax-inclusive. Two cost lines summed into one `material_cost`
-    # column have to mean the same thing, and a column that is net of GST for
-    # half its rows and gross for the other half is a wrong number, not a
-    # conservative one. (If input GST ever becomes separately creditable in
-    # this codebase, both lines move to net together — not just this one.)
+            material_by_project.get(pid, 0.0) + lc.po_net(po), 2)
+    # Both cost lines are before GST (input GST is claimed back), the same
+    # basis as revenue below and as finance_lineage: one column, one meaning.
     for mo in mos:
         if mo.get("status") not in MO_COMMITTED_STATUSES:
             continue
         pid = mo.get("project_id") or ""
         material_by_project[pid] = round(
-            material_by_project.get(pid, 0.0) + (mo.get("final_total") or 0), 2)
+            material_by_project.get(pid, 0.0) + lc.mo_net(mo), 2)
 
     book_ids = [b["id"] for b in books if b.get("project_id")]
     book_project = {b["id"]: b.get("project_id") or "" for b in books}
@@ -283,7 +278,8 @@ async def compute_project_pnl(db, user: dict) -> dict:
         # material_cost. Counting the ledger line too would charge the same
         # rupee to the project twice and understate margin by the amount paid.
         pouts = [e for e in pentries
-                 if e.get("type") == "CASH_OUT" and not e.get("manufacturer_order_id")]
+                 if e.get("type") == "CASH_OUT" and not e.get("manufacturer_order_id")
+                 and not e.get("pnl_exclude")]
         ppetty = petty_by_project.get(pid, [])
         approved = sum(e["amount"] for e in pouts if e.get("status") == "Approved") \
             + sum(lc.money(v.get("amount")) for v in ppetty if v.get("status", "Approved") == "Approved")
@@ -291,7 +287,7 @@ async def compute_project_pnl(db, user: dict) -> dict:
             + sum(lc.money(v.get("amount")) for v in ppetty if v.get("status") == "Pending")
         float_balance = sum(b.get("current_balance", 0) for b in pbooks)
         imprest_limit_total = sum(b.get("imprest_limit", 0) or 0 for b in pbooks)
-        revenue = p.get("value", 0) or 0
+        revenue = lc.net_of_gst(p)
         gross_profit = revenue - approved
         margin_pct = round((gross_profit / revenue) * 100, 2) if revenue else 0.0
 

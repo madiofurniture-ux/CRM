@@ -202,3 +202,29 @@ def test_today_counts_follow_ups_due_and_overdue():
              {"category": "Installation", "due_date": "2026-09-01", "done": False}]
     out = lc.command_centre_overview(quotes=[], sales=[], projects=[], tasks=tasks, today="2026-09-30")
     assert out["today"] == {"follow_ups_due": 2, "follow_ups_overdue": 1}
+
+
+def test_profit_is_counted_before_gst():
+    """A ₹1,18,000 sale (₹1,00,000 + 18% GST) against a ₹50,000 + GST vendor
+    order earns ₹50,000, not ₹68,000: GST collected is owed to the government
+    and GST paid is claimed back."""
+    async def go():
+        db = server.db
+        lead = {"id": "L9", "date": "2026-09-01", "name": "GST Test", "phone": "9876500000", "stage": "New",
+                "division": "Furniture", "reference": "Walk-in"}
+        tenancy.stamp(lead, "leads", ADMIN)
+        await db.leads.insert_one(dict(lead))
+        quote = await server.lead_to_quote("L9", user=ADMIN)
+        await db.quotes.update_one({"id": quote["id"]}, {"$set": {"value": 118000, "grand_total": 118000,
+                                                                  "subtotal": 100000, "tax_total": 18000}})
+        approved = await server.quote_approve(quote["id"], {"approved": True}, user=ADMIN)
+        sale, project = approved["sales_order"], approved["project"]
+        assert (sale["value"], sale["tax_total"], project["tax_total"]) == (118000, 18000, 18000)
+        mo = {"actual_amount": 50000, "tax_amount": 9000, "final_total": 59000, "status": "Confirmed"}
+        deal = server.fl.deal_lineage(visitor=None, lead=lead, quotes=[quote], sales=[sale], project=project,
+                                      pos=[], mos=[mo], entries=[], petty=[], requests=[], payments=[], payouts=[])
+        pnl = deal["pnl"] if "pnl" in deal else deal
+        assert pnl["revenue"] == 100000 and pnl["vendor_cost"] == 50000 and pnl["gross_margin"] == 50000
+        # A sale that doesn't say how much GST it carries counts as booked.
+        assert lc.net_of_gst({"value": 50000}) == 50000
+    run(go())

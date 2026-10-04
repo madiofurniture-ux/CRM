@@ -399,8 +399,8 @@ def test_a_committed_order_registers_as_project_material_cost():
         await _project()
         await _make_order(status="Confirmed", project_id="p1")
         row = (await csv_engine.compute_project_pnl(server.db, ADMIN))["projects"][0]
-        assert row["material_cost"] == FINAL
-        assert row["net_margin"] == 500000 - FINAL
+        assert row["material_cost"] == ACTUAL            # before GST (input credit)
+        assert row["net_margin"] == 500000 - ACTUAL
     asyncio.run(run())
 
 
@@ -424,14 +424,13 @@ def test_every_post_confirmation_state_counts():
             await _project()
             await _make_order(status=status, project_id="p1")
             row = (await csv_engine.compute_project_pnl(server.db, ADMIN))["projects"][0]
-            assert row["material_cost"] == FINAL, status
+            assert row["material_cost"] == ACTUAL, status
     asyncio.run(run())
 
 
-def test_manufacturing_cost_rolls_up_tax_inclusive_like_a_purchase_order():
-    """material_cost is one column carrying both PO and manufacturer spend.
-    A column that is net of GST for half its rows and gross for the other
-    half is a wrong number, so this line matches the PO line's grand_total."""
+def test_manufacturing_cost_rolls_up_before_gst_like_a_purchase_order():
+    """material_cost is one column carrying both PO and manufacturer spend,
+    both before GST (input GST is claimed back), the same basis as revenue."""
     async def run():
         await _project()
         await _make_order(status="Confirmed", project_id="p1")
@@ -442,8 +441,8 @@ def test_manufacturing_cost_rolls_up_tax_inclusive_like_a_purchase_order():
         await server.db.purchase_orders.insert_one(dict(po))
 
         row = (await csv_engine.compute_project_pnl(server.db, ADMIN))["projects"][0]
-        assert row["material_cost"] == FINAL + 11800
-        # ...and not the pre-tax figure, which is what a mixed column would give.
+        assert row["material_cost"] == ACTUAL + 10000
+        # ...and not a mix of pre-tax and tax-inclusive figures.
         assert row["material_cost"] != ACTUAL + 11800
     asyncio.run(run())
 
@@ -478,9 +477,9 @@ def test_a_wallet_funded_payment_is_not_charged_to_the_project_twice():
             user=ADMIN)
 
         row = (await csv_engine.compute_project_pnl(server.db, ADMIN))["projects"][0]
-        assert row["material_cost"] == FINAL
+        assert row["material_cost"] == ACTUAL
         assert row["approved_petty_cash"] == 0        # not counted a second time
-        assert row["net_margin"] == 500000 - FINAL
+        assert row["net_margin"] == 500000 - ACTUAL
         # The wallet itself still shows the money gone — the debit is real.
         assert row["float_balance"] == 195000
     asyncio.run(run())

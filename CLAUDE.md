@@ -78,6 +78,12 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   spreadsheets (`backend/go_live_import.py`), previews, then archives and
   replaces the company's business data (undoable; `data_resets`,
   `data_reset_archive`) and can add starter flows. See `docs/GO_LIVE_DATA.md`.
+  The Receipts & Payments monthly sheets load as Cashbook wallets/entries
+  (`_cash_books`; `pnl_exclude` marks transfers and PO-covered vendor
+  payments). P&L is stated before GST (`lc.net_of_gst`, `po_net`, `mo_net`;
+  sales carry `tax_total`). See `docs/FINANCE.md`.
+- Furniture quotes can print as a picture price list (`quote.print_layout =
+  "pricelist"`, line `mrp` before GST beside the offer rate).
 
 ## Core rules (never break)
 - Every document carries `tenant_id` (the company/tenant) and `division`.

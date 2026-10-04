@@ -179,12 +179,18 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
     layout = preset.get("layout") or "area"
     dw = layout == "openings"
     catalogue = layout == "catalogue"
+    # Picture price list (Furniture, e.g. the Ar Swathi quote): a large photo,
+    # MRP beside the offer price and what the customer saves.
+    pricelist = layout == "pricelist"
     spec_fields = preset.get("spec_fields") or []
     any_dims = dw or any(float(l.get("w") or 0) > 0 and float(l.get("h") or 0) > 0 for l in lines)
     builder = layout == "builder"
     if builder:
         hdr = ["S.No", "Description", "Dimensions", "Qty", "Rate (₹)", "Disc %", "GST %", "Amount (₹)"]
         cw = [.06, .34, .14, .06, .12, .07, .07, .14]
+    elif pricelist:
+        hdr = ["Sl No", "Product", "Description", "MRP (₹)", "Offer Price (₹)", "Qty", "Amount (₹)"]
+        cw = [.05, .30, .21, .11, .12, .06, .15]
     elif catalogue:
         hdr = ["Sl No", "Product Picture", "Model Number", "Description", "Unit Price", "Qty", "Amount"]
         cw = [.06, .18, .12, .30, .13, .07, .14]
@@ -212,6 +218,15 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
                     P(_num(l.get("qty"), 0), centre), P(inr(l.get("rate"), 2), right),
                     P(f"{float(l.get('discount_pct') or 0):g}%", centre),
                     P(f"{float(l.get('gst_rate') or 0):g}%", centre), P(inr(l.get("amount"), 2), right)]
+        if pricelist:
+            img = _image(l.get("image_url"), cw[1] * width - 4, 55 * mm)
+            mrp, offer = float(l.get("mrp") or 0), float(l.get("rate") or 0)
+            save = f"<br/><font color='#1b7a3a'>Save {round(100 * (mrp - offer) / mrp):g}%</font>" \
+                if mrp > offer > 0 else ""
+            return [P(str(n), centre), img or P("", centre), P(cell, small),
+                    P(f"<strike>{inr(mrp, 2)}</strike>" if mrp > offer > 0 else (inr(mrp, 2) if mrp else "—"), right),
+                    P(f"<b>{inr(offer, 2)}</b>{save}", right), P(_num(l.get("qty"), 0), centre),
+                    P(inr(l.get("amount"), 2), right)]
         if catalogue:
             img = _image(l.get("image_url"), cw[1] * width - 4, 32 * mm)
             return [P(str(n), centre), img or P("", centre), P(e(l.get("model_no") or l.get("sku")), centre),

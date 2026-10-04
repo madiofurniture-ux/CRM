@@ -2440,6 +2440,8 @@ async def normalize_quote_template(doc: dict, existing: dict | None, user: dict)
                 raise HTTPException(status_code=403, detail=(
                     "Only an admin can remove or change a saved remark: "
                     + "; ".join(f'"{t[:60]}"' for t in missing[:3])))
+    if doc.get("print_layout") and doc["print_layout"] not in quotation_templates.PRINT_LAYOUTS:
+        raise HTTPException(status_code=400, detail=f"Unknown print layout '{doc['print_layout']}'")
     if existing is None and not doc.get("valid_until"):
         doc["valid_until"] = lc.quote_valid_until(doc.get("date"))
     if existing is None:
@@ -2688,16 +2690,23 @@ async def _quote_customer(quote: dict, user: dict) -> dict | None:
 
 async def _branded_quote_pdf(quote: dict, lines: list, user: dict) -> bytes:
     preset = _quote_preset(quote, user)
-    # Picture and model number from the stock item a line was picked from.
+    if quote.get("print_layout") in quotation_templates.PRINT_LAYOUTS:
+        preset = {**preset, "layout": quote["print_layout"]}
+    # Picture, model number and MRP from the stock item a line was picked from.
     skus = sorted({l.get("sku") for l in lines if l.get("sku")})
     items = {i["sku"]: i async for i in db.inventory.find(
         tenancy.scope({"sku": {"$in": skus}}, "inventory", user),
-        {"_id": 0, "sku": 1, "model_no": 1, "image_url": 1})} if skus else {}
+        {"_id": 0, "sku": 1, "model_no": 1, "image_url": 1, "mrp": 1, "gst_pct": 1})} if skus else {}
     for l in lines:
         item = items.get(l.get("sku")) or {}
         l.setdefault("model_no", item.get("model_no") or "")
         if not l.get("image_url"):
             l["image_url"] = item.get("image_url") or ""
+        if not lc.money(l.get("mrp")) and lc.money(item.get("mrp")):
+            # Stock MRP includes GST; line rates are before GST (GST is added
+            # on the total), so the MRP printed beside them is too.
+            gst = lc.money(item.get("gst_pct")) if item.get("gst_pct") is not None else 18.0
+            l["mrp"] = round(lc.money(item["mrp"]) / (1 + gst / 100), 2)
     customer = await _quote_customer(quote, user)
     totals = _quote_totals(quote, lines, preset)
     view = _quote_view(quote, lines, preset)
@@ -7116,7 +7125,8 @@ def _quote_view(q: dict, all_lines: list, preset: dict | None = None) -> dict:
     return {"quote": q, "lines": lines, "subtotal": subtotal, "totals": totals, "versions": versions,
             "summary": summary,
             "preset": {k: preset.get(k) for k in ("division", "name", "dims", "round_to", "line_label",
-                                                   "spec_fields", "spec_defaults", "logo", "transport_label")}}
+                                                   "spec_fields", "spec_defaults", "logo", "transport_label",
+                                                   "print_layouts")}}
 
 
 @api.get("/quotes/{quote_id}/workspace")
@@ -7322,6 +7332,8 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id,
         "lead_id": quote.get("lead_id", ""),
         "by_user": user.get("name", ""), "value": value, "paid": 0, "balance": value,
+        # GST inside `value` (what the customer pays): P&L counts value − tax.
+        "tax_total": _gst_in(quote, value),
         "status": "PENDING", "stage": "Confirmed", "remarks": "",
         "line_items": [{k: v for k, v in l.items() if k != "_id"} for l in lines],
     }
@@ -7345,6 +7357,7 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         owned = tenancy.scope({"id": adopted["id"]}, "projects", user)
         patch = {"sale_id": sale["id"], "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id,
                  "value": value}
+        patch["tax_total"] = sale["tax_total"]
         if not adopted.get("milestones"):
             patch["milestones"] = ops.division_milestones(adopted.get("division") or quote.get("division"))
         await db.projects.update_one(owned, {"$set": patch})
@@ -7360,6 +7373,7 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
         "project_no": lc.next_project_no(existing_projects),
         "customer": quote.get("customer", ""), "phone": quote.get("phone", ""),
         "division": quote.get("division", "Furniture"), "value": value, "paid": 0,
+        "tax_total": sale["tax_total"],
         "stage": "Survey", "site_address": "", "assigned_engineer": "",
         "start_date": lc.today_iso(), "target_date": "", "remarks": "",
         "quote_ref": quote.get("quote_no", ""), "quote_id": quote_id, "sale_id": sale["id"],
@@ -7375,6 +7389,14 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
     project = await _provision_project_wallet_and_incentives(project, quote, user)
 
     return sale, project
+
+
+def _gst_in(quote: dict, value: float) -> float:
+    """The GST inside a sale's value, when the value is the quote's grand
+    total (the usual conversion); 0 when it can't be told."""
+    tax = lc.money(quote.get("tax_total"))
+    grand = lc.money(quote.get("grand_total"))
+    return round(tax, 2) if tax > 0 and grand and abs(grand - value) < 1 else 0.0
 
 
 async def _ensure_project_artifacts(project: dict, user: dict) -> dict:
@@ -8869,7 +8891,7 @@ async def _go_live_build(named_files: list, user: dict) -> dict:
         raise HTTPException(status_code=400, detail=str(e))
     if not any(result["counts"].values()):
         raise HTTPException(status_code=400, detail="None of the sheets were recognised: expected Visitors, "
-                                                    "MF Quotes, MF Sale, Purchase Order or Closing Stock")
+                                                    "MF Quotes, MF Sale, Purchase Order, Closing Stock or the monthly cash books")
     # Stages are spelled the way this company's workflow spells them; any
     # the workflow doesn't have are reported rather than silently kept.
     warnings = []
@@ -9273,6 +9295,124 @@ async def _imported_pos_signed_off(user: dict) -> int:
     return res.modified_count + res2.modified_count
 
 
+async def _go_live_cash_books(named_files: list, user: dict) -> dict:
+    """Add the Receipts & Payments cash books (wallets + their entries) to a
+    company whose data was loaded before they were read. Additive: nothing
+    else is touched, and a company that already has imported cash books is
+    left alone."""
+    if await db.cashbooks.find_one(tenancy.scope({"source": "go-live import"}, "cashbooks", user), {"_id": 1}):
+        return {"skipped": "cash books were already imported"}
+    try:
+        sheets = await asyncio.to_thread(gl.load_workbooks, named_files)
+        result = await asyncio.to_thread(gl.build, sheets)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    books, entries = result["records"]["cashbooks"], result["records"]["cashbook_entries"]
+    if not books:
+        return {"books": 0, "entries": 0}
+    # Customer receipts link to the quotation by number: map the loader's
+    # ids onto the quotes already in the CRM.
+    loaded_no = {q["id"]: q.get("quote_no") for q in result["records"]["quotes"]}
+    have = {q["quote_no"]: q["id"] for q in await db.quotes.find(
+        tenancy.scope({}, "quotes", user), {"_id": 0, "id": 1, "quote_no": 1}).to_list(50000) if q.get("quote_no")}
+    # Vendors already in the CRM count too: paying one is not a new expense
+    # (its cost is in the PO), whichever books this run happened to read.
+    vendor_rows = await db.vendors.find(tenancy.scope({}, "vendors", user), {"_id": 0, "id": 1, "name": 1}).to_list(5000)
+    known = {gl.vendor_key(v["name"]): v["id"] for v in vendor_rows if v.get("name")}
+    costed = gl.costed_vendor_years(await db.purchase_orders.find(
+        tenancy.scope({}, "purchase_orders", user),
+        {"_id": 0, "vendor_id": 1, "date": 1, "grand_total": 1, "status": 1}).to_list(50000))
+    sale_no = {x["id"]: x.get("sale_no") for x in result["records"]["sales"]}
+    have_sales = {x["sale_no"]: x["id"] for x in await db.sales.find(
+        tenancy.scope({}, "sales", user), {"_id": 0, "id": 1, "sale_no": 1}).to_list(50000) if x.get("sale_no")}
+    for e in entries:
+        e["quote_id"] = have.get(loaded_no.get(e.get("quote_id")), "") if e.get("quote_id") else ""
+        e["sale_id"] = have_sales.get(sale_no.get(e.get("sale_id")), "") if e.get("sale_id") else ""
+        vid = known.get(gl.vendor_key(e.get("category") or ""))
+        if e["type"] == "CASH_OUT" and e.get("category") != "Vendor payment" and vid:
+            e["remark"] = " · ".join(x for x in (e["category"], e.get("remark")) if x)[:500]
+            e["category"] = "Vendor payment"
+            e["pnl_exclude"] = (vid, gl.fin_year(str(e.get("date") or ""))) in costed
+    for coll, rows in (("cashbooks", books), ("cashbook_entries", entries)):
+        docs = []
+        for d in rows:
+            d = dict(d)
+            stamp_fy(d, coll)
+            tenancy.stamp(d, coll, user)
+            docs.append(d)
+        for i in range(0, len(docs), 500):
+            await db[coll].insert_many(docs[i:i + 500])
+    await _audit("go_live_cash_books", user, f"Imported {len(books)} cash books, {len(entries)} entries")
+    return {"books": len(books), "entries": len(entries),
+            "report": [r for r in result["report"] if gl.ledger_month(r["sheet"])]}
+
+
+@api.post("/admin/go-live/sharepoint/cash-books")
+async def go_live_sharepoint_cash_books(user: dict = Depends(require_admin)):
+    return await _go_live_cash_books(await _go_live_sharepoint_files(), user)
+
+
+@api.post("/admin/go-live/cash-books")
+async def go_live_cash_books_upload(files: List[UploadFile] = File(...), user: dict = Depends(require_admin)):
+    return await _go_live_cash_books(await _go_live_files(files), user)
+
+
+async def go_live_auto_cash_books():
+    """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set)."""
+    run_key = "cash-books-1"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
+    if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    await db.go_live_picture_runs.insert_one(
+        tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
+    try:
+        out = await _go_live_cash_books(await _go_live_sharepoint_files(), system_user)
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key},
+                                                 {"$set": {"result": {k: v for k, v in out.items() if k != "report"}}})
+        logger.info("Go-live cash books for %s: %s", tid, {k: v for k, v in out.items() if k != "report"})
+        return out
+    except HTTPException as e:
+        logger.warning("Go-live cash books failed: %s", e.detail)
+    except Exception as e:  # never take the server down over this
+        logger.exception("Go-live cash books failed: %s", e)
+    await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key, "result": {"$exists": False}})
+    return None
+
+
+async def go_live_auto_sale_gst():
+    """Once per company at startup: sales converted from quotes before the
+    sale recorded its GST get it from their quote (P&L is before GST)."""
+    run_key = "sale-gst-1"
+    tid = os.environ.get("GO_LIVE_SHAREPOINT_TENANT", DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    system_user = {"id": "system-go-live", "name": "Go-live import", "role": "admin", "tenant_id": tid}
+    if await db.go_live_picture_runs.find_one({"tenant_id": tid, "run_key": run_key}):
+        return {"skipped": f"run '{run_key}' already happened"}
+    await db.go_live_picture_runs.insert_one(
+        tenancy.stamp({"id": new_id(), "run_key": run_key, "at": now_iso()}, "go_live_picture_runs", system_user))
+    fixed = 0
+    try:
+        sales = await db.sales.find(tenancy.scope({"quote_id": {"$nin": ["", None]}, "tax_total": {"$exists": False},
+                                                   "source": {"$ne": "go-live import"}}, "sales", system_user),
+                                    {"_id": 0, "id": 1, "quote_id": 1, "value": 1}).to_list(20000)
+        for sale in sales:
+            quote = await db.quotes.find_one(tenancy.scope({"id": sale["quote_id"]}, "quotes", system_user), {"_id": 0})
+            tax = _gst_in(quote or {}, lc.money(sale.get("value")))
+            if not tax:
+                continue
+            await db.sales.update_one(tenancy.scope({"id": sale["id"]}, "sales", system_user), {"$set": {"tax_total": tax}})
+            await db.projects.update_many(tenancy.scope({"sale_id": sale["id"]}, "projects", system_user),
+                                          {"$set": {"tax_total": tax}})
+            fixed += 1
+        await db.go_live_picture_runs.update_one({"tenant_id": tid, "run_key": run_key}, {"$set": {"result": {"fixed": fixed}}})
+        logger.info("Sale GST for %s: %s sales", tid, fixed)
+        return {"fixed": fixed}
+    except Exception as e:  # never take the server down over this
+        logger.exception("Sale GST backfill failed: %s", e)
+        await db.go_live_picture_runs.delete_many({"tenant_id": tid, "run_key": run_key})
+    return None
+
+
 async def go_live_auto_po_signoff():
     """Once per company at startup (GO_LIVE_SHAREPOINT_RUN set). Its own run
     key: quote-notes-1 had already run in production when this was added."""
@@ -9582,6 +9722,8 @@ async def startup():
             await go_live_auto_projects()
             await go_live_auto_quote_notes()
             await go_live_auto_po_signoff()
+            await go_live_auto_cash_books()
+            await go_live_auto_sale_gst()
         asyncio.create_task(_auto())
 
 

@@ -53,7 +53,7 @@ export default function ProjectPnL() {
     <>
       <Topbar
         title="Project P&L"
-        subtitle="Contract revenue vs. approved petty cash spend, by project"
+        subtitle="Contract revenue vs. vendor cost and approved spend, by project · before GST"
         actions={
           <button onClick={exportCsv} title="Export CSV" className="p-2 rounded-lg hover:bg-[var(--surface-2)] text-[var(--ink-2)]" data-testid="pnl-export">
             <Download size={16} />
