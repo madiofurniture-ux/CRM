@@ -82,3 +82,16 @@ Enforcement, all server-side:
 
 A tenant record without `plan` (older installs) counts as an active owner
 account, so nothing existing changes.
+
+## Login for many companies
+
+- Sign in by username works on every install ("Sign in with your username");
+  usernames are unique across the platform, so the account decides the company.
+- PINs are 4–6 digits. The pad shows a Sign in button until a user's first
+  successful login on a device, then submits on the last digit as before.
+- `LOGIN_PROFILE_TILES=false` (backend env) stops the login page listing the
+  owner company's staff profiles — set it on a shared SaaS domain.
+- `REACT_APP_PRODUCT_NAME` / `REACT_APP_PRODUCT_TAGLINE` (frontend build env)
+  brand the login page; the hero is drawn in theme colours, no external image.
+- A new company's admin sees a "Finish setting up" card on Home until the
+  Business Setup checklist reaches 100%.

@@ -9,6 +9,47 @@ import { toast, Toaster } from "sonner";
 // (tenant-specific branding shows post-login, in Sidebar). This is a
 // deployment-wide product name, overridable per install without a code change.
 const PRODUCT_NAME = process.env.REACT_APP_PRODUCT_NAME || "CRM";
+const PRODUCT_TAGLINE = process.env.REACT_APP_PRODUCT_TAGLINE || "Enquiry · Quotation · Delivery · Payment";
+
+// PINs are 4–6 digits (POST /tenants and user creation accept "at least 4").
+// After a first successful sign-in the device remembers that user's PIN
+// length, so the pad submits by itself on the last digit as it always has.
+const PIN_MIN = 4;
+const PIN_MAX = 6;
+const pinLenKey = (u) => `crm_pin_len:${u}`;
+const knownPinLength = (u) => {
+  try { return Number(localStorage.getItem(pinLenKey(u))) || 0; } catch { return 0; }
+};
+
+// The login hero: the product's own Stage Path chevrons in theme colours —
+// no third-party image to break, hot-link or slow the first paint.
+function Hero() {
+  const steps = [
+    { label: "Enquiry", cls: "fill-[var(--color-success)]" },
+    { label: "Site visit", cls: "fill-[var(--color-success)]" },
+    { label: "Quotation", cls: "fill-[var(--color-primary)]" },
+    { label: "Order", cls: "fill-white/25" },
+    { label: "Paid", cls: "fill-white/25" },
+  ];
+  const w = 118;
+  return (
+    <svg viewBox="0 0 560 64" className="w-full max-w-lg" aria-hidden="true">
+      {steps.map((st, i) => {
+        const x = i * (w - 6);
+        const notch = i === 0 ? `${x},0` : `${x},0 ${x + 12},32`;
+        const pts = i === 0
+          ? `${x},0 ${x + w - 12},0 ${x + w},32 ${x + w - 12},64 ${x},64`
+          : `${notch} ${x},64 ${x + w - 12},64 ${x + w},32 ${x + w - 12},0`;
+        return (
+          <g key={st.label}>
+            <polygon points={pts} className={st.cls} />
+            <text x={x + w / 2 + (i ? 4 : -2)} y="37" textAnchor="middle" className="fill-white" fontSize="13" fontWeight="600">{st.label}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
 
 export default function Login() {
   const { user, login } = useAuth();
@@ -24,6 +65,7 @@ export default function Login() {
   const [cards, setCards] = useState([]);
   const [loadingCards, setLoadingCards] = useState(true);
   const [typedUser, setTypedUser] = useState("");
+  const [useUsername, setUseUsername] = useState(false);
 
   useEffect(() => {
     if (user) nav("/", { replace: true });
@@ -38,8 +80,9 @@ export default function Login() {
     return () => { alive = false; };
   }, []);
 
+  const autoLen = selected ? knownPinLength(selected.username) : 0;
   useEffect(() => {
-    if (selected && pin.length === 4) {
+    if (selected && autoLen && pin.length === autoLen) {
       doLogin();
     }
     // eslint-disable-next-line
@@ -51,6 +94,7 @@ export default function Login() {
     setError("");
     try {
       await login(selected.username, pin);
+      try { localStorage.setItem(pinLenKey(selected.username), String(pin.length)); } catch { /* private mode */ }
       toast.success(`Welcome back, ${selected.name}`);
       nav(loc.state?.from || "/", { replace: true });
     } catch (e) {
@@ -65,7 +109,7 @@ export default function Login() {
     if (submitting) return;
     setError("");
     if (k === "del") setPin((p) => p.slice(0, -1));
-    else if (pin.length < 4) setPin((p) => p + k);
+    else if (pin.length < PIN_MAX) setPin((p) => p + k);
   };
 
   // The PIN pad is on-screen buttons, not a text input, so a physical keyboard
@@ -76,6 +120,7 @@ export default function Login() {
     const onKey = (e) => {
       if (e.key >= "0" && e.key <= "9") press(e.key);
       else if (e.key === "Backspace" || e.key === "Delete") press("del");
+      else if (e.key === "Enter" && pin.length >= PIN_MIN && !submitting) doLogin();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -88,26 +133,23 @@ export default function Login() {
 
       {/* Left: hero */}
       <div className="hidden lg:flex w-1/2 relative items-end p-12">
-        <img
-          src="https://images.unsplash.com/photo-1682184805271-11671b7ecf4c?crop=entropy&cs=srgb&fm=jpg&q=85&w=1400"
-          alt=""
-          className="absolute inset-0 w-full h-full object-cover"
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-        <div className="relative z-10 text-white max-w-md">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-11 h-11 rounded-xl bg-[var(--brand)] flex items-center justify-center font-heading font-bold text-lg">M</div>
+        <div className="absolute inset-0 bg-[var(--stage-current,#014486)]" />
+        <div className="absolute inset-0 opacity-[0.07]" style={{ backgroundImage: "radial-gradient(circle, #fff 1px, transparent 1px)", backgroundSize: "24px 24px" }} />
+        <div className="relative z-10 text-white max-w-lg">
+          <div className="flex items-center gap-3 mb-10">
+            <div className="w-11 h-11 rounded-xl bg-white text-[var(--stage-current,#014486)] flex items-center justify-center font-heading font-bold text-lg">{PRODUCT_NAME.slice(0, 1)}</div>
             <div>
               <div className="font-heading text-xl font-bold tracking-tight">{PRODUCT_NAME}</div>
-              <div className="text-[11px] uppercase tracking-[0.2em] text-white/70">Furniture · Paints · D&W</div>
+              <div className="text-[11px] uppercase tracking-[0.2em] text-white/70">{PRODUCT_TAGLINE}</div>
             </div>
           </div>
-          <h2 className="font-heading text-4xl font-bold leading-tight mb-3">
-            Every visitor.<br />Every quote.<br />Every deal — captured.
+          <Hero />
+          <h2 className="font-heading text-4xl font-bold leading-tight mt-10 mb-3">
+            Every enquiry.<br />Every quotation.<br />Every rupee — tracked.
           </h2>
           <p className="text-white/80 text-sm leading-relaxed">
-            Built for showrooms that move fast. Track walk-ins, manage pipelines,
-            quote on the floor, and watch your inventory in real time.
+            GST-ready quotations and invoices, WhatsApp follow-ups, site and delivery tracking,
+            and the numbers behind them — set up for your trade in minutes.
           </p>
         </div>
       </div>
@@ -119,17 +161,17 @@ export default function Login() {
 
         <div className="w-full max-w-md relative z-10">
           <div className="lg:hidden mb-8 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold">M</div>
+            <div className="w-10 h-10 rounded-xl bg-[var(--brand)] flex items-center justify-center text-white font-heading font-bold">{PRODUCT_NAME.slice(0, 1)}</div>
             <div className="font-heading text-lg font-bold">{PRODUCT_NAME}</div>
           </div>
 
           {!selected ? (
             <div className="fadeup">
               <h1 className="font-heading text-3xl font-bold tracking-tight text-[var(--ink)] mb-1">Welcome back</h1>
-              <p className="text-[var(--ink-2)] text-sm mb-8">Select your profile to continue</p>
+              <p className="text-[var(--ink-2)] text-sm mb-8">{cards.length && !useUsername ? "Select your profile to continue" : "Sign in to your company's workspace"}</p>
               {loadingCards ? (
                 <div className="text-sm text-[var(--ink-3)]">Loading profiles…</div>
-              ) : cards.length ? (
+              ) : cards.length && !useUsername ? (
                 <div className="grid grid-cols-2 gap-3" data-testid="role-cards">
                   {cards.map((r) => (
                     <button
@@ -179,8 +221,14 @@ export default function Login() {
                   </button>
                 </form>
               )}
-              <div className="mt-8 text-xs text-[var(--ink-3)] text-center">
-                Ask your administrator for your PIN.
+              {cards.length > 0 && (
+                <button type="button" onClick={() => setUseUsername((v) => !v)} data-testid="toggle-username"
+                  className="mt-5 w-full text-sm font-semibold text-[var(--brand)] hover:underline">
+                  {useUsername ? "← Choose a profile instead" : "Sign in with your username"}
+                </button>
+              )}
+              <div className="mt-6 text-xs text-[var(--ink-3)] text-center">
+                Ask your administrator for your username and PIN.
               </div>
             </div>
           ) : (
@@ -205,9 +253,9 @@ export default function Login() {
                 </div>
               </div>
 
-              <div className="mb-2 text-xs uppercase tracking-[0.16em] text-[var(--ink-3)] font-semibold">Enter 4-digit PIN</div>
+              <div className="mb-2 text-xs uppercase tracking-[0.16em] text-[var(--ink-3)] font-semibold">Enter your PIN</div>
               <div className="flex gap-3 mb-6" data-testid="pin-dots">
-                {[0, 1, 2, 3].map((i) => (
+                {Array.from({ length: Math.max(PIN_MIN, autoLen || 0, pin.length + (pin.length < PIN_MAX ? 1 : 0)) }, (_, i) => i).map((i) => (
                   <div
                     key={i}
                     className={`flex-1 h-14 rounded-lg border-2 flex items-center justify-center font-heading font-bold text-2xl ${
@@ -242,6 +290,12 @@ export default function Login() {
                 ))}
               </div>
 
+              {!autoLen && (
+                <button type="button" onClick={doLogin} disabled={pin.length < PIN_MIN || submitting} data-testid="pin-submit"
+                  className="mt-4 w-full py-3 rounded-lg bg-[var(--brand)] text-white text-sm font-semibold disabled:opacity-50">
+                  Sign in
+                </button>
+              )}
               {error && (
                 <div className="mt-6 p-3 rounded-lg bg-[var(--danger-soft)] border border-[var(--danger)]/20 text-[var(--danger)] text-sm" data-testid="login-error">
                   {error}

@@ -10,6 +10,7 @@ import SectionCard from "@/components/SectionCard";
 import SecondaryButton from "@/components/SecondaryButton";
 import ErrorState from "@/components/ErrorState";
 import EmptyState from "@/components/EmptyState";
+import SetupNudge from "@/components/SetupNudge";
 
 function greeting(hour) {
   if (hour < 12) return "Good morning";
@@ -135,6 +136,8 @@ export default function CommandCentre() {
             </SecondaryButton>
           }
         />
+
+        <SetupNudge />
 
         {error ? (
           <ErrorState

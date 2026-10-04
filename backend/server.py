@@ -295,6 +295,11 @@ async def login_roles():
     Display fields only — never pin_hash, and never `pages`, which would tell an
     unauthenticated caller exactly which screens are worth attacking.
     """
+    # A shared SaaS login page should not list one company's staff to
+    # everyone: LOGIN_PROFILE_TILES=false hides the tiles (sign in by
+    # username). On by default so the original install keeps its kiosk login.
+    if os.environ.get("LOGIN_PROFILE_TILES", "true").strip().lower() in ("0", "false", "no", "off"):
+        return []
     out = []
     async for u in db.users.find(
             {"tenant_id": DEFAULT_TENANT},

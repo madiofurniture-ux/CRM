@@ -101,3 +101,12 @@ def test_only_the_owner_manages_plans():
         with pytest.raises(HTTPException):
             await server.platform_update_tenant("acme", {"plan": "owner"}, user=OWNER)
     run(go())
+
+
+def test_login_tiles_can_be_switched_off(monkeypatch):
+    async def go():
+        await server.db.users.insert_one({"username": "admin", "name": "Admin", "tenant_id": server.DEFAULT_TENANT})
+        assert len(await server.login_roles()) == 1
+        monkeypatch.setenv("LOGIN_PROFILE_TILES", "false")
+        assert await server.login_roles() == []
+    run(go())
