@@ -669,9 +669,9 @@ def next_invoice_no(existing: Iterable[dict], prefix: str, fy: str) -> str:
 
 
 def is_interstate(place_of_supply: Any, home_state: Any) -> bool:
-    pos = str(place_of_supply or "").strip().lower()
-    home = str(home_state or "").strip().lower()
-    return bool(pos and home and pos != home)
+    """Compared by GST state code, so 'TS', '36' and 'Telangana' agree."""
+    import india
+    return india.is_interstate(place_of_supply, home_state)
 
 
 def invoice_payment_state(total: Any, paid: Any, status: Any) -> dict:

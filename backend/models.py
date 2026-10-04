@@ -1312,6 +1312,19 @@ class OfficeSettings(BaseModel):
     invoice_prefix: Optional[str] = "MAD"
     # GST registration state: a place of supply outside it is interstate (IGST).
     home_state: Optional[str] = "Telangana"
+    # Statutory and contact details printed on invoices and quotations; set
+    # from Admin → Business Setup (india.py validates GSTIN / PAN / PIN / IFSC).
+    legal_name: Optional[str] = ""
+    trade_name: Optional[str] = ""
+    pan: Optional[str] = ""
+    pincode: Optional[str] = ""
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    website: Optional[str] = ""
+    bank_name: Optional[str] = ""
+    bank_account_no: Optional[str] = ""
+    bank_ifsc: Optional[str] = ""
+    upi_id: Optional[str] = ""
 
 
 # ------- Tenant business profile: per-tenant division roster, so a sister
@@ -1352,14 +1365,39 @@ DEFAULT_DIVISIONS = [
 ]
 
 
+# The lead-source picklist a tenant starts with; industry packs replace it.
+DEFAULT_LEAD_SOURCES = ["Walk-in", "Architect", "Referral", "Website", "WhatsApp", "Instagram",
+                        "Facebook", "Google", "Phone", "Existing Customer", "Social Media",
+                        "Site Visit", "Cold Call", "Other"]
+
+
 class TenantBusinessProfile(BaseModel):
     model_config = ConfigDict(extra="ignore")
     divisions: List[Division] = Field(default_factory=lambda: [d.model_copy() for d in DEFAULT_DIVISIONS])
+    lead_sources: List[str] = Field(default_factory=lambda: list(DEFAULT_LEAD_SOURCES))
+    industry: Optional[str] = ""          # industry_packs.PACKS id this tenant started from
+    default_terms: Optional[str] = ""     # quotation terms a new quote starts with
 
 
 class TenantBusinessProfileUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
     divisions: List[Division]
+    lead_sources: Optional[List[str]] = None
+    default_terms: Optional[str] = None
+
+    @field_validator("lead_sources")
+    @classmethod
+    def _clean_sources(cls, v):
+        if v is None:
+            return v
+        out = []
+        for s in v:
+            s = str(s or "").strip()[:60]
+            if s and s.lower() not in {x.lower() for x in out}:
+                out.append(s)
+        if not out:
+            raise ValueError("Keep at least one lead source")
+        return out
 
 
 # ------- Projects Execution -------

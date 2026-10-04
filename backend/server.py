@@ -54,6 +54,8 @@ import flows as flowlib
 import analytics as an
 import expenses as ex
 import finance_lineage as fl
+import india
+import industry_packs as packs
 from models import TallyConnectionUpdate
 from auth import hash_pin, verify_pin, create_token, get_current_user, require_admin
 from models import (
@@ -913,6 +915,8 @@ ALL_MODULE_IDS = [
     # Routed pages that were never listed here, so every tenant (admins
     # included) got "No access" on them.
     "audit-trail", "data-health", "discussions", "record-chain",
+    # Business Setup wizard (industry packs, GST profile) — industry_packs.py.
+    "setup",
 ]
 
 # Entity/branding config layered onto a tenant doc — additive fields, not a
@@ -932,7 +936,8 @@ RETIRED_MODULE_IDS = {"requirements", "configurator"}
 # switched ON for it rather than silently hidden (the payroll-menu defect).
 # Every module id added after seen_modules tracking began goes in this tuple.
 MODULES_ADDED_AFTER_TRACKING = ("calls", "analytics", "expenses", "pnl", "flows", "go-live",
-                                "audit-trail", "data-health", "discussions", "record-chain")
+                                "audit-trail", "data-health", "discussions", "record-chain",
+                                "setup")
 MODULES_BEFORE_SEEN_TRACKING = [m for m in ALL_MODULE_IDS if m not in MODULES_ADDED_AFTER_TRACKING]
 
 
@@ -1087,10 +1092,169 @@ async def tenant_create(payload: dict, user: dict = Depends(require_admin)):
         "icon": "AD", "color": "#3A3F3A", "pages": None,
         "tenant_id": tid, "created_at": now_iso(),
     })
+    # An industry pack gives the new business its own divisions, lead stages,
+    # sources and modules on day one instead of a copy of MADIO's.
+    pack_report = None
+    pack_id = str(payload.get("industry") or "").strip()
+    if pack_id:
+        try:
+            pack_report = await packs.apply_pack(
+                db, {"tenant_id": tid, "role": "admin", "name": "Platform"}, pack_id,
+                all_module_ids=ALL_MODULE_IDS, now=now_iso())
+        except ValueError as e:
+            pack_report = {"error": str(e)}
     # PIN is returned once, at creation, so the operator can hand it over.
     return {"tenant": {"id": tid, "name": name},
-            "admin_username": admin_user, "admin_pin": pin,
+            "admin_username": admin_user, "admin_pin": pin, "industry_pack": pack_report,
             "note": "Give this PIN to the customer and have them change it."}
+
+
+# ══════════════════════════════════════════════════════════════════
+# BUSINESS SETUP — industry starter packs, GST/company profile and the
+# go-live checklist (Admin → Business Setup, frontend/src/pages/Setup.jsx).
+# Indian rules (GSTIN checksum, states, amounts in words) live in india.py.
+# ══════════════════════════════════════════════════════════════════
+@api.get("/india/states")
+async def india_states(user: dict = Depends(get_current_user)):
+    return [{"code": c, "name": n} for c, n in india.GST_STATES.items()]
+
+
+@api.get("/india/gstin/{gstin}")
+async def india_gstin(gstin: str, user: dict = Depends(get_current_user)):
+    """Offline GSTIN check: format, state code and check digit."""
+    return india.validate_gstin(gstin)
+
+
+@api.get("/india/amount-in-words")
+async def india_amount_words(amount: float, user: dict = Depends(get_current_user)):
+    return {"amount": amount, "words": india.amount_in_words(amount),
+            "formatted": india.format_inr(amount, 2)}
+
+
+@api.get("/setup/packs")
+async def setup_packs(user: dict = Depends(get_current_user)):
+    return {"packs": packs.list_packs(ALL_MODULE_IDS),
+            "bundles": [{"id": k, **v} for k, v in packs.BUNDLES.items()],
+            "core_modules": [m for m in packs.CORE_MODULES if m in ALL_MODULE_IDS]}
+
+
+@api.post("/setup/apply-pack")
+async def setup_apply_pack(payload: dict, user: dict = Depends(require_admin)):
+    """Apply an industry pack to the caller's own company. Additive and safe
+    on live data: see industry_packs.apply_pack."""
+    pack_id = str((payload or {}).get("pack") or "").strip()
+    try:
+        report = await packs.apply_pack(
+            db, user, pack_id, all_module_ids=ALL_MODULE_IDS,
+            replace_divisions=bool(payload.get("replace_divisions", True)),
+            replace_lead_workflow=bool(payload.get("replace_lead_workflow", True)),
+            set_modules=bool(payload.get("set_modules", True)), now=now_iso())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await _audit("industry_pack_applied", user, pack_id)
+    return report
+
+
+@api.put("/setup/company")
+async def setup_company(payload: dict, user: dict = Depends(require_admin)):
+    """The company's statutory profile: legal name, GSTIN (state and PAN are
+    read from it), address, PIN, contact and bank details. Writes the same
+    office record invoices and quotations print from."""
+    if not tenancy.tenant_of(user):
+        raise HTTPException(status_code=403, detail="No company on this account")
+    current = await _get_settings(user)
+    data = {k: v for k, v in current.items() if k in OfficeSettings.model_fields}
+    text_fields = ("name", "legal_name", "trade_name", "address", "pincode", "phone", "email",
+                   "website", "bank_name", "bank_account_no", "bank_ifsc", "upi_id",
+                   "invoice_prefix", "home_state", "pan", "gstin")
+    for k in text_fields:
+        if k in payload:
+            data[k] = str(payload[k] or "").strip()
+    errors = {}
+    if data.get("gstin"):
+        g = india.validate_gstin(data["gstin"])
+        if not g["valid"]:
+            errors["gstin"] = g["error"]
+        else:
+            data["gstin"] = g["gstin"]
+            data["home_state"] = g["state"]
+            data["pan"] = g["pan"]
+    if data.get("home_state"):
+        st = india.state_name(data["home_state"])
+        if not st:
+            errors["home_state"] = "Pick a state from the GST list"
+        else:
+            data["home_state"] = st
+    if data.get("pan"):
+        data["pan"] = data["pan"].upper()
+        if not india.validate_pan(data["pan"]):
+            errors["pan"] = "A PAN looks like ABCDE1234F"
+    if data.get("pincode") and not india.validate_pincode(data["pincode"]):
+        errors["pincode"] = "A PIN code has 6 digits and does not start with 0"
+    if data.get("bank_ifsc"):
+        data["bank_ifsc"] = data["bank_ifsc"].upper()
+        if not india.validate_ifsc(data["bank_ifsc"]):
+            errors["bank_ifsc"] = "An IFSC looks like HDFC0001234"
+    if data.get("phone"):
+        mobile = india.normalize_mobile(data["phone"])
+        if mobile:
+            data["phone"] = mobile
+    if data.get("email") and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", data["email"]):
+        errors["email"] = "Not an email address"
+    if errors:
+        raise HTTPException(status_code=400, detail={"message": "Please fix the highlighted fields",
+                                                     "fields": errors})
+    data = OfficeSettings(**data).model_dump()
+    await db.settings.update_one(tenancy.scope({"key": "office"}, "settings", user),
+                                 {"$set": tenancy.stamp({"key": "office", **data}, "settings", user)},
+                                 upsert=True)
+    if data.get("name"):
+        await db.tenants.update_one({"id": tenancy.tenant_of(user)},
+                                    {"$set": {"display_name": data.get("trade_name") or data["name"]}})
+    await _audit("company_profile_updated", user, data.get("gstin") or data.get("name") or "")
+    return data
+
+
+@api.get("/setup/status")
+async def setup_status(user: dict = Depends(get_current_user)):
+    """The go-live checklist: what this company has set up and what's left,
+    each with the screen that fixes it."""
+    office = await _get_settings(user)
+    profile = await _get_business_profile(user)
+    tid = tenancy.tenant_of(user)
+    tenant = await db.tenants.find_one({"id": tid}, {"_id": 0}) or {}
+
+    async def has(coll: str, q: dict | None = None) -> bool:
+        return bool(await db[coll].find_one(tenancy.scope(dict(q or {}), coll, user), {"_id": 1}))
+
+    users = await db.users.count_documents({"tenant_id": tid}) if tid else 0
+    steps = [
+        {"key": "company", "label": "Company & GST details", "to": "/admin/setup",
+         "done": bool(office.get("gstin") and office.get("address") and office.get("home_state")),
+         "hint": "Legal name, GSTIN, address and state — printed on every invoice."},
+        {"key": "industry", "label": "Choose your industry", "to": "/admin/setup",
+         "done": bool(profile.get("industry") or tenant.get("industry")),
+         "hint": "Sets divisions, lead stages, sources and modules for your trade."},
+        {"key": "divisions", "label": "Divisions & branding", "to": "/admin/business",
+         "done": bool(profile.get("divisions")), "hint": "Your business lines, colours and quote terms."},
+        {"key": "workflow", "label": "Lead stages", "to": "/admin/workflows",
+         "done": await has("workflows", {"entity": "lead"}), "hint": "Match the pipeline to how you sell."},
+        {"key": "team", "label": "Invite your team", "to": "/admin/teams",
+         "done": users > 1, "hint": "Give each salesperson their own login and role."},
+        {"key": "first_lead", "label": "Add your first lead", "to": "/leads",
+         "done": await has("leads"), "hint": "Or import a spreadsheet from Data Centre."},
+        {"key": "first_quote", "label": "Send your first quotation", "to": "/quotes",
+         "done": await has("quotes"), "hint": "GST-ready, branded, shareable on WhatsApp."},
+    ]
+    done = sum(1 for s in steps if s["done"])
+    return {"steps": steps, "done": done, "total": len(steps),
+            "percent": round(100 * done / len(steps)),
+            "industry": profile.get("industry") or tenant.get("industry") or "",
+            "company": {k: office.get(k, "") for k in ("name", "legal_name", "trade_name", "gstin",
+                                                      "home_state", "pan", "address", "pincode",
+                                                      "phone", "email", "website", "bank_name",
+                                                      "bank_account_no", "bank_ifsc", "upi_id",
+                                                      "invoice_prefix")}}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -5147,7 +5311,7 @@ async def get_business_profile(user: dict = Depends(get_current_user)):
 @api.put("/settings/business-profile")
 async def update_business_profile(payload: TenantBusinessProfileUpdate,
                                    user: dict = Depends(require_admin)):
-    data = payload.model_dump()
+    data = payload.model_dump(exclude_none=True)
     owned = tenancy.scope({}, "business_profiles", user)
     await db.business_profiles.update_one(owned, {"$set": data}, upsert=True)
     return await _get_business_profile(user)
