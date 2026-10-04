@@ -5,6 +5,7 @@ import { inrFull, fmtDate, todayIST } from "@/lib/format";
 import { toast } from "sonner";
 import { CheckCircle2, Circle, ClipboardList, IndianRupee, LifeBuoy, ListChecks, Plus, Trash2, Ruler } from "lucide-react";
 import AttachmentPanel from "@/components/AttachmentPanel";
+import StaffPicker from "@/components/StaffPicker";
 
 const err = (e, fallback) => e?.response?.data?.detail
   ? (typeof e.response.data.detail === "string" ? e.response.data.detail : fallback)
@@ -471,7 +472,10 @@ function ServiceTab({ project, data, reload }) {
                 {["Low", "Medium", "High", "Urgent"].map((p) => <option key={p}>{p}</option>)}
               </select>
             </label>
-            <Input label="Assign to" value={form.assigned_to} onChange={(v) => setForm({ ...form, assigned_to: v })} />
+            <label className="block">
+              <span className="block text-[10px] uppercase tracking-wider text-[var(--ink-3)] font-semibold mb-1">Assign to</span>
+              <StaffPicker value={form.assigned_to} onChange={(name) => setForm((f) => ({ ...f, assigned_to: name }))} />
+            </label>
             <Input label="Visit date" type="date" value={form.visit_date} onChange={(v) => setForm({ ...form, visit_date: v })} />
           </div>
           <div className="flex justify-end gap-2">

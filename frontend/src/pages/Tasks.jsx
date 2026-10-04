@@ -7,6 +7,7 @@ import { Check, Calendar, User, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Link, useSearchParams } from "react-router-dom";
 import CustomerProjectPicker from "@/components/CustomerProjectPicker";
+import StaffPicker from "@/components/StaffPicker";
 
 const PRIORITIES = ["Low", "Medium", "High"];
 const CATEGORIES = ["General", "Sales", "Site Visit", "Marketing", "Delivery", "Inventory", "Admin", "Procurement", "Finance"];
@@ -162,7 +163,7 @@ export default function Tasks() {
               </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Assign to</label>
-                <input value={form.assigned_to} onChange={(e) => setForm({ ...form, assigned_to: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" />
+                <StaffPicker value={form.assigned_to} onChange={(name) => setForm((f) => ({ ...f, assigned_to: name }))} testId="task-assign" />
               </div>
             </div>
             <div className="px-5 py-4 border-t flex justify-end gap-2">

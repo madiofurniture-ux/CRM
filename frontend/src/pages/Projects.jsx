@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 import ColumnFilters from "@/components/ColumnFilters";
 import useColumnFilters from "@/hooks/useColumnFilters";
+import StaffPicker from "@/components/StaffPicker";
 
 const COLUMNS = [
   { key: "project_no", label: "Project #", type: "text" },
@@ -578,21 +579,14 @@ export default function Projects() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Assigned Lead/Engineer</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Raghu MF"
-                    value={form.assigned_engineer}
-                    onChange={(e) => setForm({ ...form, assigned_engineer: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]"
-                  />
+                  <StaffPicker value={form.assigned_engineer} onChange={(name) => setForm((f) => ({ ...f, assigned_engineer: name }))} testId="project-engineer" />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Project Manager</label>
-                  <input type="text" value={form.project_manager || ""} onChange={(e) => setForm({ ...form, project_manager: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]" />
+                  <StaffPicker value={form.project_manager || ""} onChange={(name) => setForm((f) => ({ ...f, project_manager: name }))} testId="project-manager" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Architect / Designer</label>

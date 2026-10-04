@@ -22,6 +22,7 @@ const COLUMNS = [
   { key: "created_at", label: "Raised", type: "date" },
 ];
 import { LifeBuoy, Phone, MessageCircle, X, ShieldCheck } from "lucide-react";
+import StaffPicker from "@/components/StaffPicker";
 
 const STATUSES = ["OPEN", "ASSIGNED", "VISIT SCHEDULED", "IN PROGRESS", "WAITING", "RESOLVED", "CLOSED"];
 const OPEN = new Set(STATUSES.slice(0, 5));
@@ -232,7 +233,7 @@ function NewTicket({ projects, onClose, onSaved }) {
           </select>
         </Field>
         <Field label="Assign to">
-          <input className={inputCls} value={form.assigned_to} onChange={(e) => setForm({ ...form, assigned_to: e.target.value })} />
+          <StaffPicker value={form.assigned_to} onChange={(name) => setForm((f) => ({ ...f, assigned_to: name }))} />
         </Field>
         <Field label="Visit date">
           <input type="date" className={inputCls} value={form.visit_date} onChange={(e) => setForm({ ...form, visit_date: e.target.value })} />
@@ -290,7 +291,7 @@ function TicketDetail({ ticket, onClose, onSaved }) {
           </select>
         </Field>
         <Field label="Assigned to">
-          <input className={inputCls} value={form.assigned_to || ""} onChange={(e) => setForm({ ...form, assigned_to: e.target.value })} data-testid="ticket-assign" />
+          <StaffPicker value={form.assigned_to || ""} onChange={(name) => setForm((f) => ({ ...f, assigned_to: name }))} testId="ticket-assign" />
         </Field>
         <Field label="Visit date">
           <input type="date" className={inputCls} value={form.visit_date || ""} onChange={(e) => setForm({ ...form, visit_date: e.target.value })} />

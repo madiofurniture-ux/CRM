@@ -22,6 +22,7 @@ const COLUMNS = [
 ];
 import { Trash2, Edit2, Printer, X, Plus, IndianRupee } from "lucide-react";
 import ProductPicker, { StockBadge, rateFromMrp } from "@/components/ProductPicker";
+import StaffPicker from "@/components/StaffPicker";
 
 const HSN_OPTIONS = ["9403", "3208", "4418", "9401", "6304", "9405"];
 // Furniture/interiors line items are priced per piece, per square foot
@@ -233,7 +234,10 @@ export default function Invoices() {
                 <Fld l="Invoice No" v={form.invoice_no} oc={(v) => setForm({ ...form, invoice_no: v })} t2="inv-no" ph="Assigned on save" />
                 <Fld l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />
                 <Fld l="Due date" t="date" v={form.due_date} oc={(v) => setForm({ ...form, due_date: v })} />
-                <Fld l="By" v={form.by_user} oc={(v) => setForm({ ...form, by_user: v })} />
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-1">By</div>
+                  <StaffPicker value={form.by_user} onChange={(name) => setForm((f) => ({ ...f, by_user: name }))} />
+                </div>
                 <div className="col-span-2 md:col-span-3">
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] mb-1">Customer &amp; project</div>
                   <CustomerProjectPicker customerId={form.customer_id || ""} projectId={form.project_id || ""} allowNewProject={false}

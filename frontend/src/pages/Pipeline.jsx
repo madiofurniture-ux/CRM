@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Topbar from "@/components/Topbar";
 import api, { formatApiError } from "@/lib/api";
 import { inr, inrFull, fmtDate, todayIST } from "@/lib/format";
@@ -11,6 +11,8 @@ import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import useWorkflow from "@/hooks/useWorkflow";
+import CustomerProjectPicker from "@/components/CustomerProjectPicker";
+import StaffPicker from "@/components/StaffPicker";
 
 // Fallback only: columns come from the tenant's quotation workflow
 // (Admin → Workflows), loaded by useWorkflow in the component.
@@ -34,6 +36,9 @@ const emptyForm = {
   quote_no: "",
   date: todayIST(),
   customer: "",
+  customer_id: "",
+  project_id: "",
+  phone: "",
   division: "Furniture",
   by_user: "",
   stage: "New",
@@ -81,14 +86,9 @@ export default function Pipeline() {
   };
   useEffect(() => { load(); }, []);
 
-  const nextQuoteNo = useMemo(
-    () => `AF-${String(quotes.length + 1).padStart(4, "0")}`,
-    [quotes.length]
-  );
-
   const openNew = () => {
     setEditing(null);
-    setForm({ ...emptyForm, quote_no: nextQuoteNo });
+    setForm({ ...emptyForm });          // number assigned by the server on save
     setShowForm(true);
   };
 
@@ -98,6 +98,9 @@ export default function Pipeline() {
       quote_no: q.quote_no,
       date: q.date,
       customer: q.customer,
+      customer_id: q.customer_id || "",
+      project_id: q.project_id || "",
+      phone: q.phone || "",
       division: q.division,
       by_user: q.by_user || "",
       stage: q.stage,
@@ -108,8 +111,8 @@ export default function Pipeline() {
   };
 
   const save = async () => {
-    if (!form.customer.trim()) {
-      toast.error("Customer name is required");
+    if (!form.customer_id && !form.customer.trim()) {
+      toast.error("Pick the customer (or add a new one)");
       return;
     }
     setSaving(true);
@@ -317,7 +320,7 @@ export default function Pipeline() {
 
       {showForm && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)] w-full max-w-lg shadow-xl overflow-hidden">
+          <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)] w-full max-w-lg shadow-xl max-h-[92vh] overflow-y-auto">
             <div className="px-6 py-4 border-b border-[var(--color-border)] flex items-center justify-between bg-[var(--color-surface-muted)]">
               <h3 className="font-heading font-bold text-base text-[var(--color-text)]">
                 {editing ? "Edit Deal" : "New Deal"}
@@ -333,6 +336,7 @@ export default function Pipeline() {
                   <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Quote #</label>
                   <input
                     type="text"
+                    placeholder="Assigned on save"
                     value={form.quote_no}
                     onChange={(e) => setForm({ ...form, quote_no: e.target.value })}
                     className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] font-mono outline-none focus:border-[var(--color-primary)]"
@@ -352,15 +356,19 @@ export default function Pipeline() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Customer Name *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Krishna Reddy"
-                  value={form.customer}
-                  onChange={(e) => setForm({ ...form, customer: e.target.value })}
-                  className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)]"
-                  data-testid="deal-customer"
-                />
+                <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Customer &amp; project *</label>
+                {!form.customer_id && form.customer && (
+                  <div className="text-xs text-[var(--color-warning)] mb-1.5" data-testid="deal-unlinked">
+                    Typed as “{form.customer}” — not linked to a customer. Pick or add them below to link it.
+                  </div>
+                )}
+                <CustomerProjectPicker customerId={form.customer_id} projectId={form.project_id} division={form.division}
+                  onChange={({ customer, project }) => setForm((f) => ({
+                    ...f, customer_id: customer?.id || "", project_id: project?.id || "",
+                    customer: customer ? customer.name : (customer === null ? "" : f.customer),
+                    phone: customer ? (customer.phone || "") : f.phone,
+                  }))}
+                  testid="deal-cpp" />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -405,14 +413,7 @@ export default function Pipeline() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-1">Handled By</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Raghu MF"
-                    value={form.by_user}
-                    onChange={(e) => setForm({ ...form, by_user: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-xl border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)]"
-                    data-testid="deal-by-user"
-                  />
+                  <StaffPicker value={form.by_user} onChange={(name) => setForm((f) => ({ ...f, by_user: name }))} testId="deal-by-user" />
                 </div>
               </div>
 
