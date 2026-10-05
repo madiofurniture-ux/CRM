@@ -10377,10 +10377,14 @@ app.include_router(api_budget.router)
 # cross-origin request when CORS_ORIGINS was left at its default.
 _cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
 _cors_wildcard = "*" in _cors_origins
+# Optional pattern for origins that can't be listed one by one, e.g. Cloudflare
+# Pages preview deployments: CORS_ORIGIN_REGEX=https://([a-z0-9-]+\.)?crm-9p8\.pages\.dev
+_cors_origin_regex = os.environ.get("CORS_ORIGIN_REGEX", "").strip() or None
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=not _cors_wildcard,
     allow_origins=_cors_origins or ["*"],
+    allow_origin_regex=_cors_origin_regex,
     allow_methods=["*"],
     allow_headers=["*"],
 )
