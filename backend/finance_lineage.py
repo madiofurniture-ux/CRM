@@ -42,11 +42,17 @@ def _m(v) -> float:
     return lc.money(v)
 
 
+def costed_elsewhere(e: dict) -> bool:
+    """A payout to a vendor against a PO or vendor order: that document is
+    already the cost, so the cash leaving the wallet is not counted again."""
+    return bool(e.get("manufacturer_order_id") or e.get("purchase_order_id") or e.get("pnl_exclude"))
+
+
 def entry_cost(entries: Iterable[dict]) -> tuple[float, float]:
     """(approved, pending) CASH_OUT spend, excluding vendor-order payouts."""
     approved = pending = 0.0
     for e in entries:
-        if e.get("type") != "CASH_OUT" or e.get("manufacturer_order_id") or e.get("pnl_exclude"):
+        if e.get("type") != "CASH_OUT" or costed_elsewhere(e):
             continue
         if e.get("status") == "Approved":
             approved += _m(e.get("amount"))
@@ -132,8 +138,7 @@ def deal_lineage(*, visitor: Optional[dict], lead: Optional[dict], quotes: list,
         [{"date": e.get("approved_at") or e.get("created_at"), "title": e.get("remark") or e.get("category"),
           "category": e.get("category", ""), "amount": _m(e.get("amount")), "status": e.get("status", ""),
           "source": "Money request" if e.get("money_request_id") else "Wallet"}
-         for e in entries if e.get("type") == "CASH_OUT" and not e.get("manufacturer_order_id")
-         and not e.get("pnl_exclude")]
+         for e in entries if e.get("type") == "CASH_OUT" and not costed_elsewhere(e)]
         + [{"date": v.get("date"), "title": v.get("description") or v.get("category"),
             "category": v.get("category", ""), "amount": _m(v.get("amount")),
             "status": v.get("status", "Approved"), "source": "Petty cash"}
@@ -271,8 +276,7 @@ def company_pnl(*, sales: list, pos: list, mos: list, entries: list, petty: list
             add(d, "overheads", amount)
 
     for e in entries:
-        if (e.get("type") != "CASH_OUT" or e.get("status") != "Approved" or e.get("manufacturer_order_id")
-                or e.get("pnl_exclude")):
+        if (e.get("type") != "CASH_OUT" or e.get("status") != "Approved" or costed_elsewhere(e)):
             continue
         d = lc.parse_date(e.get("approved_at") or e.get("created_at"))
         if e.get("category") == "Vendor payment":

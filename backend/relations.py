@@ -63,6 +63,7 @@ LINKED = set(DISPLAY)
 # a Prospect customer (name + phone are enough).
 CREATES_CUSTOMER = {"leads", "quotes", "projects"}
 # Collections whose records also carry project_id.
+VENDOR_DOCS = {"purchase_orders", "manufacturer_orders"}
 HAS_PROJECT = {"meets", "tasks", "quotes", "sales", "invoices", "payments", "dw_surveys",
                "site_surveys", "service_tickets", "manufacturer_orders", "purchase_orders", "leads", "calls"}
 
@@ -115,11 +116,46 @@ async def link(db, collection: str, doc: dict, user: dict, existing: Optional[di
     if "project_id" in doc and doc["project_id"] in (None, ""):
         cur.pop("project_id", None)          # "no particular project" unlinks it
 
+    # A payment against an invoice sits on that invoice's order, project and
+    # customer too (so the order's paid and the invoice's balance move together).
+    if collection == "payments" and cur.get("against_invoice_id"):
+        inv = await _one(db, "invoices", cur["against_invoice_id"], user,
+                         {"sale_id": 1, "project_id": 1, "customer_id": 1})
+        if inv is None:
+            raise RelationError("The selected invoice doesn't exist")
+        _set(doc, "against_sale_id", inv.get("sale_id"), existing, "This invoice belongs to a different order")
+        _set(doc, "project_id", inv.get("project_id"), existing, "This invoice belongs to a different project")
+        _set(doc, "customer_id", inv.get("customer_id"), existing, "This invoice belongs to a different customer")
+        cur = {**cur, **{k: v for k, v in doc.items() if v not in (None, "")}}
+
+    # Vendor side: a vendor order sits on the PO raised for the same work; a PO or
+    # vendor order sits on a sales order (one order, many POs). With no order named,
+    # a project that has exactly one order gives it.
+    if collection in VENDOR_DOCS:
+        if collection == "manufacturer_orders" and cur.get("po_id"):
+            po = await _one(db, "purchase_orders", cur["po_id"], user,
+                            {"sale_id": 1, "quote_id": 1, "project_id": 1, "customer_id": 1})
+            if po is None:
+                raise RelationError("The linked purchase order doesn't exist")
+            for key, label in (("sale_id", "sales order"), ("project_id", "project"), ("quote_id", "quotation")):
+                _set(doc, key, po.get(key), existing, f"This vendor order's purchase order belongs to a different {label}")
+            cur = {**cur, **{k: v for k, v in doc.items() if v not in (None, "")}}
+        if cur.get("sale_id"):
+            if await _one(db, "sales", cur["sale_id"], user, {"id": 1}) is None:
+                raise RelationError("The selected sales order doesn't exist")
+        elif cur.get("project_id"):
+            rows = await db.sales.find(tenancy.scope({"project_id": cur["project_id"]}, "sales", user),
+                                       {"_id": 0, "id": 1}).to_list(2)
+            if len(rows) == 1:
+                doc["sale_id"] = cur["sale_id"] = rows[0]["id"]
+
     # Walk up the chain: payment → order → quotation → project → customer.
     sale_id = cur.get("sale_id") or cur.get("against_sale_id")
     if sale_id:
         sale = await _one(db, "sales", sale_id, user, {"customer_id": 1, "project_id": 1, "quote_id": 1})
         if sale:
+            if collection in VENDOR_DOCS and not cur.get("quote_id"):
+                doc["quote_id"] = sale.get("quote_id") or ""
             if collection == "invoices" and not cur.get("quote_id"):
                 doc["quote_id"] = sale.get("quote_id") or ""
             if collection in HAS_PROJECT:
@@ -299,9 +335,10 @@ async def backfill(db, user: dict, *, create_prospects: bool = True) -> dict:
         _, phone_f, _ = DISPLAY[coll]
         async for r in db[coll].find(tenancy.scope({"customer_id": {"$in": [None, ""]}}, coll, user),
                                      {"_id": 0, "id": 1, phone_f: 1, "quote_id": 1, "sale_id": 1,
-                                      "against_sale_id": 1}):
+                                      "against_sale_id": 1, "against_invoice_id": 1}):
             cid = ""
-            for key, src in (("quote_id", "quotes"), ("sale_id", "sales"), ("against_sale_id", "sales")):
+            for key, src in (("quote_id", "quotes"), ("sale_id", "sales"), ("against_sale_id", "sales"),
+                             ("against_invoice_id", "invoices")):
                 if r.get(key) and not cid:
                     up = await db[src].find_one(tenancy.scope({"id": r[key]}, src, user), {"_id": 0, "customer_id": 1})
                     cid = (up or {}).get("customer_id") or ""
@@ -311,6 +348,7 @@ async def backfill(db, user: dict, *, create_prospects: bool = True) -> dict:
             if cid:
                 await db[coll].update_one(tenancy.scope({"id": r["id"]}, coll, user), {"$set": {"customer_id": cid}})
                 bump(f"{coll} linked to a customer")
+    await _backfill_vendor_and_stock_links(db, user, bump)
     # Records that hang off a project take its customer.
     for coll in ("meets", "tasks", "manufacturer_orders", "purchase_orders", "service_tickets", "site_surveys",
                  "projects"):
@@ -357,3 +395,97 @@ async def backfill(db, user: dict, *, create_prospects: bool = True) -> dict:
                                                            "customer_id": {"$in": [None, ""]}}, "activities", user),
                                             {"$set": patch})
     return report
+
+
+async def _backfill_vendor_and_stock_links(db, user: dict, bump) -> None:
+    """Vendor / stock / cash lineage on existing rows. Additive: only empty
+    links are filled, and money (a sale's paid, a wallet's balance) is never
+    touched."""
+    # PO / vendor order → the sales order: the PO a vendor order was raised for,
+    # else the project's only order. A project with several orders is left for
+    # a person (guessing would put a PO on the wrong order's margin).
+    sales_by_project: dict[str, list] = {}
+    async for sl in db.sales.find(tenancy.scope({"project_id": {"$nin": [None, ""]}}, "sales", user),
+                                  {"_id": 0, "id": 1, "project_id": 1, "quote_id": 1}):
+        sales_by_project.setdefault(sl["project_id"], []).append(sl)
+    pos = {p["id"]: p async for p in db.purchase_orders.find(tenancy.scope({}, "purchase_orders", user), {"_id": 0})}
+    mos = [m async for m in db.manufacturer_orders.find(tenancy.scope({}, "manufacturer_orders", user), {"_id": 0})]
+    for coll, rows in (("purchase_orders", list(pos.values())), ("manufacturer_orders", mos)):
+        for r in rows:
+            if r.get("sale_id"):
+                continue
+            sale = None
+            if coll == "manufacturer_orders" and r.get("po_id") and (pos.get(r["po_id"]) or {}).get("sale_id"):
+                sale = {"id": pos[r["po_id"]]["sale_id"], "quote_id": pos[r["po_id"]].get("quote_id", "")}
+            elif r.get("project_id") and len(sales_by_project.get(r["project_id"], [])) == 1:
+                sale = sales_by_project[r["project_id"]][0]
+            if sale:
+                patch = {"sale_id": sale["id"]}
+                if sale.get("quote_id") and not r.get("quote_id"):
+                    patch["quote_id"] = sale["quote_id"]
+                await db[coll].update_one(tenancy.scope({"id": r["id"]}, coll, user), {"$set": patch})
+                r.update(patch)              # later vendor orders read it from their PO
+                bump(f"{coll} linked to their sales order")
+    # PO ↔ vendor order, both ways. A PO claimed by two vendor orders is left
+    # alone (the first keeps it) and counted for a person to untangle.
+    claimed: dict[str, str] = {}
+    for m in sorted(mos, key=lambda m: str(m.get("created_at") or "")):
+        po_id = m.get("po_id")
+        if not po_id or po_id not in pos:
+            continue
+        if po_id in claimed:
+            bump("vendor orders sharing a purchase order (review)")
+            continue
+        claimed[po_id] = m["id"]
+        if pos[po_id].get("manufacturer_order_id") != m["id"]:
+            await db.purchase_orders.update_one(tenancy.scope({"id": po_id}, "purchase_orders", user),
+                                                {"$set": {"manufacturer_order_id": m["id"]}})
+            bump("purchase orders linked to their vendor order")
+    # Cashbook entries that paid a vendor order carry its PO, vendor and order.
+    by_mo = {m["id"]: m for m in mos}
+    async for e in db.cashbook_entries.find(tenancy.scope({"manufacturer_order_id": {"$nin": [None, ""]}},
+                                                          "cashbook_entries", user), {"_id": 0}):
+        m = by_mo.get(e["manufacturer_order_id"])
+        if not m:
+            continue
+        patch = {k: v for k, v in (("vendor_id", m.get("vendor_id")), ("purchase_order_id", m.get("po_id")),
+                                   ("sale_id", m.get("sale_id")), ("project_id", m.get("project_id")))
+                 if v and not e.get(k)}
+        if patch:
+            await db.cashbook_entries.update_one(tenancy.scope({"id": e["id"]}, "cashbook_entries", user),
+                                                 {"$set": patch})
+            bump("vendor payments linked to their order")
+    # Stock movements: the typed ids behind source_doc / ref_* / sku.
+    items = {i["sku"]: i["id"] async for i in db.inventory.find(tenancy.scope({}, "inventory", user),
+                                                                 {"_id": 0, "id": 1, "sku": 1}) if i.get("sku")}
+    po_by_no = {p.get("po_no"): p["id"] for p in pos.values() if p.get("po_no")}
+    sale_cache: dict[str, dict] = {}
+    async for mv in db.stock_movements.find(tenancy.scope({}, "stock_movements", user), {"_id": 0}):
+        patch: dict[str, Any] = {}
+        if not mv.get("inventory_id") and items.get(mv.get("product_id")):
+            patch["inventory_id"] = items[mv["product_id"]]
+        if not mv.get("sale_id") and mv.get("ref_sale_id"):
+            patch["sale_id"] = mv["ref_sale_id"]
+        if not mv.get("invoice_id") and mv.get("ref_invoice_id"):
+            patch["invoice_id"] = mv["ref_invoice_id"]
+        if not mv.get("purchase_order_id") and mv.get("type") == "Receipt" and po_by_no.get(mv.get("source_doc")):
+            patch["purchase_order_id"] = po_by_no[mv["source_doc"]]
+        sid = mv.get("sale_id") or patch.get("sale_id")
+        if sid and not (mv.get("project_id") and mv.get("customer_id")):
+            if sid not in sale_cache:
+                sale_cache[sid] = await _one(db, "sales", sid, user, {"project_id": 1, "customer_id": 1}) or {}
+            for k in ("project_id", "customer_id"):
+                if not mv.get(k) and sale_cache[sid].get(k):
+                    patch[k] = sale_cache[sid][k]
+        if patch:
+            await db.stock_movements.update_one(tenancy.scope({"id": mv["id"]}, "stock_movements", user),
+                                                {"$set": patch})
+            bump("stock movements linked to their documents")
+    # Receipts against an invoice whose order never counted them: reported, not
+    # fixed — the order's paid is money, and loaded data may already include them.
+    async for pay in db.payments.find(tenancy.scope({"against_invoice_id": {"$nin": [None, ""]},
+                                                     "against_sale_id": {"$in": [None, ""]}}, "payments", user),
+                                      {"_id": 0, "against_invoice_id": 1}):
+        inv = await _one(db, "invoices", pay["against_invoice_id"], user, {"sale_id": 1})
+        if (inv or {}).get("sale_id"):
+            bump("receipts on an invoice but not on its order (review)")

@@ -124,6 +124,21 @@ stay unlinked — name matching would guess; link them from the order.
 
 Tests: `backend/tests/test_relations.py`.
 
+## Vendor, cash and stock links
+
+| Link | How |
+|---|---|
+| Sales order 1-many POs / vendor orders | `sale_id` (+ `quote_id`) on `purchase_orders` and `manufacturer_orders`. A vendor order takes its PO's order; a project with exactly one order gives it to a PO that names only the project (two orders: left blank, pick it). A PO / vendor order counts on the deal of its own order only (`_on_deal`); with no `sale_id` it counts on the project's deal as before. |
+| PO 1-1 vendor order | `ManufacturerOrder.po_id` is the owner; `PurchaseOrder.manufacturer_order_id` is the server-kept back-pointer (never accepted from a client). A second vendor order on the same PO is refused (409). Deleting either side clears the other. |
+| Payment → invoice → order | A payment against an invoice takes the invoice's `against_sale_id`, project and customer (`relations.link`), so the order's `paid` and the invoice's balance move together. An invoice of another order is refused. |
+| Vendor payout → PO / vendor order / vendor | Cashbook entries and money requests carry `purchase_order_id`, `manufacturer_order_id`, `vendor_id` (`resolve_vendor_links` checks them and fills vendor, project, order). Tagged entries are not counted again in P&L (`finance_lineage.costed_elsewhere`). `GET /purchase-orders/{id}/payments` gives value, paid, balance. |
+| Receipt 1-1 wallet entry | `payments.cashbook_entry_id` ↔ `cashbook_entries.customer_payment_id`. Choose a wallet on `POST /payments` (`wallet_id`) or link an entry to a receipt; a receipt already banked is refused (409); a banked receipt can't be deleted until its entry is. Split payments set `finance_payment_id` on the wallet credit. |
+| Stock movement → documents | `inventory_id`, `sale_id`, `invoice_id`, `purchase_order_id`, `project_id`, `customer_id` (`_stock_move_links`; the older `ref_*` ids still work). `source_doc` stays as display text. |
+
+`relations.backfill` fills these on existing rows (additive; money is never
+touched) and reports, for a person to review: vendor orders sharing a PO, and
+receipts on an invoice whose order never counted them.
+
 ## People, partners and pricing
 
 - **Staff** are CRM users with their own login. Seeded role logins

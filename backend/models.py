@@ -580,6 +580,13 @@ class PurchaseOrderBase(BaseModel):
     vendor_name: Optional[str] = ""  # derived server-side from vendor_id
     vendor_code: Optional[str] = ""  # derived server-side from vendor_id
     project_id: Optional[str] = ""   # when this PO is bought against a project — feeds project P&L
+    # One sale order can have many POs: the sale this PO is bought for (filled from
+    # the project's order by relations.py), so margin per order = sale value − its POs.
+    sale_id: Optional[str] = ""
+    quote_id: Optional[str] = ""
+    # 1-1 with the vendor order placed for the same work. Server-owned: set from
+    # ManufacturerOrder.po_id, never taken from a client.
+    manufacturer_order_id: Optional[str] = ""
     division: Optional[str] = ""
     line_items: List[LineItem] = Field(default_factory=list)
     subtotal: float = 0
@@ -684,6 +691,8 @@ class ManufacturerOrderBase(BaseModel):
     date: str = ""
     division: Optional[str] = ""      # Division.slug — "Furniture" / "MAP" / "D&W"
     project_id: Optional[str] = ""    # when placed against a project — feeds project P&L
+    sale_id: Optional[str] = ""       # the sales order this work fulfils (relations.py fills it)
+    quote_id: Optional[str] = ""
     site_location: Optional[str] = ""
     description: Optional[str] = ""
     vendor_id: str = ""               # the manufacturer, a vendors row
@@ -973,6 +982,16 @@ class CashbookEntryBase(BaseModel):
     sale_id: Optional[str] = ""
     quote_id: Optional[str] = ""
     lead_id: Optional[str] = ""
+    # Vendor-side lineage: a payout to a vendor says which PO / vendor order it
+    # settles and to whom (vendor_id derives from them). Entries tagged with a PO
+    # or vendor order are already costed there, so P&L does not count them twice.
+    purchase_order_id: Optional[str] = ""
+    manufacturer_order_id: Optional[str] = ""
+    vendor_id: Optional[str] = ""
+    # Customer-side lineage, 1-1: the receipt (payments.id) this CASH_IN banks,
+    # or the split payment (finance_payments.id) it was credited from.
+    customer_payment_id: Optional[str] = ""
+    finance_payment_id: Optional[str] = ""
 
 
 class CashbookEntryCreate(CashbookEntryBase):
@@ -1708,9 +1727,12 @@ class PaymentBase(BaseModel):
     against_quote_no: Optional[str] = ""
     phone: Optional[str] = ""
     remarks: Optional[str] = ""
+    # 1-1 with the Cashbook entry that banked it. Server-owned: set when a
+    # wallet is chosen on the receipt (or an entry links it), never by a client.
+    cashbook_entry_id: Optional[str] = ""
 
 class PaymentCreate(PaymentBase):
-    pass
+    wallet_id: Optional[str] = ""       # bank this receipt into a Cashbook wallet (request-only)
 
 class Payment(PaymentBase):
     id: str
@@ -1729,9 +1751,17 @@ class StockMovementBase(BaseModel):
     unit: str = "pc"
     warehouse: Optional[str] = "Main"
     to_warehouse: Optional[str] = ""     # for transfers
-    source_doc: Optional[str] = ""       # PO / sale / project reference
+    source_doc: Optional[str] = ""       # PO / sale / project reference (display text)
     reason: Optional[str] = ""
     by_user: Optional[str] = ""
+    # Typed lineage behind source_doc; _post_stock_move fills inventory_id from
+    # the sku and the customer/project from the sale or invoice.
+    inventory_id: Optional[str] = ""
+    sale_id: Optional[str] = ""
+    invoice_id: Optional[str] = ""
+    purchase_order_id: Optional[str] = ""
+    project_id: Optional[str] = ""
+    customer_id: Optional[str] = ""
 
 class StockMovementCreate(StockMovementBase):
     pass
@@ -1893,6 +1923,9 @@ class MoneyRequestCreate(BaseModel):
     sale_id: Optional[str] = ""
     quote_id: Optional[str] = ""
     lead_id: Optional[str] = ""
+    purchase_order_id: Optional[str] = ""      # a vendor payment: the PO / vendor order it settles
+    manufacturer_order_id: Optional[str] = ""
+    vendor_id: Optional[str] = ""
     division: Optional[str] = ""
 
     @field_validator("title")

@@ -719,8 +719,12 @@ async def _link(collection: str, doc: dict, user: dict, existing: dict | None = 
 def make_crud(router: APIRouter, base: str, collection: str, create_model, out_model,
               after_write=None, module: str = None, owner_field: str = None, on_create=None,
               normalize=None, redact=None, mask=None, personal: bool = False,
-              list_filters: tuple = (), entity: str = None):
-    """`after_write`, when given, runs after a successful create/update with the
+              list_filters: tuple = (), entity: str = None, after_delete=None):
+    """`after_delete(existing, user)`, when given, runs after a successful delete
+    (needs the record, so it reads it first) — for clearing the other side of a
+    1-1 link.
+
+    `after_write`, when given, runs after a successful create/update with the
     saved document and the acting user — for side effects that must stay in
     lockstep with this collection's own writes (e.g. leads syncing a
     Follow-up Task from follow_up_date). It never runs on delete or on a
@@ -898,7 +902,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         # Scoped so one tenant can never delete another's record by id.
         owned = tenancy.scope({"id": item_id}, collection, user)
         existing = None
-        if module or personal or entity:
+        if module or personal or entity or after_delete:
             existing = await db[collection].find_one(owned, {"_id": 0})
             if not existing:
                 raise HTTPException(status_code=404, detail="Not found")
@@ -912,6 +916,8 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
         res = await db[collection].delete_one(owned)
         if res.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Not found")
+        if after_delete and existing:
+            await after_delete(existing, user)
         if entity:
             await record_activity(entity, item_id, "delete", user, before=existing)
         return {"ok": True}
@@ -2893,6 +2899,11 @@ async def normalize_purchase_order(doc: dict, existing: dict | None, user: dict)
         if not project:
             raise HTTPException(status_code=400, detail="Linked project not found")
 
+    # 1-1 with its vendor order: written only from the vendor order's side.
+    doc.pop("manufacturer_order_id", None)
+    if existing is None:
+        doc["manufacturer_order_id"] = ""
+
     if existing is None:
         if not doc.get("date"):
             doc["date"] = lc.today_iso()
@@ -3008,6 +3019,8 @@ async def purchase_order_receive(po_id: str, payload: dict, user: dict = Depends
             "warehouse": warehouse, "to_warehouse": "",
             "source_doc": po.get("po_no", ""), "reason": f"GRN against {po.get('po_no', '')}",
             "by_user": user.get("name", ""),
+            "purchase_order_id": po_id, "sale_id": po.get("sale_id", ""),
+            "project_id": po.get("project_id", ""), "customer_id": po.get("customer_id", ""),
         }
         await _post_stock_move(move, user)
         existing_moves.append({"movement_no": move["movement_no"]})
@@ -3027,8 +3040,15 @@ async def purchase_order_receive(po_id: str, payload: dict, user: dict = Depends
 # module a role has no entry for), so a brand-new module id would 403 every
 # role-governed account until an admin edited every role. Procurement is the
 # buy side of stock, so inventory is the honest home for it.
+async def _po_after_delete(po: dict, user: dict) -> None:
+    """A deleted PO leaves no dangling pointer on its vendor order."""
+    await db.manufacturer_orders.update_many(tenancy.scope({"po_id": po["id"]}, "manufacturer_orders", user),
+                                             {"$set": {"po_id": ""}})
+
+
 make_crud(api, "purchase-orders", "purchase_orders", PurchaseOrderCreate, PurchaseOrder,
-          module="inventory", owner_field="by_user", normalize=normalize_purchase_order)
+          module="inventory", owner_field="by_user", normalize=normalize_purchase_order,
+          after_delete=_po_after_delete)
 
 
 def _render_po_pdf(po: dict, tenant: dict) -> bytes:
@@ -3102,6 +3122,26 @@ def _render_po_pdf(po: dict, tenant: dict) -> bytes:
     return buf.getvalue()
 
 
+@api.get("/purchase-orders/{po_id}/payments")
+async def purchase_order_payments(po_id: str, user: dict = Depends(get_current_user)):
+    """What has been paid out against one PO (and the vendor order raised for
+    it), from the Cashbook entries that name it: value, paid, balance."""
+    await _require_permission("cashbook", "view", user)
+    po = await db.purchase_orders.find_one(tenancy.scope({"id": po_id}, "purchase_orders", user), {"_id": 0})
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    rows = await db.cashbook_entries.find(
+        tenancy.scope({"purchase_order_id": po_id, "type": "CASH_OUT"}, "cashbook_entries", user),
+        {"_id": 0, "id": 1, "cashbook_id": 1, "amount": 1, "status": 1, "payment_mode": 1, "payout_utr": 1,
+         "created_at": 1, "manufacturer_order_id": 1}).sort("created_at", 1).to_list(500)
+    paid = round(sum(lc.money(r.get("amount")) for r in rows if r.get("status") == "Approved"), 2)
+    pending = round(sum(lc.money(r.get("amount")) for r in rows if r.get("status") == "Pending"), 2)
+    value = lc.money(po.get("grand_total"))
+    return {"po_id": po_id, "po_no": po.get("po_no", ""), "value": value, "paid": paid, "pending": pending,
+            "balance": round(value - paid, 2), "manufacturer_order_id": po.get("manufacturer_order_id", ""),
+            "payments": rows}
+
+
 @api.get("/purchase-orders/{po_id}/pdf")
 async def purchase_order_pdf(po_id: str, user: dict = Depends(get_current_user)):
     await _require_permission("inventory", "view", user)
@@ -3147,6 +3187,13 @@ async def normalize_manufacturer_order(doc: dict, existing: dict | None, user: d
             tenancy.scope({"id": doc["po_id"]}, "purchase_orders", user), {"_id": 0, "id": 1})
         if not po:
             raise HTTPException(status_code=400, detail="Linked purchase order not found")
+        # 1-1: a PO is raised for one vendor order.
+        clash = await db.manufacturer_orders.find_one(tenancy.scope(
+            {"po_id": doc["po_id"], "id": {"$ne": (existing or {}).get("id", "")}},
+            "manufacturer_orders", user), {"_id": 0, "order_code": 1})
+        if clash:
+            raise HTTPException(status_code=409, detail=(
+                f"That purchase order is already linked to vendor order {clash.get('order_code', '')}."))
 
     status = doc.get("status", (existing or {}).get("status", ""))
     if status in ("Delivered", "Installed") and not (doc.get("delivered_date") or (existing or {}).get("delivered_date")):
@@ -3197,10 +3244,29 @@ async def normalize_manufacturer_order(doc: dict, existing: dict | None, user: d
 # a brand-new module id would 403 every role-governed account until an admin
 # edited every role. Placing work with a manufacturer is the buy side of
 # stock, same as procurement.
+async def _mo_after_write(order: dict, user: dict) -> None:
+    """Keep the PO's back-pointer in step: the PO this order names points back
+    at it, and any PO that pointed at it before no longer does."""
+    po_id = order.get("po_id") or ""
+    await db.purchase_orders.update_many(
+        tenancy.scope({"manufacturer_order_id": order["id"], "id": {"$ne": po_id}}, "purchase_orders", user),
+        {"$set": {"manufacturer_order_id": ""}})
+    if po_id:
+        await db.purchase_orders.update_one(tenancy.scope({"id": po_id}, "purchase_orders", user),
+                                            {"$set": {"manufacturer_order_id": order["id"]}})
+
+
+async def _mo_after_delete(order: dict, user: dict) -> None:
+    await db.purchase_orders.update_many(
+        tenancy.scope({"manufacturer_order_id": order["id"]}, "purchase_orders", user),
+        {"$set": {"manufacturer_order_id": ""}})
+
+
 make_crud(api, "manufacturer-orders", "manufacturer_orders",
           ManufacturerOrderCreate, ManufacturerOrder,
           module="inventory", owner_field="by_user",
           normalize=normalize_manufacturer_order,
+          after_write=_mo_after_write, after_delete=_mo_after_delete,
           redact=redact_manufacturer_name,
           mask=mask_manufacturer_order,
           list_filters=("division", "status", "project_id"))
@@ -3271,7 +3337,9 @@ async def record_manufacturer_payment(order_id: str, payload: ManufacturerPaymen
                 # Tags this debit as already counted as manufacturing cost, so
                 # project P&L does not charge the same rupee twice — see
                 # compute_project_pnl.
-                "manufacturer_order_id": order_id,
+                "manufacturer_order_id": order_id, "purchase_order_id": order.get("po_id", ""),
+                "vendor_id": order.get("vendor_id", ""), "project_id": order.get("project_id", ""),
+                "sale_id": order.get("sale_id", ""), "quote_id": order.get("quote_id", ""),
             }
             tenancy.stamp(ledger, "cashbook_entries", user)
             await db.cashbook_entries.insert_one(dict(ledger))
@@ -3293,6 +3361,25 @@ async def _bump_item_qty(sku: str, delta: float, user: dict) -> None:
                                       {"$inc": {"qty": round(delta, 3)}})
 
 
+async def _stock_move_links(move: dict, user: dict) -> None:
+    """Typed lineage on a movement: the inventory item behind the sku, the
+    sale / invoice / PO it came from (the older ref_* ids still count), and the
+    project and customer those carry. Only empty links are filled."""
+    for field, ref in (("sale_id", "ref_sale_id"), ("invoice_id", "ref_invoice_id")):
+        if not move.get(field) and move.get(ref):
+            move[field] = move[ref]
+    if not move.get("inventory_id") and move.get("product_id"):
+        item = await db.inventory.find_one(tenancy.scope({"sku": move["product_id"]}, "inventory", user),
+                                           {"_id": 0, "id": 1})
+        move["inventory_id"] = (item or {}).get("id", "")
+    for field, coll in (("invoice_id", "invoices"), ("sale_id", "sales"), ("purchase_order_id", "purchase_orders")):
+        if move.get(field) and not (move.get("project_id") and move.get("customer_id")):
+            rec = await _find_scoped(coll, {"id": move[field]}, user) or {}
+            for k in ("project_id", "customer_id"):
+                if not move.get(k) and rec.get(k):
+                    move[k] = rec[k]
+
+
 async def _post_stock_move(move: dict, user: dict) -> dict:
     move.setdefault("id", new_id())
     move.setdefault("created_at", now_iso())
@@ -3302,6 +3389,7 @@ async def _post_stock_move(move: dict, user: dict) -> dict:
         existing = await db.stock_movements.find(
             tenancy.scope({}, "stock_movements", user), {"movement_no": 1, "_id": 0}).to_list(20000)
         move["movement_no"] = lc.next_movement_id(existing)
+    await _stock_move_links(move, user)
     stamp_fy(move, "stock_movements")
     tenancy.stamp(move, "stock_movements", user)
     await db.stock_movements.insert_one(dict(move))
@@ -3838,6 +3926,32 @@ async def list_cashbook_entries(cashbook_id: str, mask_other: bool = True,
     return [csv_engine.mask_cashbook_entry(r) for r in rows] if mask_other else rows
 
 
+async def _claim_receipt_for_entry(entry: dict, user: dict) -> str:
+    """Link a wallet entry to the customer receipt (payments.id) it banks. One
+    receipt, one entry: the receipt's `cashbook_entry_id` is set atomically, and
+    a receipt already banked is refused (409). The entry takes the receipt's
+    project / order and must run the same way (money in → CASH_IN)."""
+    pay = await _find_scoped("payments", {"id": entry["customer_payment_id"]}, user)
+    if not pay:
+        raise HTTPException(status_code=400, detail="The linked customer receipt wasn't found.")
+    want = "CASH_OUT" if pay.get("direction") in ("Out", "Refund") else "CASH_IN"
+    if entry["type"] != want:
+        raise HTTPException(status_code=400, detail=(
+            "A customer refund leaves the wallet (cash-out); a receipt comes in (cash-in)."))
+    claim = await db.payments.update_one(
+        tenancy.scope({"id": pay["id"], "cashbook_entry_id": {"$in": [None, ""]}}, "payments", user),
+        {"$set": {"cashbook_entry_id": entry["id"]}})
+    if claim.modified_count == 0:
+        raise HTTPException(status_code=409, detail="That receipt is already banked in a wallet.")
+    if pay.get("project_id") and not entry.get("project_id"):
+        entry["project_id"] = pay["project_id"]
+    if pay.get("against_sale_id") and not entry.get("sale_id"):
+        entry["sale_id"] = pay["against_sale_id"]
+    if want == "CASH_OUT":
+        entry["pnl_exclude"] = True          # a refund of a receipt, not a business expense
+    return pay["id"]
+
+
 @api.post("/cashbooks/{cashbook_id}/entries")
 async def create_cashbook_entry(cashbook_id: str, payload: CashbookEntryCreate, user: dict = Depends(get_current_user)):
     """Atomic: the entry write and the book's running-balance update must
@@ -3858,7 +3972,17 @@ async def create_cashbook_entry(cashbook_id: str, payload: CashbookEntryCreate, 
     doc["id"] = new_id()
     doc["created_at"] = now_iso()
     doc["money_request_id"] = ""          # only a money-request transfer sets this
+    doc["finance_payment_id"] = ""        # only a split payment's wallet credit sets this
     doc["entry_person"] = doc.get("entry_person") or user.get("name", "")
+    # Vendor payout → the PO / vendor order it settles (and their vendor, project, order).
+    await resolve_vendor_links(doc, user)
+    if doc.get("purchase_order_id") or doc.get("manufacturer_order_id"):
+        if doc["type"] != "CASH_OUT":
+            raise HTTPException(status_code=400, detail="A payment against a PO or vendor order must be a cash-out.")
+    # Customer receipt ↔ entry, 1-1: claim the receipt first so two entries can't bank it.
+    claimed_payment = ""
+    if doc.get("customer_payment_id"):
+        claimed_payment = await _claim_receipt_for_entry(doc, user)
     tenancy.stamp(doc, "cashbook_entries", user)
     await db.cashbook_entries.insert_one(dict(doc))
     doc.pop("_id", None)
@@ -3879,6 +4003,10 @@ async def delete_cashbook_entry(entry_id: str, user: dict = Depends(get_current_
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
     await db.cashbook_entries.delete_one(owned)
+    if entry.get("customer_payment_id"):
+        await db.payments.update_one(
+            tenancy.scope({"id": entry["customer_payment_id"], "cashbook_entry_id": entry_id}, "payments", user),
+            {"$set": {"cashbook_entry_id": ""}})
     delta = -entry["amount"] if entry["type"] == "CASH_IN" else entry["amount"]
     book_owned = tenancy.scope({"id": entry["cashbook_id"]}, "cashbooks", user)
     await db.cashbooks.update_one(book_owned, {"$inc": {"current_balance": delta}})
@@ -4004,6 +4132,47 @@ async def _find_scoped(collection: str, query: dict, user: dict) -> Optional[dic
     return await db[collection].find_one(tenancy.scope(query, collection, user), {"_id": 0})
 
 
+async def resolve_vendor_links(doc: dict, user: dict) -> dict:
+    """A payout to a vendor says which PO / vendor order it settles: both are
+    checked to exist in this tenant and to belong together (a PO is raised for
+    one vendor order), and the vendor, project, order and quotation are filled
+    from them. Naming a different project or order than the document's own is
+    refused. A record with neither link only has its vendor_id checked."""
+    mo_id, po_id = doc.get("manufacturer_order_id") or "", doc.get("purchase_order_id") or ""
+    mo = po = None
+    if mo_id:
+        mo = await _find_scoped("manufacturer_orders", {"id": mo_id}, user)
+        if not mo:
+            raise HTTPException(status_code=400, detail="The linked vendor order wasn't found.")
+        if mo.get("po_id") and po_id and po_id != mo["po_id"]:
+            raise HTTPException(status_code=400, detail="That purchase order isn't the one this vendor order was raised for.")
+        po_id = po_id or mo.get("po_id") or ""
+    if po_id:
+        po = await _find_scoped("purchase_orders", {"id": po_id}, user)
+        if not po:
+            raise HTTPException(status_code=400, detail="The linked purchase order wasn't found.")
+        if not mo and po.get("manufacturer_order_id"):
+            mo = await _find_scoped("manufacturer_orders", {"id": po["manufacturer_order_id"]}, user)
+            mo_id = (mo or {}).get("id", "")
+    doc["manufacturer_order_id"], doc["purchase_order_id"] = mo_id, po_id
+    docs = [d for d in (mo, po) if d]
+    vendors = [d["vendor_id"] for d in docs if d.get("vendor_id")]
+    if doc.get("vendor_id"):
+        if vendors and doc["vendor_id"] not in vendors:
+            raise HTTPException(status_code=400, detail="That vendor isn't the one on the linked order.")
+        if not docs and not await _find_scoped("vendors", {"id": doc["vendor_id"]}, user):
+            raise HTTPException(status_code=400, detail="The selected vendor wasn't found.")
+    elif vendors:
+        doc["vendor_id"] = vendors[0]
+    for field, label in (("project_id", "project"), ("sale_id", "sales order"), ("quote_id", "quotation")):
+        for d in docs:
+            if d.get(field):
+                if doc.get(field) and doc[field] != d[field]:
+                    raise HTTPException(status_code=400, detail=f"The linked order belongs to a different {label}.")
+                doc[field] = d[field]
+    return doc
+
+
 async def resolve_money_links(doc: dict, user: dict) -> dict:
     """Fill a money record's lineage from whichever link the user picked, so
     an expense tagged to a sale also lands on that sale's quotation, lead and
@@ -4118,6 +4287,7 @@ async def create_money_request(payload: MoneyRequestCreate, user: dict = Depends
         ex.validate_receipt(doc.get("receipt_url"), doc["amount"], policy)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    await resolve_vendor_links(doc, user)
     await resolve_money_links(doc, user)
     raiser = await db.users.find_one({"id": user.get("id"), "tenant_id": tenancy.tenant_of(user)}, {"_id": 0}) or user
     manager = None
@@ -4162,6 +4332,7 @@ async def update_money_request(request_id: str, payload: MoneyRequestCreate,
         ex.validate_receipt(doc.get("receipt_url"), doc["amount"], policy)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    await resolve_vendor_links(doc, user)
     await resolve_money_links(doc, user)
     raiser = await db.users.find_one({"id": user.get("id"), "tenant_id": tenancy.tenant_of(user)}, {"_id": 0}) or user
     manager = None
@@ -4262,6 +4433,8 @@ async def transfer_money_request(request_id: str, payload: MoneyRequestTransfer,
         "payout_utr": utr, "status": "Approved", "approved_by": user.get("name", ""), "approved_at": at,
         "money_request_id": req["id"], "project_id": req.get("project_id", ""),
         "sale_id": req.get("sale_id", ""), "quote_id": req.get("quote_id", ""), "lead_id": req.get("lead_id", ""),
+        "purchase_order_id": req.get("purchase_order_id", ""),
+        "manufacturer_order_id": req.get("manufacturer_order_id", ""), "vendor_id": req.get("vendor_id", ""),
     }
     tenancy.stamp(entry, "cashbook_entries", user)
     await db.cashbook_entries.insert_one(dict(entry))
@@ -4350,8 +4523,10 @@ def _narrow_deal(data: dict, *, project_id="", sale_id="", quote_id="", lead_id=
             or (e.get("quote_id") and e.get("quote_id") in quote_ids)
     return {
         "visitor": visitor, "lead": lead, "quotes": quotes, "sales": sales, "project": project,
-        "pos": [x for x in data["purchase_orders"] if pid and x.get("project_id") == pid],
-        "mos": [x for x in data["manufacturer_orders"] if pid and x.get("project_id") == pid],
+        # A PO / vendor order that names its sales order counts only on that order's
+        # deal; one that names only the project counts on the project's deal.
+        "pos": [x for x in data["purchase_orders"] if _on_deal(x, pid, sale_ids)],
+        "mos": [x for x in data["manufacturer_orders"] if _on_deal(x, pid, sale_ids)],
         "entries": [e for e in data["cashbook_entries"] if spend_hit(e)],
         "petty": [v for v in data["petty_cash"] if pid and v.get("project_id") == pid],
         "requests": [r for r in data["money_requests"] if (pid and r.get("project_id") == pid)
@@ -4361,6 +4536,12 @@ def _narrow_deal(data: dict, *, project_id="", sale_id="", quote_id="", lead_id=
         "payouts": [x for x in data["commission_payouts"] if (pid and x.get("project_id") == pid)
                     or (x.get("quote_id") and x.get("quote_id") in quote_ids)],
     }
+
+
+def _on_deal(rec: dict, project_id: str, sale_ids: set) -> bool:
+    if rec.get("sale_id"):
+        return rec["sale_id"] in sale_ids
+    return bool(project_id) and rec.get("project_id") == project_id
 
 
 @api.get("/finance/deal-pnl")
@@ -8204,6 +8385,48 @@ async def _settle_sale_balance(sale: dict, user: dict) -> dict:
     return out or sale
 
 
+async def _wallet_for_receipt(doc: dict, user: dict) -> dict | None:
+    """Checked before a receipt is saved: the wallet it will be banked in (None
+    if no wallet was chosen). `wallet_id` is request-only, so it leaves the doc."""
+    wallet_id = doc.pop("wallet_id", "") or ""
+    doc["cashbook_entry_id"] = ""            # server-owned: only banking a receipt sets it
+    if not wallet_id:
+        return None
+    book = await db.cashbooks.find_one(tenancy.scope({"id": wallet_id}, "cashbooks", user), {"_id": 0})
+    if not book:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    if book.get("status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="That wallet is archived.")
+    await _require_permission("cashbook", "create", user)
+    return book
+
+
+async def _bank_receipt(doc: dict, book: dict | None, user: dict) -> None:
+    """Bank a saved receipt in its wallet: one Cashbook entry, linked both ways
+    (payments.cashbook_entry_id ↔ cashbook_entries.customer_payment_id)."""
+    if not book:
+        return
+    out = doc.get("direction") in ("Out", "Refund")
+    amount = lc.money(doc.get("amount"))
+    entry = {
+        "id": new_id(), "created_at": now_iso(), "cashbook_id": book["id"],
+        "type": "CASH_OUT" if out else "CASH_IN", "status": "Approved", "amount": amount,
+        "category": "Customer Refund" if out else "Customer Receipt",
+        "payment_mode": {"Bank": "ONLINE", "UPI": "UPI"}.get(doc.get("mode"), "OTHER"),
+        "remark": f"{doc.get('payment_id', '')} · {doc.get('kind', '')}".strip(" ·"),
+        "entry_person": user.get("name", ""), "customer_payment_id": doc["id"],
+        "project_id": doc.get("project_id", ""), "sale_id": doc.get("against_sale_id", ""),
+        "pnl_exclude": out,          # a refund of a receipt, not a business expense
+    }
+    tenancy.stamp(entry, "cashbook_entries", user)
+    await db.cashbook_entries.insert_one(dict(entry))
+    await db.cashbooks.update_one(tenancy.scope({"id": book["id"]}, "cashbooks", user),
+                                  {"$inc": {"current_balance": -amount if out else amount}})
+    await db.payments.update_one(tenancy.scope({"id": doc["id"]}, "payments", user),
+                                 {"$set": {"cashbook_entry_id": entry["id"]}})
+    doc["cashbook_entry_id"] = entry["id"]
+
+
 @api.post("/payments")
 async def create_payment(payload: PaymentCreate, user: dict = Depends(get_current_user)):
     doc = payload.model_dump()
@@ -8215,10 +8438,12 @@ async def create_payment(payload: PaymentCreate, user: dict = Depends(get_curren
         tenancy.scope({}, "payments", user), {"payment_id": 1, "_id": 0}).to_list(5000)
     doc["payment_id"] = lc.next_payment_id(existing)
     await _link("payments", doc, user)
+    book = await _wallet_for_receipt(doc, user)
     stamp_fy(doc, "payments")
     tenancy.stamp(doc, "payments", user)
     await db.payments.insert_one(doc)
     doc.pop("_id", None)
+    await _bank_receipt(doc, book, user)
     # Roll the amount into the sale/invoice it is against and re-derive the
     # balance. The increment itself is atomic ($inc), so two payments landing
     # at the same moment (a busy showroom counter, two staff at once) can
@@ -8250,6 +8475,9 @@ async def delete_payment(item_id: str, user: dict = Depends(get_current_user)):
     payment = await db.payments.find_one(owned, {"_id": 0})
     if not payment:
         raise HTTPException(status_code=404, detail="Not found")
+    if payment.get("cashbook_entry_id"):
+        raise HTTPException(status_code=409, detail=(
+            "This receipt is banked in a wallet. Delete its Cashbook entry first, then the receipt."))
     res = await db.payments.delete_one(owned)
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
@@ -8322,7 +8550,7 @@ async def create_split_payment(payload: SplitPaymentCreate, user: dict = Depends
                 "id": new_id(), "cashbook_id": wallet_id, "type": "CASH_IN",
                 "status": "Approved", "amount": other_amount,
                 "category": "Payment Collection", "created_at": now_iso(),
-                "entry_person": user.get("name", ""),
+                "entry_person": user.get("name", ""), "finance_payment_id": doc["id"],
             }
             tenancy.stamp(entry, "cashbook_entries", user)
             await db.cashbook_entries.insert_one(dict(entry))
@@ -8393,10 +8621,12 @@ async def create_order_payment(payload: PaymentCreate, user: dict = Depends(get_
         tenancy.scope({}, "payments", user), {"payment_id": 1, "_id": 0}).to_list(5000)
     doc["payment_id"] = lc.next_payment_id(existing)
     await _link("payments", doc, user)
+    book = await _wallet_for_receipt(doc, user)
     stamp_fy(doc, "payments")
     tenancy.stamp(doc, "payments", user)
     await db.payments.insert_one(doc)
     doc.pop("_id", None)
+    await _bank_receipt(doc, book, user)
 
     # $inc is atomic, so two payments landing at once (see create_payment's
     # comment above) can never lose one to a read-modify-write race.
@@ -8446,6 +8676,12 @@ async def create_stock_movement(payload: StockMovementCreate, user: dict = Depen
         tenancy.scope({"sku": doc.get("product_id")}, "inventory", user), {"_id": 0, "id": 1})
     if not product:
         raise HTTPException(status_code=400, detail="Product (SKU) not found in inventory")
+    doc["inventory_id"] = product["id"]
+    for field, coll, label in (("sale_id", "sales", "sales order"), ("invoice_id", "invoices", "invoice"),
+                               ("purchase_order_id", "purchase_orders", "purchase order"),
+                               ("project_id", "projects", "project")):
+        if doc.get(field) and not await _find_scoped(coll, {"id": doc[field]}, user):
+            raise HTTPException(status_code=400, detail=f"The linked {label} wasn't found.")
     doc["id"] = new_id()
     doc["created_at"] = now_iso()
     if not doc.get("date"):

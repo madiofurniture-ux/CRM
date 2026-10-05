@@ -55,6 +55,7 @@ export default function PurchaseOrders() {
   const [rows, setRows] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [sales, setSales] = useState([]);
   const [fStatus, setFStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [show, setShow] = useState(false);
@@ -64,7 +65,7 @@ export default function PurchaseOrders() {
   const [savingVendor, setSavingVendor] = useState(false);
 
   const empty = {
-    date: todayIST(), vendor_id: "", project_id: "",
+    date: todayIST(), vendor_id: "", project_id: "", sale_id: "",
     payment_terms: "", delivery_address: "", expected_date: "", status: "Draft",
     remarks: "", line_items: [emptyLine()],
   };
@@ -75,6 +76,7 @@ export default function PurchaseOrders() {
     load();
     api.get("/vendors").then(({ data }) => setVendors(data)).catch(() => setVendors([]));
     api.get("/projects").then(({ data }) => setProjects(data)).catch(() => setProjects([]));
+    api.get("/sales").then(({ data }) => setSales(data)).catch(() => setSales([]));
   }, []);
 
   const vendorOptions = useMemo(() => vendors.map((v) => ({
@@ -102,7 +104,7 @@ export default function PurchaseOrders() {
   const openNew = () => { setForm(empty); setEditingId(null); setShow(true); };
   const openEdit = (po) => {
     setForm({
-      date: po.date || "", vendor_id: po.vendor_id || "", project_id: po.project_id || "",
+      date: po.date || "", vendor_id: po.vendor_id || "", project_id: po.project_id || "", sale_id: po.sale_id || "",
       payment_terms: po.payment_terms || "", delivery_address: po.delivery_address || "",
       expected_date: po.expected_date || "", status: po.status || "Draft",
       remarks: po.remarks || "",
@@ -300,6 +302,22 @@ export default function PurchaseOrders() {
                   />
                   <div className="text-[11px] text-[var(--ink-3)] mt-1">
                     Linking feeds this order's cost into the project's P&amp;L once it leaves Draft.
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Against sales order</label>
+                  <SearchSelect
+                    options={sales
+                      .filter((s) => !form.project_id || s.project_id === form.project_id)
+                      .map((s) => ({ id: s.id, label: s.sale_no || s.id, sub: s.customer }))}
+                    value={form.sale_id}
+                    onChange={(id) => setForm({ ...form, sale_id: id })}
+                    placeholder="Chosen from the project when it has one order"
+                    emptyLabel="No sales orders found"
+                    testId="po-sale"
+                  />
+                  <div className="text-[11px] text-[var(--ink-3)] mt-1">
+                    One order can have several POs; this decides which order's margin carries this cost.
                   </div>
                 </div>
                 <PF l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />
