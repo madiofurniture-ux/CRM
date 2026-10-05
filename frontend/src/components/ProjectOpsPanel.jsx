@@ -296,15 +296,19 @@ const MAP_ROW = { area_name: "", length: "", height: "", area: "", surface_condi
 
 function SurveyTab({ project, data, reload }) {
   const division = data.workflow.division;
+  // Survey layout is per division (Business Settings): rooms, areas (wall /
+  // surface inspection) or openings (doors & windows, its own screen).
+  const kind = data.workflow.survey_kind || (division === "D&W" ? "openings" : division === "MAP" ? "areas" : "rooms");
+  const isAreas = kind === "areas";
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [openSurvey, setOpenSurvey] = useState(null);
 
-  if (division === "D&W") {
+  if (kind === "openings") {
     return (
       <div className="space-y-3">
         <p className="text-sm text-[var(--ink-2)]">
-          Doors &amp; Windows projects use the D&amp;W survey — openings, sizes, profile/series, glass, hardware, mesh and finish, with client sign-off and BOQ.
+          Projects in this division use the openings survey — openings, sizes, profile/series, glass, hardware, mesh and finish, with client sign-off and BOQ.
         </p>
         {(data.dw_surveys || []).map((s) => (
           <div key={s.id} className="flex items-center justify-between text-sm border border-[var(--border)] rounded-xl px-3 py-2">
@@ -319,7 +323,7 @@ function SurveyTab({ project, data, reload }) {
     );
   }
 
-  const blank = division === "MAP" ? MAP_ROW : FURNITURE_ROW;
+  const blank = isAreas ? MAP_ROW : FURNITURE_ROW;
   const startNew = () => setForm({ survey_date: todayIST(), surveyor: "", site_address: project.site_address || "",
     notes: "", customer_signed: false, signed_by: "", rows: [{ ...blank }] });
   const setRow = (i, k, v) => setForm((f) => ({ ...f, rows: f.rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)) }));
@@ -340,7 +344,7 @@ function SurveyTab({ project, data, reload }) {
   };
 
   if (form) {
-    const fields = division === "MAP"
+    const fields = isAreas
       ? [["area_name", "Wall / area", "text"], ["length", "Length (ft)", "number"], ["height", "Height (ft)", "number"],
          ["area", "Area (sq ft, auto)", "number"], ["surface_condition", "Surface condition", "text"], ["moisture", "Moisture", "text"],
          ["existing_finish", "Existing finish", "text"], ["proposed_finish", "Proposed finish", "text"], ["sample", "Sample", "text"],
@@ -357,7 +361,7 @@ function SurveyTab({ project, data, reload }) {
         {form.rows.map((r, i) => (
           <div key={i} className="border border-[var(--border)] rounded-xl p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-[var(--ink-2)]">{division === "MAP" ? "Wall / area" : "Room"} {i + 1}</span>
+              <span className="text-xs font-semibold text-[var(--ink-2)]">{isAreas ? "Wall / area" : "Room"} {i + 1}</span>
               <button type="button" onClick={() => setForm((f) => ({ ...f, rows: f.rows.filter((_, j) => j !== i) }))}
                 className="p-1 text-[var(--danger)]" aria-label="Remove row"><Trash2 size={13} /></button>
             </div>
@@ -370,7 +374,7 @@ function SurveyTab({ project, data, reload }) {
           </div>
         ))}
         <button type="button" className="btn-ghost" onClick={() => setForm((f) => ({ ...f, rows: [...f.rows, { ...blank }] }))}>
-          <Plus size={14} /> Add {division === "MAP" ? "wall / area" : "room"}
+          <Plus size={14} /> Add {isAreas ? "wall / area" : "room"}
         </button>
         <Input label="Notes" value={form.notes} onChange={(v) => setForm({ ...form, notes: v })} />
         <label className="flex items-center gap-2 text-sm">
@@ -389,21 +393,21 @@ function SurveyTab({ project, data, reload }) {
   return (
     <div className="space-y-3">
       {(data.site_surveys || []).length === 0 && (
-        <p className="text-sm text-[var(--ink-3)]">No {division === "MAP" ? "inspection" : "site survey"} recorded yet.</p>
+        <p className="text-sm text-[var(--ink-3)]">No {isAreas ? "inspection" : "site survey"} recorded yet.</p>
       )}
       {(data.site_surveys || []).map((s) => (
         <div key={s.id} className="border border-[var(--border)] rounded-xl">
           <button type="button" className="w-full flex items-center justify-between px-3 py-2 text-sm" onClick={() => setOpenSurvey(openSurvey === s.id ? null : s.id)}>
             <span className="font-mono font-semibold">{s.survey_no}</span>
             <span className="text-xs text-[var(--ink-2)]">
-              {fmtDate(s.survey_date)} · {s.surveyor} · {division === "MAP" ? `${s.totals?.total_area || 0} sq ft` : `${s.totals?.rooms || 0} rooms`}
+              {fmtDate(s.survey_date)} · {s.surveyor} · {isAreas ? `${s.totals?.total_area || 0} sq ft` : `${s.totals?.rooms || 0} rooms`}
             </span>
           </button>
           {openSurvey === s.id && (
             <div className="px-3 pb-3 space-y-2">
               {(s.rows || []).map((r, i) => (
                 <div key={i} className="text-xs bg-[var(--surface-2)] rounded-lg p-2">
-                  {division === "MAP"
+                  {isAreas
                     ? <><b>{r.area_name}</b> — {r.length}×{r.height} ft = {r.area} sq ft · {r.surface_condition || "—"} · moisture {r.moisture || "—"} · {r.existing_finish || "—"} → {r.proposed_finish || "—"} {r.shade ? `· shade ${r.shade}` : ""}</>
                     : <><b>{r.room}</b> — {r.length}×{r.width}×{r.height} ft · {r.requirement || "—"} {r.existing_conditions ? `· ${r.existing_conditions}` : ""}</>}
                   {r.notes && <div className="text-[var(--ink-3)]">{r.notes}</div>}
@@ -418,7 +422,7 @@ function SurveyTab({ project, data, reload }) {
         </div>
       ))}
       <button className="btn-primary" onClick={startNew} data-testid="new-site-survey">
-        <Plus size={14} /> {division === "MAP" ? "New inspection" : "New site survey"}
+        <Plus size={14} /> {isAreas ? "New inspection" : "New site survey"}
       </button>
     </div>
   );

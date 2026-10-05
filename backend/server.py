@@ -2183,6 +2183,8 @@ async def normalize_lead(doc: dict, existing: dict | None, user: dict) -> None:
     if "remarks_history" in doc:
         doc["remarks_history"] = _shape_remark_history(doc["remarks_history"], user)
     # Go-live lead fields — validated server-side, never trusted from the UI.
+    if doc.get("division"):
+        await _tenant_divisions(user)
     try:
         if doc.get("email"):
             doc["email"] = ops.validate_email(doc["email"])
@@ -5389,10 +5391,16 @@ async def _get_business_profile(user: dict):
 
 
 async def _tenant_divisions(user: dict) -> list:
-    """Scope this request's division rollups (lifecycle.divisions) to the
-    caller's own division roster."""
+    """Scope this request's division rules to the caller's own division
+    roster: rollups (lifecycle.divisions) and validation, project checklists
+    and survey kind (operations.use_roster). Call it before any division rule
+    runs; without it both modules fall back to MADIO's three divisions."""
+    if not tenancy.tenant_of(user):
+        return lc.use_divisions(None)
     profile = await _get_business_profile(user)
-    return lc.use_divisions([d.get("slug") for d in profile.get("divisions") or []])
+    divisions = profile.get("divisions") or []
+    ops.use_roster(divisions)
+    return lc.use_divisions([d.get("slug") for d in divisions])
 
 
 @api.get("/settings/business-profile")
@@ -6400,6 +6408,7 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
     if not existing:
         raise HTTPException(404, "Project not found")
     await _check_project_integrity(patch, existing, user)
+    await _tenant_divisions(user)
     if "division" in patch and patch["division"] != ops.normalize_division(existing.get("division")):
         # Carry recorded progress over to the new division's checklist.
         patch["milestones"] = ops.merge_milestones(existing.get("milestones"), patch["division"])
@@ -6430,18 +6439,13 @@ async def _check_project_integrity(doc: dict, existing: dict | None, user: dict)
         if "customer" in doc:
             doc["customer"] = doc_customer
     if existing is None or "division" in doc:
-        raw_div = merged.get("division") or "Furniture"
+        # The company's own divisions (Business Settings / industry pack).
+        await _tenant_divisions(user)
+        raw_div = merged.get("division") or ops.division_names()[0]
         try:
             doc["division"] = ops.validate_division(raw_div)
         except ValueError as e:
-            # A tenant may have renamed/added divisions in Business Settings —
-            # its own configured slugs are valid too (they run the Furniture
-            # checklist until a workflow is defined for them).
-            profile = await _get_business_profile(user)
-            slugs = {str(d.get("slug") or "") for d in profile.get("divisions") or []}
-            if str(raw_div) not in slugs:
-                raise HTTPException(400, str(e))
-            doc["division"] = str(raw_div)
+            raise HTTPException(400, str(e))
     if doc.get("customer_id"):
         if not await db.customers.find_one(tenancy.scope({"id": doc["customer_id"]}, "customers", user), {"_id": 1}):
             raise HTTPException(400, "customer_id does not match a customer")
@@ -6521,6 +6525,7 @@ from models import (  # noqa: E402
 
 
 async def _project_or_404(project_id: str, user: dict) -> dict:
+    await _tenant_divisions(user)      # checklists and survey kind are per company
     project = await db.projects.find_one(tenancy.scope({"id": project_id}, "projects", user), {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -6549,6 +6554,7 @@ def _project_workflow_view(project: dict) -> dict:
     milestones = ops.merge_milestones(project.get("milestones"), project.get("division"))
     return {"project_id": project.get("id"), "division": ops.normalize_division(project.get("division")),
             "stages": ops.division_workflow(project.get("division")),
+            "survey_kind": ops.survey_kind(project.get("division")),
             "milestones": milestones, "progress": ops.workflow_progress(milestones)}
 
 
@@ -6720,6 +6726,7 @@ async def get_service_ticket(ticket_id: str, user: dict = Depends(get_current_us
 
 @api.post("/service-tickets")
 async def create_service_ticket(payload: ServiceTicketCreate, user: dict = Depends(get_current_user)):
+    await _tenant_divisions(user)
     await _require_permission("projects", "create", user)
     project = await _project_or_404(payload.project_id, user)
     doc = payload.model_dump()
@@ -6806,15 +6813,16 @@ async def update_service_ticket(ticket_id: str, payload: ServiceTicketUpdate,
 # ------------------------------------------------ Furniture / MAP site survey
 def _survey_division(project: dict) -> str:
     division = ops.normalize_division(project.get("division"))
-    if division not in ops.SURVEY_DIVISIONS:
+    if ops.survey_kind(division) == "openings":
         raise HTTPException(status_code=400, detail=(
-            "Doors & Windows projects use the D&W Survey (openings + BOQ) — open it from D&W Survey."))
+            "This division uses the openings survey (openings + BOQ) — open it from D&W Survey."))
     return division
 
 
 @api.get("/site-surveys")
 async def list_site_surveys(project_id: str = "", division: str = "",
                             user: dict = Depends(get_current_user)):
+    await _tenant_divisions(user)
     await _require_permission("projects", "view", user)
     q: dict = {}
     if project_id:
@@ -6908,6 +6916,7 @@ async def followups_summary(assigned_to: str = "", division: str = "", inactive_
     no follow-up date, no next action, untouched for `inactive_days`. Also
     overdue customer payments and open service tickets, so one screen answers
     "who do I need to chase today?". Respects the caller's lead scope."""
+    await _tenant_divisions(user)
     roles = await _require_permission("leads", "view", user)
     q: dict = {"stage": {"$nin": sorted(ops.CLOSED_LEAD_STAGES)}}
     owners = await _scope_owners(user, roles, "leads")
@@ -6961,6 +6970,7 @@ async def followups_summary(assigned_to: str = "", division: str = "", inactive_
 async def customer_overview(customer_id: str, user: dict = Depends(get_current_user)):
     """Customer 360: every project, quote, payment and service ticket, matched
     by customer_id OR phone (legacy rows predate customer_id)."""
+    await _tenant_divisions(user)
     await _require_permission("customers", "view", user)
     customer = await db.customers.find_one(tenancy.scope({"id": customer_id}, "customers", user), {"_id": 0})
     if not customer:
@@ -7586,6 +7596,7 @@ async def _generate_sales_order_and_project(quote: dict, user: dict) -> tuple[di
     Idempotent by quote_id: re-approving (or a race between two approve
     calls) must never mint a second order for the same quote.
     """
+    await _tenant_divisions(user)
     quote_id = quote["id"]
     existing_sale = await db.sales.find_one(
         tenancy.scope({"quote_id": quote_id}, "sales", user), {"_id": 0})
@@ -7686,6 +7697,7 @@ async def _ensure_project_artifacts(project: dict, user: dict) -> dict:
     retry after a partial failure can still finish what's missing instead of
     leaving a converted quote with no installation task forever.
     """
+    await _tenant_divisions(user)
     owned = tenancy.scope({"id": project["id"]}, "projects", user)
     if not project.get("milestones"):
         await db.projects.update_one(owned, {"$set": {"milestones": ops.division_milestones(project.get("division"))}})
@@ -8740,6 +8752,7 @@ async def start_project(lead_id: str, user: dict = Depends(get_current_user)):
     later adopts this same project by lead_id instead of creating a second
     one once the deal reaches a sale.
     """
+    await _tenant_divisions(user)
     lead = await db.leads.find_one(tenancy.scope({"id": lead_id}, "leads", user), {"_id": 0})
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -9481,6 +9494,7 @@ async def _projects_for_open_sales(user: dict) -> int:
     converting a quote creates — so loaded orders can be tracked through
     production and installation. Delivered orders start at Review, the rest
     at Execution. Stage automations are not run: these orders are not new."""
+    await _tenant_divisions(user)
     sales = await db.sales.find(tenancy.scope({"stage": {"$in": list(OPEN_SALE_STAGES)}}, "sales", user),
                                 {"_id": 0}).to_list(20000)
     if not sales:

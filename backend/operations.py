@@ -15,6 +15,7 @@ Covers four go-live gaps:
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
 from datetime import date
 from typing import Any, Iterable, Optional
 
@@ -32,15 +33,78 @@ _DIVISION_ALIASES = {
 }
 
 
-def normalize_division(value: Any, default: str = "Furniture") -> str:
-    """Map the spellings seen in real data onto the three canonical divisions.
-    Unknown values fall back to `default` rather than raising, because legacy
-    rows carry free text; use validate_division() where input must be strict."""
-    return _DIVISION_ALIASES.get(str(value or "").strip().lower(), default)
+# ---------------------------------------------------- the tenant's own roster
+# Divisions are configuration: each company's business profile lists its own
+# (`models.Division`: slug, name, optional `milestones` checklist and
+# `survey_kind`). server._tenant_divisions(user) calls use_roster() with that
+# list before any division rule runs, so a solar company's "Solar" is valid,
+# runs its own checklist and gets site surveys. With no roster set (pure unit
+# tests, scripts) every rule below behaves exactly as it did for MADIO's three
+# divisions. A ContextVar is per request task: one company's roster never
+# leaks into another's request.
+_roster: ContextVar = ContextVar("division_roster", default=None)
+
+
+def _clean_key(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def use_roster(divisions: Optional[Iterable[dict]]) -> list[dict]:
+    """Set this request's division roster (business-profile divisions)."""
+    clean = [dict(d) for d in (divisions or []) if isinstance(d, dict) and str(d.get("slug") or "").strip()]
+    _roster.set(clean or None)
+    return clean
+
+
+def roster() -> Optional[list[dict]]:
+    return _roster.get()
+
+
+def _roster_match(value: Any) -> Optional[dict]:
+    """The roster entry a typed value names: its slug or name (case and
+    spacing ignored), or one of MADIO's historical spellings ("dw", "mdw",
+    "paints"…) when that canonical division is in the roster."""
+    r = roster()
+    if not r:
+        return None
+    key = _clean_key(value)
+    if not key:
+        return None
+    for d in r:
+        if key in (_clean_key(d.get("slug")), _clean_key(d.get("name"))):
+            return d
+    alias = _DIVISION_ALIASES.get(key)
+    if alias:
+        for d in r:
+            if str(d.get("slug")) == alias:
+                return d
+    return None
+
+
+def division_names() -> list[str]:
+    r = roster()
+    return [str(d["slug"]) for d in r] if r else list(DIVISIONS)
+
+
+def normalize_division(value: Any, default: Optional[str] = None) -> str:
+    """Map the spellings seen in real data onto the company's divisions.
+    Unknown values fall back to `default` (else the first division —
+    Furniture for MADIO) rather than raising, because legacy rows carry free
+    text; use validate_division() where input must be strict."""
+    r = roster()
+    if r:
+        hit = _roster_match(value)
+        return str(hit["slug"]) if hit else (default or str(r[0]["slug"]))
+    return _DIVISION_ALIASES.get(_clean_key(value), default or "Furniture")
 
 
 def validate_division(value: Any) -> str:
-    key = str(value or "").strip().lower()
+    if roster():
+        hit = _roster_match(value)
+        if not hit:
+            raise ValueError(f"Division must be one of {', '.join(division_names())}")
+        return str(hit["slug"])
+    key = _clean_key(value)
     if key not in _DIVISION_ALIASES:
         raise ValueError(f"Division must be one of {', '.join(DIVISIONS)}")
     return _DIVISION_ALIASES[key]
@@ -74,8 +138,53 @@ INSTALLATION_EQUIVALENTS = {"Installation", "Application"}
 COMPLETION_STAGE = "Completion"
 
 
+# Any division without its own checklist (a new company's "Solar", say) runs
+# this one until the admin sets one in Business Settings.
+GENERIC_WORKFLOW = ["Requirement", "Site Survey", "Quotation", "Customer Approval", "Order",
+                    "Execution", "Quality Check", "Completion", "Warranty"]
+
+
+def _clean_checklist(names: Any) -> list[str]:
+    """A configured checklist: trimmed, de-duplicated, and always carrying the
+    Completion stage — it is what marks a project delivered."""
+    out: list[str] = []
+    for n in names or []:
+        n = re.sub(r"\s+", " ", str(n or "")).strip()[:60]
+        if n and n.lower() not in {x.lower() for x in out}:
+            out.append(lc.canonical_milestone_name(n) or n)
+    if out and COMPLETION_STAGE not in out:
+        out.append(COMPLETION_STAGE)
+    return out
+
+
 def division_workflow(division: Any) -> list[str]:
-    return list(DIVISION_WORKFLOWS[normalize_division(division)])
+    div = normalize_division(division)
+    hit = _roster_match(div)
+    own = _clean_checklist((hit or {}).get("milestones"))
+    if own:
+        return own
+    return list(DIVISION_WORKFLOWS.get(div) or GENERIC_WORKFLOW)
+
+
+SURVEY_KINDS = ("rooms", "areas", "openings")
+
+
+def survey_kind(division: Any) -> str:
+    """Which survey a division's projects use:
+      'rooms'    — room by room: size, requirement, existing conditions
+                   (MADIO Furniture's site survey; the default for any division);
+      'areas'    — wall / surface areas with substrate, moisture and finish
+                   (MADIO MAP's inspection);
+      'openings' — doors/windows: the openings survey + BOQ (dw_surveys).
+    Configurable per division (`survey_kind` in the business profile)."""
+    div = normalize_division(division)
+    hit = _roster_match(div) or {}
+    kind = str(hit.get("survey_kind") or "").strip().lower()
+    if kind == "site":
+        kind = "rooms"
+    if kind in SURVEY_KINDS:
+        return kind
+    return {"D&W": "openings", "MAP": "areas"}.get(div, "rooms")
 
 
 def division_milestones(division: Any) -> list[dict]:
@@ -296,7 +405,6 @@ def warranty_active(project: dict, today: Optional[date] = None, months: int = 1
 
 
 # --------------------------------------------------------------- site surveys
-SURVEY_DIVISIONS = {"Furniture", "MAP"}  # D&W uses dw_surveys (openings + BOQ)
 SURVEY_STATUSES = ["Draft", "Submitted", "Approved"]
 
 _FURNITURE_ROW_TEXT = ("room", "requirement", "existing_conditions", "notes")
@@ -325,7 +433,7 @@ def clean_survey_rows(division: str, rows: Any) -> tuple[list[dict], dict]:
     if len(rows) > 200:
         raise ValueError("A survey can hold at most 200 rows")
     out = []
-    if division == "Furniture":
+    if survey_kind(division) != "areas":            # rooms
         for i, r in enumerate(rows, 1):
             if not isinstance(r, dict):
                 continue
@@ -336,7 +444,7 @@ def clean_survey_rows(division: str, rows: Any) -> tuple[list[dict], dict]:
                 row[k] = _num(r, k, f"Row {i}")
             out.append(row)
         return out, {"rooms": len(out)}
-    # MAP
+    # areas (MAP's wall-by-wall inspection)
     total_area = 0.0
     for i, r in enumerate(rows, 1):
         if not isinstance(r, dict):

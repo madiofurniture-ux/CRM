@@ -282,6 +282,73 @@ PACKS: dict[str, dict] = {
 }
 
 
+# Each division's project checklist (operations.division_workflow) and site
+# survey layout (operations.survey_kind: rooms / areas / openings). Every list
+# ends in "Completion" — ticking it marks the project delivered. "Production"
+# and "Installation" keep those exact names where the trade has them: the
+# customer journey keys its timestamps off them.
+_SETUP = {
+    "furniture_interiors": {
+        "furniture": (["Requirement", "Site Survey", "Design", "Quotation", "Customer Approval", "Order",
+                       "Production", "Quality Check", "Dispatch", "Delivery", "Installation", "Completion",
+                       "Warranty"], "rooms"),
+        "modular": (["Site Measurement", "Design", "Quotation", "Customer Approval", "Order", "Production",
+                     "Quality Check", "Delivery", "Installation", "Completion", "Warranty"], "rooms"),
+    },
+    "interior_design": {
+        "residential": (["Site Visit & Brief", "Concept Design", "BOQ & Quotation", "Design Fee",
+                         "Detailed Drawings", "Execution", "Snag List", "Handover", "Completion",
+                         "Warranty"], "rooms"),
+        "commercial": (["Site Survey", "Concept Design", "BOQ & Quotation", "Design Fee", "Detailed Drawings",
+                        "Execution", "Snag List", "Handover", "Completion", "Warranty"], "rooms"),
+    },
+    "building_materials": {
+        "retail": (["Order", "Dispatch", "Delivery", "Completion"], "rooms"),
+        "projects": (["Site Inspection", "Sample", "Estimate", "Order", "Material Planning", "Application",
+                      "Quality Check", "Completion", "Warranty"], "areas"),
+    },
+    "doors_windows": {
+        "upvc": (["Site Measurement", "Design/Drawing", "Quotation", "Customer Approval", "Order", "Production",
+                  "Quality Check", "Dispatch", "Installation", "Completion", "Warranty"], "openings"),
+        "aluminium": (["Site Measurement", "Design/Drawing", "Quotation", "Customer Approval", "Order",
+                       "Production", "Quality Check", "Dispatch", "Installation", "Completion", "Warranty"],
+                      "openings"),
+    },
+    "manufacturing_b2b": {
+        "domestic": (["Order Confirmation", "Production Planning", "Production", "Quality Check", "Dispatch",
+                      "Delivery", "Completion"], "rooms"),
+        "export": (["Order Confirmation", "Production Planning", "Production", "Quality Check",
+                    "Shipping Documents", "Dispatch", "Completion"], "rooms"),
+    },
+    "real_estate": {
+        "residential": (["Site Visit", "Unit Blocked", "Booking", "Agreement", "Loan Sanction", "Registration",
+                         "Possession", "Completion"], "rooms"),
+    },
+    "solar_electrical": {
+        "rooftop": (["Site Survey", "Proposal", "Customer Approval", "Subsidy Docs", "Material Dispatch",
+                     "Installation", "Net Metering", "Commissioning", "Completion", "Warranty"], "rooms"),
+        "electrical": (["Site Survey", "Estimate", "Customer Approval", "Execution", "Testing", "Handover",
+                        "Completion"], "rooms"),
+    },
+    "education": {
+        "courses": (["Admission", "Fee Paid", "Batch Allotted", "Classes", "Completion"], "rooms"),
+    },
+    "healthcare": {
+        "consult": (["Appointment", "Consultation", "Follow-up", "Completion"], "rooms"),
+        "procedures": (["Consultation", "Pre-procedure Tests", "Procedure", "Post-op Review", "Completion"],
+                       "rooms"),
+    },
+    "services_agency": {
+        "retainers": (["Kick-off", "Onboarding", "Monthly Delivery", "Review", "Completion"], "rooms"),
+        "projects": (["Discovery", "Proposal", "Delivery", "Client Review", "Sign-off", "Completion"], "rooms"),
+    },
+}
+for _pid, _divs in _SETUP.items():
+    for _d in PACKS[_pid]["divisions"]:
+        if _d["id"] in _divs:
+            _d["milestones"], _d["survey_kind"] = list(_divs[_d["id"]][0]), _divs[_d["id"]][1]
+
+
 def pack_modules(pack: dict, all_module_ids: list[str]) -> list[str]:
     """CORE plus the pack's bundles, in ALL_MODULE_IDS order, limited to
     module ids the server knows (a bundle naming a retired id is ignored)."""

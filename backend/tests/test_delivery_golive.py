@@ -447,7 +447,9 @@ def test_tenant_configured_division_slug_is_accepted_for_projects():
         await server.db.business_profiles.update_one({"tenant_id": "acme"}, {"$set": {"divisions": profile["divisions"]}})
         p = await server.create_project(ProjectCreate(project_no="", customer="K", division="Kitchens"), user=ADMIN)
         assert p["division"] == "Kitchens"
-        assert (await server.project_workflow(p["id"], user=ADMIN))["stages"] == ops.DIVISION_WORKFLOWS["Furniture"]
+        # A division without its own checklist runs the generic one, not
+        # MADIO's Furniture list (prompt 4: divisions are configuration).
+        assert (await server.project_workflow(p["id"], user=ADMIN))["stages"] == ops.GENERIC_WORKFLOW
         with pytest.raises(HTTPException):
             await server.create_project(ProjectCreate(project_no="", customer="K", division="Bogus"), user=ADMIN)
     run(go())

@@ -1347,6 +1347,36 @@ class Division(BaseModel):
     custom_sku_prefix: Optional[str] = ""
     terms_and_conditions: Optional[str] = ""
     stage_labels: Optional[dict] = None  # PROJECT_STAGE_KEYS entry -> this division's display label
+    # The project checklist this division runs (operations.division_workflow);
+    # empty = MADIO's built-in list for Furniture/D&W/MAP, else a generic one.
+    milestones: Optional[List[str]] = None
+    # Site survey layout: "rooms", "areas" or "openings" (operations.survey_kind);
+    # empty = rooms, except MADIO's MAP (areas) and D&W (openings).
+    survey_kind: Optional[str] = None
+
+    @field_validator("milestones")
+    @classmethod
+    def _clean_milestones(cls, v):
+        if v is None:
+            return None
+        out = []
+        for n in v:
+            n = " ".join(str(n or "").split())[:60]
+            if n and n.lower() not in {x.lower() for x in out}:
+                out.append(n)
+        if len(out) > 40:
+            raise ValueError("A division checklist can have at most 40 stages")
+        return out or None
+
+    @field_validator("survey_kind")
+    @classmethod
+    def _valid_survey_kind(cls, v):
+        v = str(v or "").strip().lower() or None
+        if v == "site":
+            v = "rooms"
+        if v and v not in ("rooms", "areas", "openings"):
+            raise ValueError("survey_kind must be rooms, areas or openings")
+        return v
 
 
 DEFAULT_DIVISIONS = [
