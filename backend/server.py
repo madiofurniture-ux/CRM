@@ -816,6 +816,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
             doc["created_by_id"] = user.get("id", "")
         if normalize:
             await normalize(doc, None, user)
+        await _check_picklists(collection, doc, None, user)
         if collection in rel.LINKED:
             await _link(collection, doc, user)
         await validate_stage(collection, doc, user)
@@ -864,6 +865,7 @@ def make_crud(router: APIRouter, base: str, collection: str, create_model, out_m
             payload.pop("created_by_id", None)
         if normalize:
             await normalize(payload, existing, user)
+        await _check_picklists(collection, payload, existing, user)
         if collection in rel.LINKED:
             await _link(collection, payload, user, existing)
         payload = validate_partial_update(create_model, existing, payload)
@@ -5192,6 +5194,101 @@ async def outstanding_report(user: dict = Depends(get_current_user)):
 
 
 # ---------- Office Settings ----------
+# ── Master data picklists ─────────────────────────────────────────────────
+# The choices behind every dropdown that isn't its own record type: an admin
+# edits them in Master Data, every form reads them from GET /picklists, and a
+# save with a value that isn't on the list is refused (a value left as it
+# was on an older record is never re-checked). An empty list = no check.
+PICKLISTS = {
+    "lead_sources": ("Lead sources", ["Walk-in", "Architect", "Referral", "Website", "WhatsApp", "Instagram",
+                                      "Facebook", "Google", "Phone", "Existing Customer", "Social Media",
+                                      "Site Visit", "Cold Call", "Other"]),
+    "project_types": ("Project types", ["Villa", "Apartment", "Independent House", "Office", "Showroom",
+                                        "Hospitality", "Other"]),
+    "task_categories": ("Task categories", ["General", "Sales", "Site Visit", "Marketing", "Delivery",
+                                            "Inventory", "Admin", "Procurement", "Finance"]),
+    "service_types": ("Service ticket types", ["Warranty", "Paid Service", "Complaint", "Installation Snag", "Other"]),
+    "architect_types": ("Architect / partner types", ["Architect", "Designer", "Builder", "Vendor"]),
+    "dw_opening_types": ("D&W opening types", ["Window", "Door", "Sliding", "French Door", "Ventilator", "Partition"]),
+    "dw_frames": ("D&W frames", ["uPVC", "Aluminium", "Wood", "MS", "WPC"]),
+    "dw_glass": ("D&W glass", ["Single", "Double (DGU)", "Toughened", "Frosted", "Tinted", "None"]),
+    "dw_hardware_finishes": ("D&W hardware finishes", ["Black", "White", "Silver", "Champagne", "Brown", "SS"]),
+    "inventory_categories": ("Stock categories", []),          # first read: the categories already in stock
+    "units": ("Units", ["pcs", "nos", "set", "sqft", "rft", "sqm", "kg", "ltr", "box", "roll"]),
+}
+# (collection, field) -> picklist checked on save.
+PICKLIST_FIELDS = {
+    "leads": {"source": "lead_sources"},
+    "projects": {"project_type": "project_types"},
+    "tasks": {"category": "task_categories"},
+    "service_tickets": {"ticket_type": "service_types"},
+    "architects": {"type": "architect_types"},
+    "dw_openings": {"type": "dw_opening_types", "frame": "dw_frames", "glass": "dw_glass",
+                    "hardware_finish": "dw_hardware_finishes"},
+    "inventory": {"category": "inventory_categories", "unit": "units"},
+}
+
+
+async def _picklists(user: dict) -> dict:
+    saved = await db.settings.find_one(tenancy.scope({"key": "picklists"}, "settings", user), {"_id": 0}) or {}
+    lists = dict(saved.get("lists") or {})
+    out = {}
+    for key, (label, default) in PICKLISTS.items():
+        values = lists.get(key)
+        if values is None and key == "inventory_categories":
+            cats = await db.inventory.distinct("category", tenancy.scope({}, "inventory", user))
+            values = sorted({str(c).strip() for c in cats if str(c or "").strip()}, key=str.lower)
+        out[key] = {"label": label, "values": list(values if values is not None else default),
+                    "customised": key in lists}
+    return out
+
+
+async def _check_picklists(collection: str, doc: dict, existing: dict | None, user: dict) -> None:
+    fields = PICKLIST_FIELDS.get(collection)
+    if not fields:
+        return
+    lists = None
+    for field, key in fields.items():
+        if field not in doc:
+            continue
+        value = str(doc.get(field) or "").strip()
+        if not value or (existing is not None and value == str(existing.get(field) or "").strip()):
+            continue
+        lists = lists or await _picklists(user)
+        allowed = lists[key]["values"]
+        if allowed and value.lower() not in {v.lower() for v in allowed}:
+            raise HTTPException(status_code=400, detail=(
+                f"“{value}” isn't in the {lists[key]['label'].lower()} list — pick one, or an admin can add it "
+                "in Master Data."))
+        doc[field] = next((v for v in allowed if v.lower() == value.lower()), value)
+
+
+@api.get("/picklists")
+async def get_picklists(user: dict = Depends(get_current_user)):
+    return await _picklists(user)
+
+
+@api.put("/picklists/{key}")
+async def put_picklist(key: str, payload: dict, user: dict = Depends(require_admin)):
+    if key not in PICKLISTS:
+        raise HTTPException(status_code=404, detail="No such list")
+    seen, values = set(), []
+    for v in (payload or {}).get("values") or []:
+        v = re.sub(r"\s+", " ", str(v or "")).strip()[:80]
+        if v and v.lower() not in seen:
+            seen.add(v.lower())
+            values.append(v)
+    if len(values) > 300:
+        raise HTTPException(status_code=400, detail="A list can hold up to 300 values")
+    saved = await db.settings.find_one(tenancy.scope({"key": "picklists"}, "settings", user), {"_id": 0}) or {}
+    lists = {**(saved.get("lists") or {}), key: values}
+    await db.settings.update_one(tenancy.scope({"key": "picklists"}, "settings", user),
+                                 {"$set": tenancy.stamp({"key": "picklists", "lists": lists}, "settings", user)},
+                                 upsert=True)
+    await _audit("picklist_changed", user, f"{PICKLISTS[key][0]}: {len(values)} values")
+    return (await _picklists(user))[key]
+
+
 async def _get_settings(user: dict) -> dict:
     """
     This company's office record: name, address, GSTIN and home state on
@@ -6226,6 +6323,7 @@ async def create_project(data: ProjectCreate, user=Depends(get_current_user)):
     doc["id"] = new_id()
     doc["created_at"] = doc["updated_at"] = now_iso()
     await _link("projects", doc, user)
+    await _check_picklists("projects", doc, None, user)
     await _check_project_integrity(doc, None, user)
     await _resolve_partner(doc, None, user)
     if not doc.get("milestones"):
@@ -6256,6 +6354,7 @@ async def update_project(project_id: str, data: ProjectUpdate, user=Depends(get_
     if not existing:
         raise HTTPException(404, "Project not found")
     await _link("projects", patch, user, existing)
+    await _check_picklists("projects", patch, existing, user)
     await _check_project_integrity(patch, existing, user)
     await _resolve_partner(patch, existing, user)
     if "division" in patch and patch["division"] != ops.normalize_division(existing.get("division")):
@@ -6618,10 +6717,12 @@ async def create_service_ticket(payload: ServiceTicketCreate, user: dict = Depen
     doc["complaint"] = str(doc.get("complaint") or "").strip()
     if not doc["complaint"]:
         raise HTTPException(status_code=400, detail="Describe the complaint")
+    await _check_picklists("service_tickets", doc, None, user)
+    service_types = (await _picklists(user))["service_types"]["values"] or list(ops.SERVICE_TYPES)
     try:
         doc["status"] = ops.normalize_service_status(doc.get("status") or "OPEN")
         doc["priority"] = ops.normalize_priority(doc.get("priority"))
-        if doc.get("ticket_type") not in ops.SERVICE_TYPES:
+        if doc.get("ticket_type") not in service_types:
             doc["ticket_type"] = "Warranty" if ops.warranty_active(project) else "Complaint"
         ops.check_service_transition(doc)
     except ValueError as e:
@@ -6659,13 +6760,13 @@ async def update_service_ticket(ticket_id: str, payload: ServiceTicketUpdate,
     patch = {k: v for k, v in payload.model_dump().items() if v is not None}
     if not patch:
         raise HTTPException(status_code=400, detail="No fields to update")
+    await _check_picklists("service_tickets", patch, ticket, user)
     try:
         if "status" in patch:
             patch["status"] = ops.normalize_service_status(patch["status"])
         if "priority" in patch:
             patch["priority"] = ops.normalize_priority(patch["priority"])
-        if "ticket_type" in patch and patch["ticket_type"] not in ops.SERVICE_TYPES:
-            raise ValueError(f"Type must be one of {', '.join(ops.SERVICE_TYPES)}")
+        # ticket_type is checked against the Master Data list above.
         if "complaint" in patch and not str(patch["complaint"]).strip():
             raise ValueError("Complaint cannot be empty")
         merged = {**ticket, **patch}

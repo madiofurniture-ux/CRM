@@ -11,6 +11,7 @@ import { Package, Grid3x3, List, X, Tag, Camera, History } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import TallyStockCompare from "@/components/TallyStockCompare";
+import PicklistSelect from "@/components/PicklistSelect";
 
 // Dimensions line for cards/list: always shown from the canonical mm values,
 // in the unit the item was entered in.
@@ -449,7 +450,11 @@ export default function Inventory() {
             <div className="p-5 grid grid-cols-2 gap-4">
               <F l="SKU" v={form.sku} oc={(v) => setForm({ ...form, sku: v })} t2="if-sku" />
               <F l="Name" v={form.name} oc={(v) => setForm({ ...form, name: v })} t2="if-name" />
-              <F l="Category" v={form.category} oc={(v) => setForm({ ...form, category: v })} />
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Category</label>
+                <PicklistSelect list="inventory_categories" value={form.category} onChange={(v) => setForm((f) => ({ ...f, category: v }))}
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" testId="if-category" />
+              </div>
               <div className="col-span-2">
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Vendor{!editingId ? " *" : ""}</label>
                 <SearchSelect

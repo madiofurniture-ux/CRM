@@ -6,10 +6,8 @@ import { toast } from "sonner";
 import { X, Trash2, Plus, ChevronLeft, FileText, Camera, ImageOff } from "lucide-react";
 import { shrinkImage, dataUrlKb } from "@/lib/image";
 import CustomerProjectPicker from "@/components/CustomerProjectPicker";
+import usePicklists from "@/hooks/usePicklists";
 
-const TYPES = ["Window", "Door", "Sliding", "French Door", "Ventilator", "Partition"];
-const FRAMES = ["uPVC", "Aluminium", "Wood", "MS", "WPC"];
-const GLASS = ["Single", "Double (DGU)", "Toughened", "Frosted", "Tinted", "None"];
 const HANDLE_POSITIONS = ["", "RHS", "LHS"];   // "" = N/A (e.g. fixed/ventilator openings)
 
 // W and H captured in INCHES; area is square feet.
@@ -19,6 +17,7 @@ const area = (o) => {
 };
 
 export default function DWSurvey() {
+  const { values: pick } = usePicklists();
   const [surveys, setSurveys] = useState([]);
   const [openId, setOpenId] = useState(null);   // survey.id being edited, null = list
   const [openings, setOpenings] = useState([]);
@@ -253,15 +252,15 @@ export default function DWSurvey() {
                   {openings.map((o) => (
                     <tr key={o.id} className="border-t border-[var(--border-light)]">
                       <td className="px-3 py-2"><Inp v={o.room} oc={(v) => patchOpening(o, { room: v })} /></td>
-                      <td className="px-3 py-2"><Sel v={o.type} opts={TYPES} oc={(v) => patchOpening(o, { type: v })} /></td>
+                      <td className="px-3 py-2"><Sel v={o.type} opts={pick("dw_opening_types", o.type)} oc={(v) => patchOpening(o, { type: v })} /></td>
                       <td className="px-3 py-2"><Inp t="number" v={o.w} oc={(v) => patchOpening(o, { w: parseFloat(v) || 0 })} right /></td>
                       <td className="px-3 py-2"><Inp t="number" v={o.h} oc={(v) => patchOpening(o, { h: parseFloat(v) || 0 })} right /></td>
                       <td className="px-3 py-2"><Inp t="number" v={o.qty} oc={(v) => patchOpening(o, { qty: parseFloat(v) || 0 })} right /></td>
                       <td className="px-3 py-2"><Inp t="number" v={o.lintel ?? 0} oc={(v) => patchOpening(o, { lintel: parseFloat(v) || 0 })} right /></td>
                       <td className="px-3 py-2 text-right font-mono">{(o.area || 0).toFixed(2)}</td>
-                      <td className="px-3 py-2"><Sel v={o.frame} opts={FRAMES} oc={(v) => patchOpening(o, { frame: v })} /></td>
-                      <td className="px-3 py-2"><Sel v={o.glass} opts={GLASS} oc={(v) => patchOpening(o, { glass: v })} /></td>
-                      <td className="px-3 py-2 min-w-[120px]"><Inp v={o.hardware_finish || ""} oc={(v) => patchOpening(o, { hardware_finish: v })} /></td>
+                      <td className="px-3 py-2"><Sel v={o.frame} opts={pick("dw_frames", o.frame)} oc={(v) => patchOpening(o, { frame: v })} /></td>
+                      <td className="px-3 py-2"><Sel v={o.glass} opts={pick("dw_glass", o.glass)} oc={(v) => patchOpening(o, { glass: v })} /></td>
+                      <td className="px-3 py-2 min-w-[120px]"><Sel v={o.hardware_finish || ""} opts={["", ...pick("dw_hardware_finishes", o.hardware_finish)]} oc={(v) => patchOpening(o, { hardware_finish: v })} /></td>
                       <td className="px-3 py-2">
                         <select value={o.handle_position || ""} onChange={(e) => patchOpening(o, { handle_position: e.target.value })} className="w-full px-2 py-1 rounded border border-[var(--border)] bg-white text-xs">
                           {HANDLE_POSITIONS.map((h) => <option key={h} value={h}>{h || "N/A"}</option>)}

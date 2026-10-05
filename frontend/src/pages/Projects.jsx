@@ -26,6 +26,8 @@ import ColumnFilters from "@/components/ColumnFilters";
 import useColumnFilters from "@/hooks/useColumnFilters";
 import StaffPicker from "@/components/StaffPicker";
 import PartnerPicker, { partnerRole } from "@/components/PartnerPicker";
+import PicklistSelect from "@/components/PicklistSelect";
+import ArchitectPicker from "@/components/ArchitectPicker";
 
 const COLUMNS = [
   { key: "project_no", label: "Project #", type: "text" },
@@ -566,10 +568,8 @@ export default function Projects() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Project Type</label>
-                  <select value={form.project_type || ""} onChange={(e) => setForm({ ...form, project_type: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)] bg-white">
-                    {["", "Villa", "Apartment", "Independent House", "Office", "Showroom", "Hospitality", "Other"].map((t) => <option key={t} value={t}>{t || "—"}</option>)}
-                  </select>
+                  <PicklistSelect list="project_types" value={form.project_type || ""} onChange={(v) => setForm((f) => ({ ...f, project_type: v }))}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)] bg-white" testId="project-type" />
                 </div>
               </div>
 
@@ -603,8 +603,8 @@ export default function Projects() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Architect / Designer</label>
-                  <input type="text" value={form.architect_name || ""} onChange={(e) => setForm({ ...form, architect_name: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)]" />
+                  <ArchitectPicker id={form.architect_id || ""} name={form.architect_name || ""}
+                    onChange={(a) => setForm((f) => ({ ...f, architect_id: a?.id || "", architect_name: a?.name || "" }))} />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Start Date</label>

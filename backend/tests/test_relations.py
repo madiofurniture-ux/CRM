@@ -436,3 +436,32 @@ def test_reminders_list_my_timed_tasks_and_meetings():
         assert [i["title"] for i in (await reminders(user=other))["items"]] == ["Someone else's", "Planning"] or \
             {i["title"] for i in (await reminders(user=other))["items"]} == {"Someone else's", "Planning"}
     run(go())
+
+
+def test_master_data_picklists_control_form_values():
+    from models import ProjectUpdate, InventoryCreate
+    get_lists = _route("/api/picklists")
+    put_list = _route("/api/picklists/{key}", "PUT")
+    update_project = _route("/api/projects/{project_id}", "PUT")
+    create_item = _route("/api/inventory", "POST")
+
+    async def go():
+        lists = await get_lists(user=ADMIN)
+        assert "Villa" in lists["project_types"]["values"] and not lists["project_types"]["customised"]
+        c = await _customer()
+        p = await _project(c, project_type="villa")
+        assert p["project_type"] == "Villa"                         # matched to the list's spelling
+        with pytest.raises(HTTPException) as e:
+            await update_project(p["id"], ProjectUpdate(project_type="Spaceship"), user=ADMIN)
+        assert e.value.status_code == 400 and "Master Data" in e.value.detail
+        out = await put_list("project_types", {"values": ["Villa", " Spaceship ", "villa", ""]}, user=ADMIN)
+        assert out["values"] == ["Villa", "Spaceship"] and out["customised"]
+        assert (await update_project(p["id"], ProjectUpdate(project_type="Spaceship"), user=ADMIN))["project_type"] == "Spaceship"
+        route = next(r for r in server.api.routes if getattr(r, "path", "") == "/api/picklists/{key}")
+        assert any(d.call is server.require_admin for d in route.dependant.dependencies)   # admins only
+        # Stock categories start from what's in stock; an empty list checks nothing.
+        await create_item(InventoryCreate(sku="S1", name="Sofa", vendor_code="V", category="Sofas"), user=ADMIN)
+        assert (await get_lists(user=ADMIN))["inventory_categories"]["values"] == ["Sofas"]
+        # Other companies keep their own lists.
+        assert "Spaceship" not in (await get_lists(user=OTHER))["project_types"]["values"]
+    run(go())

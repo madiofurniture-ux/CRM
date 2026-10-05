@@ -30,6 +30,8 @@ import { validateIndianPhone } from "@/lib/phone";
 import { toast } from "sonner";
 import { Phone, Calendar, X, Trash2, Pencil, MessageSquare, Sparkles, Download, Upload } from "lucide-react";
 import WhatsAppButton from "@/components/WhatsAppButton";
+import usePicklists from "@/hooks/usePicklists";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 
 // Fallback only: the live stage list is the tenant's lead workflow
 // (Admin → Workflows), loaded by useWorkflow below.
@@ -38,12 +40,8 @@ const DEFAULT_STAGES = ["New", "Contacted", "Qualified", "Quoted", "Negotiation"
 // "Architect Ref"/"WhatsApp"/etc are pre-existing source values seeded/used
 // before this became a dropdown — kept as real options rather than dropped,
 // same "unrecognized" fallback pattern as STAGES above covers anything else.
-const SOURCES = ["Walk-in", "Architect", "Referral", "Website", "WhatsApp", "Instagram", "Facebook", "Google",
-  "Phone", "Existing Customer", "Social Media", "Site Visit", "Cold Call", "Other"];
-const DIVISIONS = ["Furniture", "D&W", "MAP"];
 const PRIORITIES = ["Low", "Medium", "High", "Hot"];
 const PRIORITY_TONE = { Hot: "bg-red-50 text-red-700", High: "bg-amber-50 text-amber-700", Medium: "", Low: "" };
-const isKnownSource = (s) => SOURCES.some((x) => x.toLowerCase() === String(s || "").trim().toLowerCase());
 
 const COLUMNS = [
   { key: "date", label: "Date", type: "date" },
@@ -76,6 +74,8 @@ export default function Leads() {
   const { defs: customFieldDefs } = useCustomFields("lead");
   const [customFilters, setCustomFilters] = useState({});
   const cf = useColumnFilters("leads", COLUMNS);
+  const { values: pick } = usePicklists();
+  const { divisions } = useTenantConfig();
   const applyColumns = cf.apply;
   const [fDivision, setFDivision] = usePersistedState("leads.division", "All");
   const [searchParams, setSearchParams] = useSearchParams();
@@ -313,7 +313,7 @@ export default function Leads() {
           <input placeholder="Search name, phone, email, remarks…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm outline-none focus:border-[var(--color-primary)] w-full sm:w-72" data-testid="leads-search" />
           <select value={fDivision} onChange={(e) => setFDivision(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm" data-testid="leads-division-filter">
             <option value="All">All divisions</option>
-            {DIVISIONS.map((d) => <option key={d}>{d}</option>)}
+            {divisions.map((d) => <option key={d.id} value={d.slug}>{d.slug}</option>)}
           </select>
           <select value={fStage} onChange={(e) => setFStage(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm">
             <option value="All">All</option>
@@ -491,8 +491,8 @@ export default function Leads() {
                   className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm"
                   data-testid="lf-source"
                 >
-                  {form.source && !isKnownSource(form.source) && <option value={form.source}>{form.source} (unrecognized)</option>}
-                  {SOURCES.map((s) => <option key={s}>{s}</option>)}
+                  {!form.source && <option value="">— Select —</option>}
+                  {pick("lead_sources", form.source).map((s) => <option key={s}>{s}</option>)}
                 </select>
               </div>
               {form.source === "Architect" && (
@@ -544,7 +544,7 @@ export default function Leads() {
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] block mb-1">Division</label>
                 <select value={form.division || ""} onChange={(e) => setForm({ ...form, division: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] text-sm" data-testid="lf-division">
                   <option value="">— Select —</option>
-                  {DIVISIONS.map((d) => <option key={d}>{d}</option>)}
+                  {divisions.map((d) => <option key={d.id} value={d.slug}>{d.slug}</option>)}
                 </select>
               </div>
               <div>

@@ -25,6 +25,7 @@ import api, { formatApiError } from "@/lib/api";
 import { fmtDate, todayIST, isoDateIST } from "@/lib/format";
 import { toast } from "sonner";
 import { PhoneOutgoing, UserPlus, Trash2, ArrowUpRight } from "lucide-react";
+import { useTenantConfig } from "@/context/TenantConfigContext";
 
 /**
  * Call log: reps record every cold call (and follow-up / inbound call) as they
@@ -35,7 +36,6 @@ import { PhoneOutgoing, UserPlus, Trash2, ArrowUpRight } from "lucide-react";
 const OUTCOMES = ["Interested", "Callback", "Not interested", "No answer", "Busy", "Wrong number"];
 const CONNECTED = new Set(["Interested", "Callback", "Not interested"]);
 const TYPES = ["Cold call", "Follow-up", "Inbound"];
-const DIVISIONS = ["Furniture", "MAP", "D&W"];
 const OUTCOME_TONE = {
   Interested: "bg-[var(--moss-soft)] text-[var(--color-success)]",
   Callback: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]",
@@ -97,6 +97,7 @@ export default function Calls() {
   const callers = useMemo(() => [...new Set(rows.map((r) => r.by_user).filter(Boolean))].sort(), [rows]);
 
   const cf = useColumnFilters("calls", COLUMNS);
+  const { divisions } = useTenantConfig();
   const applyColumns = cf.apply;
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -181,7 +182,7 @@ export default function Calls() {
                      value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} />
               <select className={field} aria-label="Division" value={form.division}
                       onChange={(e) => setForm({ ...form, division: e.target.value })}>
-                {DIVISIONS.map((d) => <option key={d}>{d}</option>)}
+                {divisions.map((d) => <option key={d.id} value={d.slug}>{d.slug}</option>)}
               </select>
               <select className={field} aria-label="Call type" value={form.call_type}
                       onChange={(e) => setForm({ ...form, call_type: e.target.value })}>

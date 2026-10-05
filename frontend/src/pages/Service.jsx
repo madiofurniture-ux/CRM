@@ -23,11 +23,11 @@ const COLUMNS = [
 ];
 import { LifeBuoy, Phone, MessageCircle, X, ShieldCheck } from "lucide-react";
 import StaffPicker from "@/components/StaffPicker";
+import PicklistSelect from "@/components/PicklistSelect";
 
 const STATUSES = ["OPEN", "ASSIGNED", "VISIT SCHEDULED", "IN PROGRESS", "WAITING", "RESOLVED", "CLOSED"];
 const OPEN = new Set(STATUSES.slice(0, 5));
 const PRIORITIES = ["Low", "Medium", "High", "Urgent"];
-const TYPES = ["Warranty", "Paid Service", "Complaint", "Installation Snag", "Other"];
 const TONE = {
   OPEN: "bg-red-50 text-red-700", ASSIGNED: "bg-amber-50 text-amber-700",
   "VISIT SCHEDULED": "bg-blue-50 text-blue-700", "IN PROGRESS": "bg-blue-50 text-blue-700",
@@ -227,10 +227,8 @@ function NewTicket({ projects, onClose, onSaved }) {
           </select>
         </Field>
         <Field label="Type">
-          <select className={inputCls} value={form.ticket_type} onChange={(e) => setForm({ ...form, ticket_type: e.target.value })}>
-            <option value="">Auto (warranty if in warranty)</option>
-            {TYPES.map((t) => <option key={t}>{t}</option>)}
-          </select>
+          <PicklistSelect list="service_types" className={inputCls} value={form.ticket_type}
+            onChange={(v) => setForm((f) => ({ ...f, ticket_type: v }))} placeholder="Auto (warranty if in warranty)" />
         </Field>
         <Field label="Assign to">
           <StaffPicker value={form.assigned_to} onChange={(name) => setForm((f) => ({ ...f, assigned_to: name }))} />

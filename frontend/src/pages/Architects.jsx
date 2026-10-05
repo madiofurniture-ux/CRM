@@ -7,10 +7,11 @@ import { validateIndianPhone } from "@/lib/phone";
 import { Phone, MapPin, Building, X, Pencil, Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import AttachmentPanel from "@/components/AttachmentPanel";
+import usePicklists from "@/hooks/usePicklists";
 
-const TYPES = ["Architect", "Designer", "Builder", "Vendor"];
 
 export default function Architects() {
+  const { values: pick } = usePicklists();
   const [rows, setRows] = useState([]);
   const [staff, setStaff] = useState([]);
   const [search, setSearch] = useState("");
@@ -108,7 +109,7 @@ export default function Architects() {
           <input placeholder="Search name, firm, location…" value={search} onChange={(e) => setSearch(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm outline-none focus:border-[var(--brand)] w-72" />
           <select value={fType} onChange={(e) => setFType(e.target.value)} className="px-3 py-2 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-sm">
             <option>All</option>
-            {TYPES.map((t) => <option key={t}>{t}</option>)}
+            {pick("architect_types").map((t) => <option key={t}>{t}</option>)}
           </select>
         </div>
 
@@ -166,7 +167,7 @@ export default function Architects() {
               <F l="Firm" v={form.firm} oc={(v) => setForm({ ...form, firm: v })} />
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Type</label>
-                <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">{TYPES.map((t) => <option key={t}>{t}</option>)}</select>
+                <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">{pick("architect_types", form?.type).map((t) => <option key={t}>{t}</option>)}</select>
               </div>
               <F l="Location" v={form.location} oc={(v) => setForm({ ...form, location: v })} />
               <div>

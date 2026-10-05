@@ -8,11 +8,11 @@ import { toast } from "sonner";
 import { Link, useSearchParams } from "react-router-dom";
 import CustomerProjectPicker from "@/components/CustomerProjectPicker";
 import StaffPicker from "@/components/StaffPicker";
+import PicklistSelect from "@/components/PicklistSelect";
 
 const REMIND = [["", "No reminder"], [0, "At the time"], [5, "5 minutes before"], [10, "10 minutes before"],
   [15, "15 minutes before"], [30, "30 minutes before"], [60, "1 hour before"], [120, "2 hours before"]];
 const PRIORITIES = ["Low", "Medium", "High"];
-const CATEGORIES = ["General", "Sales", "Site Visit", "Marketing", "Delivery", "Inventory", "Admin", "Procurement", "Finance"];
 
 export default function Tasks() {
   const [rows, setRows] = useState([]);
@@ -157,7 +157,7 @@ export default function Tasks() {
               </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Category</label>
-                <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">{CATEGORIES.map((c) => <option key={c}>{c}</option>)}</select>
+                <PicklistSelect list="task_categories" required value={form.category} onChange={(v) => setForm((f) => ({ ...f, category: v }))} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm" testId="task-category" />
               </div>
               <div>
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Due date</label>

@@ -110,6 +110,15 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   global header with search + reminders, App Launcher, app tabs from
   `lib/apps.js`; `Topbar` renders a page header with the object's icon
   tile). `REACT_APP_UI_SHELL=sidebar` restores the left-sidebar shell.
+- Master data lists: `PICKLISTS` in server.py (lead sources, project types,
+  task categories, service types, architect types, D&W opening types /
+  frames / glass / hardware finishes, stock categories, units), stored per
+  company in `settings` key `picklists`, edited in Master Data → Lists
+  (`PUT /picklists/{key}`, admin), read with `usePicklists` /
+  `PicklistSelect`. Saves are checked (`_check_picklists`, map
+  `PICKLIST_FIELDS`); unchanged old values are never re-checked; an empty
+  list accepts anything. Project architect is picked from Architects
+  (`ArchitectPicker`, `architect_id`).
 - Reminders: tasks carry `due_time` + `remind_minutes`, meetings
   `remind_minutes` (default 15); `GET /reminders` lists the signed-in
   person's timed tasks/meetings (yesterday–tomorrow) and `ReminderCenter`
