@@ -5,13 +5,18 @@ import { NAV } from "@/lib/nav";
 
 export const APPS = [
   { id: "sales", label: "Sales", blurb: "Leads, deals and orders", color: "#0B827C",
-    tabs: ["dashboard", "leads", "followups", "pipeline", "quotes", "quote-builder", "quote-followups", "sales", "visitors", "calls", "customers", "architects", "meetplan", "tasks"] },
+    // Follows the deal: home → who walks in / calls → leads and follow-ups → meetings →
+    // quotes and their follow-up → pipeline → orders → the people behind them → to-dos.
+    tabs: ["dashboard", "visitors", "calls", "leads", "followups", "meetplan", "quotes", "quote-builder", "quote-followups", "pipeline", "sales", "customers", "architects", "tasks"] },
   { id: "service", label: "Delivery", blurb: "Projects, surveys and service", color: "#3BA755",
-    tabs: ["projects", "dwsurvey", "service", "outstanding", "tasks", "meetplan", "customers"] },
+    // Site work in the order it happens, then what is still owed, then the people and to-dos.
+    tabs: ["projects", "dwsurvey", "service", "outstanding", "customers", "meetplan", "tasks"] },
   { id: "stock", label: "Stock", blurb: "Inventory and purchasing", color: "#8A5A3B",
-    tabs: ["inventory", "stock-ledger", "purchase-orders", "manufacturer-orders", "inv-analytics"] },
+    // What we hold → buy it → have it made → what moved → how it is doing.
+    tabs: ["inventory", "purchase-orders", "manufacturer-orders", "stock-ledger", "inv-analytics"] },
   { id: "finance", label: "Finance", blurb: "Money, invoices and P&L", color: "#2E6E73",
-    tabs: ["invoice-gen", "finance-payments", "expenses", "cashbook", "pnl", "project-pnl", "outstanding", "incentives", "petty"] },
+    // Bill → collect → chase → spend → wallets → incentives → profit by deal, then company.
+    tabs: ["invoice-gen", "finance-payments", "outstanding", "expenses", "cashbook", "petty", "incentives", "project-pnl", "pnl"] },
   { id: "people", label: "People", blurb: "Your day, attendance and payroll", color: "#C98A1B",
     tabs: ["daily-planner", "tasks", "meetplan", "attendance", "payroll", "discussions"] },
   { id: "insights", label: "Insights", blurb: "Analytics and reports", color: "#5867E8",
