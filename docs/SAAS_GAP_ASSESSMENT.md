@@ -21,7 +21,7 @@ companies.
 
 | # | Priority | Prompt | Gap |
 |---|---|---|---|
-| 4 | **P0** | `prompt_4_tenant_divisions_everywhere.md` | A non-MADIO company **can't save a lead with its own division** (`POST /api/leads` → 400 "Division must be one of Furniture, D&W, MAP"; `server.py:2190` → `operations.validate_division`). Projects run the Furniture checklist and site surveys refuse other divisions. Verified on a solar-pack tenant. |
+| 4 | ~~P0~~ done | `prompt_4_tenant_divisions_everywhere.md` | A non-MADIO company **can't save a lead with its own division** (`POST /api/leads` → 400 "Division must be one of Furniture, D&W, MAP"; `server.py:2190` → `operations.validate_division`). Projects run the Furniture checklist and site surveys refuse other divisions. Verified on a solar-pack tenant. |
 | 5 | P1 | `prompt_5_self_signup_and_billing.md` | No public sign-up and no payment: only the owner creates companies; plans carry no prices; an ended trial stays read-only until the owner acts. Razorpay subscriptions + GST invoices for the subscription. |
 | 6 | P1 | `prompt_6_whatsapp_per_tenant.md` | WhatsApp Cloud API is single-tenant (`WHATSAPP_TENANT_ID`, `server.py` ~9077). Each company needs its own number, routing and templates. |
 | 7 | P1 | `prompt_7_secure_login_otp.md` | PIN-only login; users can't change their own PIN; no forced change of an issued PIN; 7-day tokens aren't revoked on PIN reset; no mobile OTP. |

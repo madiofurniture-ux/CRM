@@ -95,3 +95,24 @@ account, so nothing existing changes.
   brand the login page; the hero is drawn in theme colours, no external image.
 - A new company's admin sees a "Finish setting up" card on Home until the
   Business Setup checklist reaches 100%.
+
+## Divisions are configuration (prompt 4)
+
+Every division rule reads the company's own roster from its business profile.
+`server._tenant_divisions(user)` sets it per request for both
+`lifecycle.use_divisions` (rollups) and `operations.use_roster` (rules); with no
+roster set, both fall back to MADIO's Furniture / D&W / MAP.
+
+- **Validation** (`ops.validate_division`): a division is valid when it matches
+  one of the company's slugs or names (case and spacing ignored). MADIO's old
+  spellings ("dw", "mdw", "paints") still map, but only to divisions the
+  company has. Errors list the company's own divisions.
+- **Project checklist** (`ops.division_workflow`): the division's `milestones`
+  from Business Settings, else MADIO's built-in list for Furniture/D&W/MAP,
+  else `ops.GENERIC_WORKFLOW`. "Completion" is always present, and ticking it
+  marks the project delivered.
+- **Site survey** (`ops.survey_kind`): `rooms`, `areas` (wall/surface
+  inspection) or `openings` (doors & windows survey + BOQ, its own screen).
+  Defaults: MADIO's MAP → areas, D&W → openings, everything else → rooms.
+- Industry packs set a checklist and survey layout for each division; both are
+  editable per division in Business Settings → Divisions.

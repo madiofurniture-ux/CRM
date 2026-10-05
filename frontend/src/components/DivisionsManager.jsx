@@ -27,7 +27,8 @@ export default function DivisionsManager({ divisions, onChange, onSaved }) {
     }
     setSaving(true);
     try {
-      const { data } = await api.put("/settings/business-profile", { divisions });
+      const clean = divisions.map(({ _milestones_text, ...d }) => d); // eslint-disable-line no-unused-vars
+      const { data } = await api.put("/settings/business-profile", { divisions: clean });
       onChange(data.divisions);
       // Refresh the app-wide roster too, so every other screen's division
       // dropdowns pick the change up without a page reload.
@@ -66,6 +67,29 @@ export default function DivisionsManager({ divisions, onChange, onSaved }) {
             <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Terms & Conditions</label>
             <textarea rows={2} value={d.terms_and_conditions} onChange={(e) => updateDivision(d.id, { terms_and_conditions: e.target.value })}
               className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]" />
+          </div>
+          <div className="col-span-2 sm:col-span-1">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Project checklist</label>
+            <textarea rows={4} value={d._milestones_text ?? (d.milestones || []).join("\n")}
+              onChange={(e) => updateDivision(d.id, {
+                _milestones_text: e.target.value,
+                milestones: e.target.value.split("\n").map((x) => x.trim()).filter(Boolean),
+              })}
+              placeholder={"One stage per line, e.g.\nSite Survey\nInstallation\nCompletion"}
+              className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]"
+              data-testid={`division-milestones-${d.id}`} />
+            <div className="text-[11px] text-[var(--ink-3)] mt-1">Blank = the standard checklist. "Completion" is added if missing — ticking it marks a project delivered.</div>
+          </div>
+          <div className="col-span-2 sm:col-span-1">
+            <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Site survey</label>
+            <select value={d.survey_kind || ""} onChange={(e) => updateDivision(d.id, { survey_kind: e.target.value || null })}
+              className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm outline-none focus:border-[var(--brand)]"
+              data-testid={`division-survey-${d.id}`}>
+              <option value="">Standard for this division</option>
+              <option value="rooms">Rooms — size, requirement, existing conditions</option>
+              <option value="areas">Walls / areas — surface, moisture, finish</option>
+              <option value="openings">Openings — doors &amp; windows with BOQ</option>
+            </select>
           </div>
           <button onClick={() => removeDivision(d.id)} className="col-span-2 justify-self-end text-xs text-[var(--danger)] flex items-center gap-1 hover:underline" data-testid={`division-remove-${d.id}`}>
             <Trash2 size={13} /> Remove

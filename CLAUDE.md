@@ -89,7 +89,10 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   sources come from the business profile. Platform → Customers (`/platform`,
   owner tenant only) onboards companies; plans, trials, seats and suspension in
   `backend/plans.py`, enforced in `auth.get_current_user`. Division rollups
-  (reports, analytics, P&L) use the tenant's roster via `lc.use_divisions`.
+  (reports, analytics, P&L) use the tenant's roster via `lc.use_divisions`;
+  division validation, project checklists (`Division.milestones`) and survey
+  layout (`Division.survey_kind`) via `ops.use_roster` — call
+  `server._tenant_divisions(user)` before any division rule.
   See `docs/BUSINESS_SETUP.md`.
 - Furniture quotes can print as a picture price list (`quote.print_layout =
   "pricelist"`, line `mrp` before GST beside the offer rate).
