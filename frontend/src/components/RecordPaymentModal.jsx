@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { inrFull, todayIST } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
@@ -16,7 +16,15 @@ export default function RecordPaymentModal({ target, onClose, onSaved }) {
   const { user } = useAuth();
   const [form, setForm] = useState({ date: todayIST(), amount: target.record.balance || 0, mode: "Other", remarks: "" });
   const [saving, setSaving] = useState(false);
+  const [wallets, setWallets] = useState([]);
+  const [walletId, setWalletId] = useState("");
   const closeModal = onClose;
+
+  // Optional: bank the receipt in a Cashbook wallet (one receipt, one wallet entry).
+  useEffect(() => {
+    api.get("/cashbooks").then(({ data }) => setWallets((data || []).filter((b) => b.status === "ACTIVE")))
+      .catch(() => setWallets([]));         // no cashbook access: the field stays hidden
+  }, []);
 
   const submitPayment = async (e) => {
     e.preventDefault();
@@ -37,6 +45,7 @@ export default function RecordPaymentModal({ target, onClose, onSaved }) {
         received_by: user?.name || "",
         phone: target.record.phone || "",
         remarks: form.remarks,
+        wallet_id: walletId,
       };
       if (target.kind === "sale") payload.against_sale_id = target.record.id;
       else payload.against_invoice_id = target.record.id;
@@ -115,6 +124,17 @@ export default function RecordPaymentModal({ target, onClose, onSaved }) {
                   </select>
                 </div>
               </div>
+
+              {wallets.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Bank in wallet (optional)</label>
+                  <select value={walletId} onChange={(e) => setWalletId(e.target.value)} data-testid="payment-wallet"
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] outline-none focus:border-[var(--brand)] bg-white">
+                    <option value="">Not banked in a wallet</option>
+                    {wallets.map((w) => <option key={w.id} value={w.id}>{w.book_name}</option>)}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">Remarks</label>

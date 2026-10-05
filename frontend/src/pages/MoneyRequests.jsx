@@ -463,7 +463,9 @@ function RequestForm({ initial, policy, onClose, onSaved }) {
     title: initial.title || "", amount: initial.amount || "", category: initial.category || "",
     date: initial.date || todayIST(), description: initial.description || "", receipt_url: initial.receipt_url || "",
     payee_name: initial.payee_name || "", payee_upi: initial.payee_upi || "",
+    purchase_order_id: initial.purchase_order_id || "", manufacturer_order_id: initial.manufacturer_order_id || "",
   });
+  const [pos, setPos] = useState([]);
   const [link, setLink] = useState({ type: linkType, id: linkType ? initial[linkType] : "" });
   const [options, setOptions] = useState({ project_id: [], sale_id: [], quote_id: [] });
   const [saving, setSaving] = useState(false);
@@ -477,6 +479,9 @@ function RequestForm({ initial, policy, onClose, onSaved }) {
     };
     load("/projects", "project_id", (p) => ({ id: p.id, label: `${p.customer || "Project"} · ${p.project_no || ""}`, sub: p.stage }));
     load("/sales", "sale_id", (s) => ({ id: s.id, label: `${s.customer || "Sale"} · ${s.sale_no || ""}`, sub: s.division }));
+    api.get("/purchase-orders").then(({ data }) => setPos(data.map((p) => ({
+      id: p.id, label: `${p.po_no || "PO"} · ${p.vendor_name || ""}`, sub: p.project_id ? "project" : "",
+    })))).catch(() => setPos([]));    // no access to purchase orders: the field stays empty
     load("/quotes", "quote_id", (q) => ({ id: q.id, label: `${q.customer || "Quotation"} · ${q.quote_no || ""}`, sub: q.stage }));
   }, []);
 
@@ -552,6 +557,15 @@ function RequestForm({ initial, policy, onClose, onSaved }) {
               <SearchSelect options={options[link.type]} value={link.id} onChange={(id) => setLink((l) => ({ ...l, id }))}
                             placeholder="Search by customer or number" testId="mrf-link-picker" />
               <p className="text-xs text-[var(--color-text-muted)] mt-1">The spend is added to this deal's P&L, including its project and quotation.</p>
+            </div>
+          )}
+          {pos.length > 0 && (
+            <div className="sm:col-span-2">
+              <label className={labelCls}>Settles a purchase order (vendor payments only)</label>
+              <SearchSelect options={pos} value={form.purchase_order_id}
+                            onChange={(id) => setForm((f) => ({ ...f, purchase_order_id: id, manufacturer_order_id: id ? f.manufacturer_order_id : "" }))}
+                            placeholder="Not a vendor payment" testId="mrf-po-picker" />
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">The payout counts against that PO's paid and balance, and takes its vendor, project and sales order.</p>
             </div>
           )}
           <div>

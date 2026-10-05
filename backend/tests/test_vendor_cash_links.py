@@ -280,3 +280,12 @@ def test_backfill_links_vendor_stock_and_cash_rows_and_is_idempotent():
         second = await rel.backfill(db, ADMIN)
         assert not {k for k in second if "(review)" not in k}
     run(go())
+
+
+def test_open_request_for_a_po_is_not_a_second_pending_cost():
+    def lineage(requests):
+        return fl.deal_lineage(visitor=None, lead=None, quotes=[], sales=[], project=None, pos=[], mos=[],
+                               entries=[], petty=[], requests=requests, payments=[], payouts=[])
+    plain = {"id": "r1", "amount": 700, "status": "Pending review", "title": "x"}
+    vendor = {"id": "r2", "amount": 900, "status": "Pending review", "title": "y", "purchase_order_id": "po1"}
+    assert lineage([plain, vendor])["pnl"]["pending_expenses"] == lineage([plain])["pnl"]["pending_expenses"] == 700

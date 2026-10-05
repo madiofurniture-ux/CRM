@@ -110,7 +110,9 @@ def deal_lineage(*, visitor: Optional[dict], lead: Optional[dict], quotes: list,
     v_cost = vendor_cost(pos, mos)
     e_appr, e_pend = entry_cost(entries)
     p_appr, p_pend = petty_cost(petty)
-    open_requests = [r for r in requests if r.get("status") in OPEN_REQUEST_STATUSES]
+    # An open request that settles a PO / vendor order is that document's cost, not a second one.
+    open_requests = [r for r in requests if r.get("status") in OPEN_REQUEST_STATUSES
+                     and not (r.get("purchase_order_id") or r.get("manufacturer_order_id"))]
     expenses = round(e_appr + p_appr, 2)
     pending_expenses = round(e_pend + p_pend + sum(_m(r.get("amount")) for r in open_requests), 2)
     incentives = round(sum(_m(p.get("commission_amount")) for p in payouts

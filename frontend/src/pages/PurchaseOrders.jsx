@@ -56,6 +56,7 @@ export default function PurchaseOrders() {
   const [vendors, setVendors] = useState([]);
   const [projects, setProjects] = useState([]);
   const [sales, setSales] = useState([]);
+  const [payInfo, setPayInfo] = useState(null);
   const [fStatus, setFStatus] = useState("All");
   const [search, setSearch] = useState("");
   const [show, setShow] = useState(false);
@@ -111,6 +112,9 @@ export default function PurchaseOrders() {
       line_items: (po.line_items || []).length ? po.line_items : [emptyLine()],
     });
     setEditingId(po.id);
+    setPayInfo(null);
+    // Paid / balance from the wallet entries that name this PO (needs cashbook access).
+    api.get(`/purchase-orders/${po.id}/payments`, { skipCache: true }).then(({ data }) => setPayInfo(data)).catch(() => setPayInfo(null));
     setShow(true);
   };
 
@@ -304,6 +308,14 @@ export default function PurchaseOrders() {
                     Linking feeds this order's cost into the project's P&amp;L once it leaves Draft.
                   </div>
                 </div>
+                {editingId && payInfo && (
+                  <div className="col-span-2 text-xs bg-[var(--surface-2)] rounded-lg px-3 py-2 flex flex-wrap gap-x-6 gap-y-1" data-testid="po-paid-summary">
+                    <span>Value <b className="font-mono">{inrFull(payInfo.value)}</b></span>
+                    <span>Paid <b className="font-mono">{inrFull(payInfo.paid)}</b></span>
+                    {payInfo.pending > 0 && <span>Awaiting approval <b className="font-mono">{inrFull(payInfo.pending)}</b></span>}
+                    <span>Balance <b className="font-mono text-[var(--danger)]">{inrFull(payInfo.balance)}</b></span>
+                  </div>
+                )}
                 <div>
                   <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Against sales order</label>
                   <SearchSelect
