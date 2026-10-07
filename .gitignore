@@ -93,3 +93,6 @@ credentials.json
 
 # Local backups created during edits — never ship these
 *.bak
+
+# Files saved by STORAGE_BACKEND=local (dev/test runs); never committed.
+backend/uploads/
