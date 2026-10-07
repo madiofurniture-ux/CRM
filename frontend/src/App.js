@@ -79,6 +79,8 @@ const Payments = lazy(() => import("@/pages/Payments"));
 const AuditTrail = lazy(() => import("@/pages/AuditTrail"));
 const RecordChain = lazy(() => import("@/pages/RecordChain"));
 const Service = lazy(() => import("@/pages/Service"));
+const Catalogues = lazy(() => import("@/pages/Catalogues"));
+const PublicCatalogue = lazy(() => import("@/pages/PublicCatalogue"));
 const FollowUps = lazy(() => import("@/pages/FollowUps"));
 
 function PageLoader() {
@@ -113,6 +115,7 @@ function App() {
         <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/c/:token" element={<PublicCatalogue />} />
           <Route
             path="/"
             element={
@@ -146,6 +149,7 @@ function App() {
           <Route path="/daily-planner" element={<ProtectedRoute page="daily-planner"><Layout><DailyPlanner /></Layout></ProtectedRoute>} />
           <Route path="/projects" element={<ProtectedRoute page="projects"><Layout><Projects /></Layout></ProtectedRoute>} />
           <Route path="/projects/:id" element={<ProtectedRoute page="projects"><Layout><ProjectPage /></Layout></ProtectedRoute>} />
+          <Route path="/catalogues" element={<ProtectedRoute page="quotes"><Layout><Catalogues /></Layout></ProtectedRoute>} />
           <Route path="/service" element={<ProtectedRoute page="projects"><Layout><Service /></Layout></ProtectedRoute>} />
           <Route path="/follow-ups" element={<ProtectedRoute page="leads"><Layout><FollowUps /></Layout></ProtectedRoute>} />
           <Route path="/attendance" element={<ProtectedRoute page="attendance"><Layout><Attendance /></Layout></ProtectedRoute>} />

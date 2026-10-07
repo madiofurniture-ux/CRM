@@ -231,7 +231,7 @@ def sharepoint_read(file_url: str) -> bytes:
 
 
 def sharepoint_list_folder(subfolder: str) -> list[dict]:
-    """Files directly inside <SHAREPOINT_FOLDER>/<subfolder>: [{name, id, size, ref}].
+    """Files directly inside <SHAREPOINT_FOLDER>/<subfolder>: [{name, id, size, ref, modified, web_url}].
     `ref` is a sharepoint: reference sharepoint_read() accepts. Empty when the
     folder doesn't exist."""
     cfg = sharepoint_config()
@@ -243,7 +243,9 @@ def sharepoint_list_folder(subfolder: str) -> list[dict]:
         return []
     items = _check(resp, "Listing a SharePoint folder").json().get("value", [])
     return [{"name": i.get("name", ""), "id": i["id"], "size": i.get("size", 0),
-             "ref": f"{SHAREPOINT_PREFIX}{drive_id}/{i['id']}"} for i in items if "file" in i]
+             "ref": f"{SHAREPOINT_PREFIX}{drive_id}/{i['id']}",
+             "modified": i.get("lastModifiedDateTime", ""), "web_url": i.get("webUrl", "")}
+            for i in items if "file" in i]
 
 
 def sharepoint_delete(file_url: str) -> None:

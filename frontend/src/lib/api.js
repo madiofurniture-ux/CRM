@@ -62,7 +62,9 @@ api.interceptors.response.use(
     if (err.response?.status === 401) {
       localStorage.removeItem("crm_token");
       localStorage.removeItem("crm_user");
-      if (window.location.pathname !== "/login") {
+      // Public pages (a shared catalogue at /c/<token>) are opened by people
+      // who never log in; a background 401 there must not bounce them.
+      if (window.location.pathname !== "/login" && !window.location.pathname.startsWith("/c/")) {
         window.location.href = "/login";
       }
     }

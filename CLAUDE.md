@@ -119,6 +119,14 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   `PICKLIST_FIELDS`); unchanged old values are never re-checked; an empty
   list accepts anything. Project architect is picked from Architects
   (`ArchitectPicker`, `architect_id`).
+- Catalogues (Sales → Catalogues, `/catalogues`): price lists / brochures /
+  shade cards, one Current version each (`family_id`, `version`); files
+  uploaded (storage.py) or linked from SharePoint `<tenant>/catalogues/` (read
+  live); `audience` external / internal / restricted (landing-price holders);
+  public share links `/c/<token>` (`GET /api/public/catalogues/{token}`, no
+  login) that follow the latest version, expire, can be stopped, count views.
+  `backend/catalogues.py`, `catalogues` + `catalogue_shares`, rides the
+  `documents` permission and `quotes` page grant. See `docs/CATALOGUES.md`.
 - Reminders: tasks carry `due_time` + `remind_minutes`, meetings
   `remind_minutes` (default 15); `GET /reminders` lists the signed-in
   person's timed tasks/meetings (yesterday–tomorrow) and `ReminderCenter`

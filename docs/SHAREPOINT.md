@@ -70,3 +70,8 @@ membership to people who should see customer documents.
   chunks.
 - Code: `backend/storage.py` (Graph calls), document routes in `server.py`.
   Tests: `backend/tests/test_sharepoint_storage.py` (against a fake Graph).
+- Catalogues: files uploaded on the Catalogues screen go to
+  `<SHAREPOINT_FOLDER>/<tenant>/catalogues/` (up to 50 MB). Files the team
+  drops into that same folder can be linked from the screen and are read live,
+  so editing the file in SharePoint updates what everyone opens. See
+  `docs/CATALOGUES.md`.

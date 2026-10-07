@@ -7,13 +7,13 @@ import {
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
   LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare, PhoneOutgoing,
-  AlarmClock, LifeBuoy, Workflow, Zap,
+  AlarmClock, LifeBuoy, Workflow, Zap, BookOpen,
 } from "lucide-react";
 
 // app: the switcher group · id: unique key · to: route · label/icon: display
 // perm (optional): the page grant that gates this item when it differs from
 // id — lets a new screen ride an existing grant (Follow-ups -> leads,
-// Service -> projects) so no existing account needs re-permissioning.
+// Service -> projects, Catalogues -> quotes) so no existing account needs re-permissioning.
 export const NAV = [
   // Overview (pinned — always shown above the app switcher)
   { app: "overview", id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, pinned: true },
@@ -29,6 +29,7 @@ export const NAV = [
   { app: "sell", id: "quotes", to: "/quotes", label: "Deals / Quotes", icon: FileText },
   { app: "sell", id: "quote-builder", to: "/quotes/builder", label: "Quote Builder", icon: LayoutTemplate },
   { app: "sell", id: "quote-followups", to: "/quotes/followups", label: "Quote Follow-ups", icon: PhoneCall },
+  { app: "sell", id: "catalogues", perm: "quotes", to: "/catalogues", label: "Catalogues", icon: BookOpen },
   { app: "sell", id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
   { app: "sell", id: "visitors", to: "/visitors", label: "Visitors", icon: UserPlus },
 

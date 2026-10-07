@@ -118,6 +118,8 @@ TENANT_COLLECTIONS = {
     "data_resets", "data_reset_archive",
     # Product pictures added to already-loaded stock from the same books.
     "go_live_picture_runs",
+    # Catalogues (catalogues.py): versions, and the links shared outside.
+    "catalogues", "catalogue_shares",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's

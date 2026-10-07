@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ChevronRight, FilePlus2, FolderPlus, CalendarPlus, ListPlus, Pencil, Phone, MessageCircle, Mail } from "lucide-react";
+import { BookOpen, ChevronRight, FilePlus2, FolderPlus, CalendarPlus, ListPlus, Pencil, Phone, MessageCircle, Mail } from "lucide-react";
 import Topbar from "@/components/Topbar";
 import ErrorState from "@/components/ErrorState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RecordList, Timeline, GROUPS } from "@/components/ContextRecords";
 import { NewProjectForm } from "@/components/CustomerProjectPicker";
+import ShareDialog, { SharedLinks } from "@/components/CatalogueShare";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
 import { inrFull } from "@/lib/format";
@@ -23,6 +24,15 @@ export default function CustomerPage() {
   const [error, setError] = useState(null);
   const [tab, setTab] = useState("timeline");
   const [addingProject, setAddingProject] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shares, setShares] = useState(null);
+  const canCatalogues = canDo("quotes", "view");
+  const loadShares = useCallback(() => {
+    if (!canCatalogues) return;
+    api.get(`/catalogue-shares?customer_id=${id}`, { skipCache: true })
+      .then(({ data }) => setShares(data || [])).catch(() => setShares([]));
+  }, [id, canCatalogues]);
+  useEffect(loadShares, [loadShares]);
 
   const load = useCallback(() => {
     setError(null);
@@ -92,6 +102,7 @@ export default function CustomerPage() {
                   {canDo("projects", "create") && <button className={btn} onClick={() => setAddingProject((v) => !v)} data-testid="customer-new-project"><FolderPlus size={14} /> New project</button>}
                   {canDo("meetplan", "create") && <button className={btn} onClick={() => nav(`/meets?new=1&customer_id=${c.id}`)} data-testid="customer-new-meet"><CalendarPlus size={14} /> New meeting</button>}
                   {canDo("tasks", "create") && <button className={btn} onClick={() => nav(`/tasks?new=1&customer_id=${c.id}`)} data-testid="customer-new-task"><ListPlus size={14} /> New task</button>}
+                  {canCatalogues && <button className={btn} onClick={() => setSharing(true)} data-testid="customer-share-catalogue"><BookOpen size={14} /> Share catalogue</button>}
                 </div>
                 {addingProject && (
                   <NewProjectForm customer={c} division={c.division || "Furniture"} testid="customer-np"
@@ -126,9 +137,20 @@ export default function CustomerPage() {
                   : <RecordList kind={tab} rows={r[tab]} testid={`customer-${tab}`} />}
               </div>
             </div>
+
+            {canCatalogues && shares?.length > 0 && (
+              <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4" data-testid="customer-catalogues">
+                <div className="flex items-center justify-between mb-1">
+                  <h2 className="font-semibold text-sm inline-flex items-center gap-1.5"><BookOpen size={14} /> Catalogues shared</h2>
+                  <Link to="/catalogues" className="text-xs text-[var(--color-primary)]">All catalogues</Link>
+                </div>
+                <SharedLinks rows={shares} onChanged={loadShares} showCatalogue testid="customer-catalogue-shares" />
+              </div>
+            )}
           </>
         )}
       </div>
+      {sharing && c && <ShareDialog customer={c} onClose={() => { setSharing(false); loadShares(); load(); }} />}
     </>
   );
 }

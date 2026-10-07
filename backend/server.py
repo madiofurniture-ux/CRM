@@ -37,6 +37,7 @@ import api_hr
 import api_wallets
 import api_budget
 import operations as ops
+import catalogues as catx
 import relations as rel
 import lifecycle as lc
 import permissions as perm
@@ -5215,6 +5216,8 @@ PICKLISTS = {
     "dw_hardware_finishes": ("D&W hardware finishes", ["Black", "White", "Silver", "Champagne", "Brown", "SS"]),
     "inventory_categories": ("Stock categories", []),          # first read: the categories already in stock
     "units": ("Units", ["pcs", "nos", "set", "sqft", "rft", "sqm", "kg", "ltr", "box", "roll"]),
+    "catalogue_types": ("Catalogue types", ["Price list", "Product catalogue", "Brochure", "Shade / swatch card",
+                                            "Spec sheet", "Installation guide"]),
 }
 # (collection, field) -> picklist checked on save.
 PICKLIST_FIELDS = {
@@ -5226,6 +5229,7 @@ PICKLIST_FIELDS = {
     "dw_openings": {"type": "dw_opening_types", "frame": "dw_frames", "glass": "dw_glass",
                     "hardware_finish": "dw_hardware_finishes"},
     "inventory": {"category": "inventory_categories", "unit": "units"},
+    "catalogues": {"kind": "catalogue_types"},
 }
 
 
@@ -9233,18 +9237,23 @@ async def download_document(doc_id: str, user: dict = Depends(get_current_user))
     d = await db.documents.find_one(tenancy.scope({"id": doc_id}, "documents", user), {"_id": 0})
     if not d:
         raise HTTPException(status_code=404, detail="Not found")
-    url = str(d.get("file_url") or "")
-    safe_name = re.sub(r'[^A-Za-z0-9._ -]+', "_", d.get("file_name") or "file")
-    private = {"Content-Disposition": f'inline; filename="{safe_name}"',
+    return await _stored_file_response(str(d.get("file_url") or ""), d.get("file_name") or "",
+                                       d.get("content_type") or "application/octet-stream")
+
+
+async def _stored_file_response(url: str, file_name: str, content_type: str, *, download: bool = False):
+    """Stream a file saved by storage.py (SharePoint or the server's disk),
+    privately. Shared by documents and catalogues."""
+    safe_name = re.sub(r'[^A-Za-z0-9._ -]+', "_", file_name or "file")
+    private = {"Content-Disposition": f'{"attachment" if download else "inline"}; filename="{safe_name}"',
                "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"}
     if url.startswith(storage.SHAREPOINT_PREFIX):
         try:
             data = await asyncio.to_thread(storage.read, url)
         except storage.SharePointError as e:
-            logger.warning(f"Document download failed: {e}")
+            logger.warning(f"File download failed: {e}")
             raise HTTPException(status_code=502, detail="Couldn't fetch the file from SharePoint")
-        return Response(content=data, media_type=d.get("content_type") or "application/octet-stream",
-                        headers=private)
+        return Response(content=data, media_type=content_type, headers=private)
     if not url.startswith("/uploads/"):
         raise HTTPException(status_code=404, detail="File is stored externally")
     root = storage.UPLOAD_ROOT.resolve()
@@ -9253,11 +9262,7 @@ async def download_document(doc_id: str, user: dict = Depends(get_current_user))
     # the upload root (../), and a tenant can only reach its own rows anyway.
     if root not in path.parents or not path.is_file():
         raise HTTPException(status_code=404, detail="File no longer available on the server")
-    safe_name = re.sub(r'[^A-Za-z0-9._ -]+', "_", d.get("file_name") or path.name)
-    return FileResponse(path, media_type=d.get("content_type") or "application/octet-stream",
-                        headers={"Content-Disposition": f'inline; filename="{safe_name}"',
-                                 "Cache-Control": "private, no-store",
-                                 "X-Content-Type-Options": "nosniff"})
+    return FileResponse(path, media_type=content_type, headers=private)
 
 
 @api.delete("/documents/{doc_id}")
@@ -9270,6 +9275,332 @@ async def delete_document(doc_id: str, user: dict = Depends(get_current_user)):
     await db.documents.delete_one(owned)
     await asyncio.to_thread(storage.delete, existing["file_url"])
     return {"ok": True}
+
+
+# ------- Catalogues (catalogues.py; docs/CATALOGUES.md) -------
+# Price lists, brochures and shade cards: one Current version per catalogue,
+# uploaded here or linked to a file kept in SharePoint, opened by staff and
+# shared with customers and architects through links that always serve the
+# newest version. Rides the existing "documents" permission, so no account
+# needs re-granting.
+def _cat_bad(e: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(e))
+
+
+async def _catalogue_or_404(cat_id: str, user: dict) -> dict:
+    c = await db.catalogues.find_one(tenancy.scope({"id": cat_id}, "catalogues", user), {"_id": 0})
+    if not c or not catx.can_open(c, _can_see_cost_prices(user)):
+        raise HTTPException(status_code=404, detail="Not found")
+    return c
+
+
+async def _sharepoint_catalogue_files(user: dict) -> list:
+    """Files in <SHAREPOINT_FOLDER>/<tenant>/catalogues that can be linked."""
+    if storage._backend() != "sharepoint":
+        raise HTTPException(status_code=400, detail=(
+            "SharePoint isn't connected for files yet (STORAGE_BACKEND). Upload the file here instead."))
+    sub = f"{tenancy.tenant_of(user) or '__no_tenant__'}/{catx.SHAREPOINT_SUBFOLDER}"
+    try:
+        items = await asyncio.to_thread(storage.sharepoint_list_folder, sub)
+    except storage.SharePointError as e:
+        logger.warning(f"Catalogue folder listing failed: {e}")
+        raise HTTPException(status_code=502, detail="Couldn't read the SharePoint catalogues folder")
+    out = []
+    for i in items:
+        try:
+            out.append({**i, "content_type": catx.file_type(i.get("name", ""))})
+        except catx.CatalogueError:
+            continue
+    return out
+
+
+@api.get("/catalogues/sharepoint-files")
+async def catalogue_sharepoint_files(user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "create", user)
+    files = await _sharepoint_catalogue_files(user)
+    linked = {c["file_url"]: c for c in await db.catalogues.find(
+        tenancy.scope({"source": "sharepoint"}, "catalogues", user),
+        {"_id": 0, "file_url": 1, "title": 1, "status": 1, "version": 1}).to_list(2000)}
+    folder = storage.sharepoint_config().get("folder", "")
+    return {"folder": f"{folder}/{tenancy.tenant_of(user)}/{catx.SHAREPOINT_SUBFOLDER}",
+            "files": [{**f, "linked_to": (linked.get(f["ref"]) or {}).get("title", "")} for f in files]}
+
+
+@api.get("/catalogues")
+async def list_catalogues(status: str = "Current", division: str = "", user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "view", user)
+    q: dict = {}
+    if status in catx.STATUSES:
+        q["status"] = status
+    if division and division != "All":
+        q["division"] = {"$in": [division, "All"]}
+    if not _can_see_cost_prices(user):
+        q["audience"] = {"$ne": "restricted"}
+    rows = await db.catalogues.find(tenancy.scope(q, "catalogues", user), {"_id": 0}) \
+        .sort([("title", 1), ("version", -1)]).to_list(2000)
+    families = list({r.get("family_id") for r in rows})
+    shares = await db.catalogue_shares.find(
+        tenancy.scope({"family_id": {"$in": families}}, "catalogue_shares", user),
+        {"_id": 0, "family_id": 1, "views": 1, "revoked": 1, "expires_at": 1, "last_viewed_at": 1}).to_list(20000)
+    stats: dict = {}
+    for sh in shares:
+        st = stats.setdefault(sh["family_id"], {"share_count": 0, "view_count": 0, "last_viewed_at": ""})
+        if catx.share_state(sh) == "active":
+            st["share_count"] += 1
+        st["view_count"] += int(sh.get("views") or 0)
+        st["last_viewed_at"] = max(st["last_viewed_at"], sh.get("last_viewed_at") or "")
+    for r in rows:
+        r.update(stats.get(r.get("family_id"), {"share_count": 0, "view_count": 0, "last_viewed_at": ""}))
+    return rows
+
+
+@api.post("/catalogues")
+async def create_catalogue(title: str = Form(""), division: str = Form(""), kind: str = Form(""),
+                           audience: str = Form(""), notes: str = Form(""), valid_from: str = Form(""),
+                           replaces: str = Form(""), sharepoint_ref: str = Form(""),
+                           file: Optional[UploadFile] = File(None), user: dict = Depends(get_current_user)):
+    """Publish a catalogue, or (with `replaces`) a new version of one: the new
+    file becomes Current and the earlier version is archived. Blank fields on
+    a new version keep the earlier version's values."""
+    await _require_permission("documents", "create", user)
+    previous = await _catalogue_or_404(replaces, user) if replaces else {}
+    given = {"title": title, "division": division, "kind": kind, "audience": audience,
+             "notes": notes, "valid_from": valid_from}
+    raw = {k: (v if str(v or "").strip() else previous.get(k, "")) for k, v in given.items()}
+    try:
+        meta = catx.clean_meta(raw)
+    except catx.CatalogueError as e:
+        raise _cat_bad(e)
+    await _check_picklists("catalogues", meta, previous or None, user)
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    if file is not None and file.filename:
+        try:
+            ctype = catx.file_type(file.filename)
+        except catx.CatalogueError as e:
+            raise _cat_bad(e)
+        data = await _read_capped(file, catx.MAX_CATALOGUE_BYTES)
+        if not data:
+            raise HTTPException(status_code=400, detail="The file is empty")
+        try:
+            file_url = await asyncio.to_thread(storage.save, tid, "catalogues",
+                                               storage.safe_filename(file.filename, new_id()), data)
+        except storage.SharePointError as e:
+            logger.warning(f"Catalogue upload failed: {e}")
+            raise HTTPException(status_code=502, detail="Couldn't save the file to SharePoint. Try again.")
+        source = {"source": "upload", "file_url": file_url, "file_name": file.filename,
+                  "content_type": ctype, "size_bytes": len(data), "sharepoint_web_url": ""}
+    elif sharepoint_ref:
+        item = next((f for f in await _sharepoint_catalogue_files(user) if f["ref"] == sharepoint_ref), None)
+        if not item:
+            raise HTTPException(status_code=400, detail="That file isn't in the SharePoint catalogues folder")
+        source = {"source": "sharepoint", "file_url": item["ref"], "file_name": item["name"],
+                  "content_type": item["content_type"], "size_bytes": item.get("size", 0),
+                  "sharepoint_web_url": item.get("web_url", "")}
+    else:
+        raise HTTPException(status_code=400, detail="Upload a file or pick one from SharePoint")
+    now = now_iso()
+    doc = {"id": new_id(), **meta, **source, "status": "Current", "published_at": now, "created_at": now,
+           "created_by": user.get("name", ""), "created_by_id": user.get("id", ""), "archived_at": ""}
+    if previous:
+        family = previous["family_id"]
+        top = await db.catalogues.find_one(tenancy.scope({"family_id": family}, "catalogues", user),
+                                           {"_id": 0, "version": 1}, sort=[("version", -1)])
+        doc.update(family_id=family, version=int((top or {}).get("version") or 1) + 1)
+    else:
+        doc.update(family_id=doc["id"], version=1)
+    tenancy.stamp(doc, "catalogues", user)
+    await db.catalogues.insert_one(dict(doc))
+    if previous:
+        await db.catalogues.update_many(
+            tenancy.scope({"family_id": doc["family_id"], "status": "Current", "id": {"$ne": doc["id"]}},
+                          "catalogues", user),
+            {"$set": {"status": "Archived", "archived_at": now}})
+    await record_activity("catalogue", doc["id"], "create", user,
+                          after={"title": doc["title"], "version": doc["version"]})
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/catalogues/{cat_id}")
+async def update_catalogue(cat_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "edit", user)
+    existing = await _catalogue_or_404(cat_id, user)
+    try:
+        meta = catx.clean_meta(payload, partial=True)
+    except catx.CatalogueError as e:
+        raise _cat_bad(e)
+    await _check_picklists("catalogues", meta, existing, user)
+    if meta:
+        await db.catalogues.update_one(tenancy.scope({"id": cat_id}, "catalogues", user), {"$set": meta})
+    return {**existing, **meta}
+
+
+async def _set_catalogue_status(cat_id: str, status: str, user: dict) -> dict:
+    await _require_permission("documents", "edit", user)
+    c = await _catalogue_or_404(cat_id, user)
+    now = now_iso()
+    if status == "Current":
+        # One Current version per catalogue.
+        await db.catalogues.update_many(
+            tenancy.scope({"family_id": c["family_id"], "status": "Current", "id": {"$ne": cat_id}},
+                          "catalogues", user), {"$set": {"status": "Archived", "archived_at": now}})
+    await db.catalogues.update_one(tenancy.scope({"id": cat_id}, "catalogues", user),
+                                   {"$set": {"status": status, "archived_at": now if status == "Archived" else ""}})
+    return {**c, "status": status}
+
+
+@api.post("/catalogues/{cat_id}/archive")
+async def archive_catalogue(cat_id: str, user: dict = Depends(get_current_user)):
+    return await _set_catalogue_status(cat_id, "Archived", user)
+
+
+@api.post("/catalogues/{cat_id}/restore")
+async def restore_catalogue(cat_id: str, user: dict = Depends(get_current_user)):
+    return await _set_catalogue_status(cat_id, "Current", user)
+
+
+@api.delete("/catalogues/{cat_id}")
+async def delete_catalogue(cat_id: str, user: dict = Depends(require_admin)):
+    c = await _catalogue_or_404(cat_id, user)
+    await db.catalogues.delete_one(tenancy.scope({"id": cat_id}, "catalogues", user))
+    if not await db.catalogues.find_one(tenancy.scope({"family_id": c["family_id"]}, "catalogues", user)):
+        await db.catalogue_shares.update_many(
+            tenancy.scope({"family_id": c["family_id"]}, "catalogue_shares", user),
+            {"$set": {"revoked": True, "revoked_at": now_iso()}})
+    # A file uploaded here goes with it; a linked SharePoint file is the team's
+    # own and is never touched.
+    if c.get("source") == "upload":
+        try:
+            await asyncio.to_thread(storage.delete, c["file_url"])
+        except Exception as e:
+            logger.warning(f"Catalogue file delete failed: {e}")
+    return {"ok": True}
+
+
+@api.get("/catalogues/{cat_id}/file")
+async def catalogue_file(cat_id: str, download: bool = False, user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "view", user)
+    c = await _catalogue_or_404(cat_id, user)
+    return await _stored_file_response(c["file_url"], c.get("file_name", ""), c.get("content_type", ""),
+                                       download=download or c.get("content_type") not in catx.INLINE_TYPES)
+
+
+def _share_out(sh: dict) -> dict:
+    return {**sh, "state": catx.share_state(sh)}
+
+
+@api.post("/catalogues/{cat_id}/shares")
+async def share_catalogue(cat_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    """A link for someone outside the company. With follow_latest (the
+    default) it always opens the catalogue's current version."""
+    await _require_permission("documents", "view", user)
+    c = await _catalogue_or_404(cat_id, user)
+    try:
+        catx.check_shareable(c)
+        rec = catx.clean_recipient(payload)
+        expires_at = catx.expiry((payload or {}).get("expires_days", catx.DEFAULT_SHARE_DAYS))
+    except catx.CatalogueError as e:
+        raise _cat_bad(e)
+    for kind, coll in (("customer", "customers"), ("architect", "architects")):
+        rid = rec[f"{kind}_id"]
+        if rid:
+            who = await db[coll].find_one(tenancy.scope({"id": rid}, coll, user), {"_id": 0})
+            if not who:
+                raise HTTPException(status_code=404, detail=f"That {kind} wasn't found")
+            rec["recipient_name"] = rec["recipient_name"] or who.get("name", "")
+            rec["recipient_phone"] = rec["recipient_phone"] or re.sub(r"[^\d+]", "", str(who.get("phone") or ""))
+            rec["recipient_email"] = rec["recipient_email"] or str(who.get("email") or "").lower()
+    share = {"id": new_id(), "token": catx.new_token(), "catalogue_id": c["id"], "family_id": c["family_id"],
+             "catalogue_title": c["title"], "follow_latest": (payload or {}).get("follow_latest", True) is not False,
+             **rec, "expires_at": expires_at, "revoked": False, "views": 0, "downloads": 0,
+             "last_viewed_at": "", "created_by": user.get("name", ""), "created_by_id": user.get("id", ""),
+             "created_at": now_iso()}
+    tenancy.stamp(share, "catalogue_shares", user)
+    await db.catalogue_shares.insert_one(dict(share))
+    await record_activity("catalogue", c["id"], "share", user,
+                          after={"customer_id": rec["customer_id"], "title": c["title"]},
+                          note=f"Shared “{c['title']}” (v{c.get('version', 1)}) with {rec['recipient_name']}")
+    share.pop("_id", None)
+    return _share_out(share)
+
+
+@api.get("/catalogues/{cat_id}/shares")
+async def catalogue_shares(cat_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "view", user)
+    c = await _catalogue_or_404(cat_id, user)
+    rows = await db.catalogue_shares.find(tenancy.scope({"family_id": c["family_id"]}, "catalogue_shares", user),
+                                          {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [_share_out(r) for r in rows]
+
+
+@api.get("/catalogue-shares")
+async def list_catalogue_shares(customer_id: str = "", architect_id: str = "",
+                                user: dict = Depends(get_current_user)):
+    """What has been shared with one customer or architect."""
+    await _require_permission("documents", "view", user)
+    if not customer_id and not architect_id:
+        raise HTTPException(status_code=400, detail="Pass customer_id or architect_id")
+    q = {"customer_id": customer_id} if customer_id else {"architect_id": architect_id}
+    rows = await db.catalogue_shares.find(tenancy.scope(q, "catalogue_shares", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(500)
+    return [_share_out(r) for r in rows]
+
+
+@api.delete("/catalogue-shares/{share_id}")
+async def revoke_catalogue_share(share_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "view", user)
+    owned = tenancy.scope({"id": share_id}, "catalogue_shares", user)
+    sh = await db.catalogue_shares.find_one(owned, {"_id": 0})
+    if not sh:
+        raise HTTPException(status_code=404, detail="Not found")
+    if sh.get("created_by_id") != user.get("id") and not perm.can(user, await _roles_for(user), "documents", "edit"):
+        raise HTTPException(status_code=403, detail="Only the person who shared it, or someone who can edit documents, can stop this link")
+    await db.catalogue_shares.update_one(owned, {"$set": {"revoked": True, "revoked_at": now_iso(),
+                                                          "revoked_by": user.get("name", "")}})
+    return _share_out({**sh, "revoked": True})
+
+
+async def _shared_catalogue(token: str) -> tuple[dict, dict, dict]:
+    """(share, catalogue, viewer) for a public link, or 404/410. The token is
+    the credential; the company comes from the share row, and every read
+    after that is scoped to it."""
+    if not token.startswith("cat_") or len(token) > 80:
+        raise HTTPException(status_code=404, detail="This link isn't valid")
+    share = await db.catalogue_shares.find_one({"token": token}, {"_id": 0})  # tenant-safe: unguessable token
+    if not share or not share.get("tenant_id"):
+        raise HTTPException(status_code=404, detail="This link isn't valid")
+    state = catx.share_state(share)
+    if state == "revoked":
+        raise HTTPException(status_code=404, detail="This link has been switched off. Ask us for a new one.")
+    if state == "expired":
+        raise HTTPException(status_code=410, detail="This link has expired. Ask us for a new one.")
+    viewer = {"id": "catalogue-link", "name": "Shared link", "tenant_id": share["tenant_id"], "role": "viewer"}
+    q = {"family_id": share["family_id"], "status": "Current"} if share.get("follow_latest") \
+        else {"id": share["catalogue_id"]}
+    c = await db.catalogues.find_one(tenancy.scope(q, "catalogues", viewer), {"_id": 0},
+                                     sort=[("version", -1)])
+    if not c or c.get("audience") != "external":
+        raise HTTPException(status_code=404, detail="This catalogue is no longer shared. Ask us for the latest one.")
+    return share, c, viewer
+
+
+@api.get("/public/catalogues/{token}")
+async def public_catalogue(token: str):
+    share, c, viewer = await _shared_catalogue(token)
+    tenant = await db.tenants.find_one({"id": share["tenant_id"]}, {"_id": 0}) or {}
+    await db.catalogue_shares.update_one(tenancy.scope({"id": share["id"]}, "catalogue_shares", viewer),
+                                         {"$inc": {"views": 1}, "$set": {"last_viewed_at": now_iso()}})
+    return catx.public_view(c, share, tenant.get("display_name") or tenant.get("name") or "")
+
+
+@api.get("/public/catalogues/{token}/file")
+async def public_catalogue_file(token: str, download: bool = False):
+    share, c, viewer = await _shared_catalogue(token)
+    if download:
+        await db.catalogue_shares.update_one(tenancy.scope({"id": share["id"]}, "catalogue_shares", viewer),
+                                             {"$inc": {"downloads": 1}})
+    return await _stored_file_response(c["file_url"], c.get("file_name", ""), c.get("content_type", ""),
+                                       download=download or c.get("content_type") not in catx.INLINE_TYPES)
 
 
 @api.get("/admin/storage/status")

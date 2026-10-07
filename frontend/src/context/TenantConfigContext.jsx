@@ -20,6 +20,9 @@ export function TenantConfigProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {
+    // Nobody signed in (the login screen, a shared catalogue link): the
+    // profile needs a login, so keep the fallback roster without asking.
+    if (!localStorage.getItem("crm_token")) { setLoading(false); return null; }
     setLoading(true);
     try {
       const { data } = await api.get("/settings/business-profile");
