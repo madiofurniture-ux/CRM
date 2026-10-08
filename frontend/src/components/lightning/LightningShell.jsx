@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ChevronDown, LogOut, Search, X, Grip, Settings2 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { APPS, NAV_BY_ID, OBJECT_COLOR, navItemForPath } from "@/lib/apps";
+import { APPS, NAV_BY_ID, OBJECT_COLOR, navItemForPath, splitTabs } from "@/lib/apps";
 import {
   SHOW_DELIVERY, SHOW_INVENTORY, SHOW_FINANCE, SHOW_REPORTS, SHOW_RECORD_CHAIN, SHOW_INCENTIVES,
 } from "@/lib/featureFlags";
@@ -137,47 +137,73 @@ export default function LightningShell({ children }) {
   );
 }
 
-/** The app's tabs; ones that don't fit go under "More". */
+/** The app's tabs; ones that don't fit go under "More". Each tab's real
+ * width is measured (from an invisible copy of the row) and the row's
+ * width is watched, so as many tabs show as actually fit — at any screen
+ * size or browser zoom — and the page you're on always keeps its tab. */
 function AppTabs({ items, currentId }) {
   const [moreOpen, setMoreOpen] = useState(false);
-  const [fit, setFit] = useState(items.length);
+  const [widths, setWidths] = useState(null);
+  const [avail, setAvail] = useState(0);
   const wrap = useRef(null);
+  const measure = useRef(null);
   const moreRef = useRef(null);
-  useEffect(() => {
-    const calc = () => {
-      const w = wrap.current?.offsetWidth || 0;
-      setFit(Math.max(1, Math.min(items.length, Math.floor((w - 90) / 118))));
+  const ids = items.map((i) => i.id).join(",");
+
+  useLayoutEffect(() => {
+    const read = () => {
+      const el = measure.current;
+      if (!el) return;
+      const w = {};
+      el.querySelectorAll("[data-measure]").forEach((n) => { w[n.dataset.measure] = Math.ceil(n.getBoundingClientRect().width); });
+      setWidths(w);
     };
-    calc();
-    window.addEventListener("resize", calc);
-    return () => window.removeEventListener("resize", calc);
-  }, [items.length]);
+    read();
+    let live = true;
+    // Web fonts arrive after the first paint and change every width.
+    document.fonts?.ready?.then(() => live && read()).catch(() => {});
+    return () => { live = false; };
+  }, [ids]);
+
+  useLayoutEffect(() => {
+    const el = wrap.current;
+    if (!el) return undefined;
+    const update = () => setAvail(Math.floor(el.clientWidth));
+    update();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", update);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", update); };
+  }, []);
+
   useEffect(() => {
     const onDoc = (e) => { if (moreRef.current && !moreRef.current.contains(e.target)) setMoreOpen(false); };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
-  const shown = items.slice(0, fit);
-  const extra = items.slice(fit);
-  const extraActive = extra.some((i) => i.id === currentId);
+  useEffect(() => { setMoreOpen(false); }, [currentId]);
+
+  const { shown, extra } = useMemo(() => splitTabs(items, widths, avail, currentId), [items, widths, avail, currentId]);
   return (
-    <div ref={wrap} className="flex-1 min-w-0 flex items-stretch">
-      {shown.map((i) => (
-        <Link key={i.id} to={i.to} className={`lx-tab ${i.id === currentId ? "is-active" : ""}`}
-              aria-current={i.id === currentId ? "page" : undefined} data-testid={`light-nav-${i.id}`}>
-          {i.label}
-        </Link>
-      ))}
+    <div ref={wrap} className="flex-1 min-w-0 flex items-stretch relative" data-testid="lx-app-tabs">
+      <div className="flex items-stretch min-w-0 overflow-hidden">
+        {shown.map((i) => (
+          <Link key={i.id} to={i.to} className={`lx-tab ${i.id === currentId ? "is-active" : ""}`}
+                aria-current={i.id === currentId ? "page" : undefined} data-testid={`light-nav-${i.id}`}>
+            {i.label}
+          </Link>
+        ))}
+      </div>
       {extra.length > 0 && (
-        <div className="relative flex" ref={moreRef}>
-          <button type="button" onClick={() => setMoreOpen((o) => !o)} aria-expanded={moreOpen}
-                  className={`lx-tab ${extraActive ? "is-active" : ""}`}>
-            {extraActive ? items.find((i) => i.id === currentId)?.label : "More"} <ChevronDown size={14} className="ml-1" />
+        <div className="relative flex shrink-0" ref={moreRef}>
+          <button type="button" onClick={() => setMoreOpen((o) => !o)} aria-expanded={moreOpen} aria-haspopup="menu"
+                  className="lx-tab" data-testid="lx-more">
+            More <span className="lx-more-count">{extra.length}</span> <ChevronDown size={14} className="ml-1" />
           </button>
           {moreOpen && (
-            <div className="absolute left-0 top-full mt-1 w-56 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-lg)] shadow-xl z-50 py-1">
+            <div role="menu" className="absolute right-0 top-full mt-1 w-56 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-lg)] shadow-xl z-50 py-1">
               {extra.map((i) => (
-                <Link key={i.id} to={i.to} onClick={() => setMoreOpen(false)}
+                <Link key={i.id} to={i.to} role="menuitem" onClick={() => setMoreOpen(false)}
                       className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-[var(--color-surface-muted)]" data-testid={`light-nav-${i.id}`}>
                   <ObjectTile id={i.id} size={22} /> {i.label}
                 </Link>
@@ -186,6 +212,12 @@ function AppTabs({ items, currentId }) {
           )}
         </div>
       )}
+      {/* Invisible copy of the row: each tab's natural width (bold is allowed for in splitTabs). */}
+      <div ref={measure} aria-hidden="true" className="absolute left-0 top-0 flex invisible pointer-events-none h-0 overflow-hidden"
+           style={{ width: "max-content" }}>
+        {items.map((i) => <span key={i.id} data-measure={i.id} className="lx-tab shrink-0">{i.label}</span>)}
+        <span data-measure="__more" className="lx-tab shrink-0">More <span className="lx-more-count">{items.length}</span> <ChevronDown size={14} className="ml-1" /></span>
+      </div>
     </div>
   );
 }

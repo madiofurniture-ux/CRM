@@ -5,7 +5,10 @@ import { NAV } from "@/lib/nav";
 
 export const APPS = [
   { id: "sales", label: "Sales", blurb: "Leads, deals and orders", color: "#0B827C",
-    tabs: ["dashboard", "leads", "followups", "pipeline", "quotes", "catalogues", "quote-builder", "quote-followups", "sales", "visitors", "calls", "customers", "architects", "meetplan", "tasks"] },
+    // Day-to-day pages first, so on a narrow screen it's the occasional ones
+    // (catalogues, the builder) that go under "More".
+    tabs: ["dashboard", "leads", "followups", "pipeline", "quotes", "quote-followups", "sales", "customers", "calls",
+           "meetplan", "tasks", "visitors", "architects", "catalogues", "quote-builder"] },
   { id: "service", label: "Delivery", blurb: "Projects, surveys and service", color: "#3BA755",
     tabs: ["projects", "dwsurvey", "service", "outstanding", "tasks", "meetplan", "customers"] },
   { id: "stock", label: "Stock", blurb: "Inventory and purchasing", color: "#8A5A3B",
@@ -57,4 +60,30 @@ export function navItemForPath(pathname) {
   if (extra) return NAV_BY_ID[extra[1]];
   return [...NAV].filter((n) => n.to !== "/" && pathname.startsWith(n.to)).sort((a, b) => b.to.length - a.to.length)[0]
     || NAV_BY_ID.dashboard;
+}
+
+/** Which tabs fit in the app bar and which go under "More".
+ * widths: { [id]: natural width in px, __more: the More button's width };
+ * avail: the row's width. Tabs keep their order; the page you're on always
+ * has its tab in the bar (it takes the last place that fits). Until widths
+ * are known every tab is shown. */
+export function splitTabs(items, widths, avail, currentId) {
+  if (!widths || !(avail > 0)) return { shown: items, extra: [] };
+  // The active tab is set in bold, a little wider than measured.
+  const w = (i) => (widths[i.id] || 0) * (i.id === currentId ? 1.08 : 1);
+  if (items.reduce((sum, i) => sum + w(i), 0) <= avail) return { shown: items, extra: [] };
+  const room = avail - (widths.__more || 90);
+  const shown = [];
+  let used = 0;
+  for (const i of items) {
+    if (used + w(i) > room) break;
+    shown.push(i);
+    used += w(i);
+  }
+  const active = items.find((i) => i.id === currentId);
+  if (active && !shown.includes(active)) {
+    while (shown.length && used + w(active) > room) used -= w(shown.pop());
+    shown.push(active);
+  }
+  return { shown, extra: items.filter((i) => !shown.includes(i)) };
 }

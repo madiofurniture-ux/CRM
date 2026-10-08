@@ -386,8 +386,13 @@ body {
   font-weight: 700; font-size: 16px; white-space: nowrap; border-right: 1px solid var(--color-border); margin-right: 4px;
 }
 .lx-tab {
-  display: flex; align-items: center; padding: 0 12px; font-size: 13px; white-space: nowrap;
+  /* Padding narrows with the screen (12px wide, 8px on a laptop) so more tabs fit before "More". */
+  display: flex; align-items: center; padding: 0 clamp(8px, 0.6vw, 12px); font-size: 13px; white-space: nowrap;
   color: var(--color-text); border-bottom: 3px solid transparent; border-top: 3px solid transparent;
+}
+.lx-more-count {
+  display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 5px;
+  border-radius: 9px; font-size: 11px; font-weight: 600; background: var(--color-surface-muted); color: var(--color-text-muted);
 }
 .lx-tab:hover { background: var(--color-surface-muted); border-bottom-color: var(--color-border-strong, #c9c9c9); }
 .lx-tab.is-active { border-bottom-color: var(--color-primary); font-weight: 600; background: var(--color-primary-soft); }
