@@ -96,9 +96,12 @@ def _image(src: str, max_w: float, max_h: float):
 
 
 def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dict, office: dict,
-           customer: Optional[dict], tenant_id: str, terms: list, extras: Optional[list] = None) -> bytes:
+           customer: Optional[dict], tenant_id: str, terms: list, extras: Optional[list] = None,
+           schedule: Optional[list] = None) -> bytes:
     """extras: [{"title", "items": [str], "numbered": bool}] printed after the
-    highlights (a builder quote's text blocks and payment schedule)."""
+    highlights (a builder quote's text blocks and payment schedule).
+    schedule: [{"label", "pct", "amount"}] — the division's payment terms
+    worked out on this quotation's net payable (printed when it has stages)."""
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER, TA_RIGHT
     from reportlab.lib.pagesizes import A4
@@ -161,14 +164,17 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
             f"Address : {e(cust.get('address') or quote.get('location') or '')}",
             f"Contact No. : {e(quote.get('phone') or cust.get('phone') or '')}",
             f"Ref : {e(quote.get('reference') or '')}"]
-    qdate = str(quote.get("date") or "")
-    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", qdate)
-    if m:
+    def day(value) -> str:
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(value or ""))
+        if not m:
+            return str(value or "")
         months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
-        qdate = f"{m.group(3)}/{months[int(m.group(2)) - 1]}/{m.group(1)}"
+        return f"{m.group(3)}/{months[int(m.group(2)) - 1]}/{m.group(1)}"
+    qdate = day(quote.get("date"))
     info = ["<b>QUOTATION</b>", f"Quotation No. : {e(quote.get('quote_no'))}", f"Quotation Date : {e(qdate)}",
-            f"Valid Until : {e(quote.get('valid_until'))}" if quote.get("valid_until") else "",
-            f"GST No. : {e(cust.get('gstin') or 'NA')}"]
+            f"Valid Until : {e(day(quote.get('valid_until')))}" if quote.get("valid_until") else "",
+            f"GST No. : {e(cust.get('gstin') or 'NA')}",
+            f"Prepared by : {e(quote.get('by_user'))}" if quote.get("by_user") else ""]
     t = Table([[P("<br/>".join(bill)), P("<br/>".join(x for x in info if x))]], colWidths=[width * .55, width * .45])
     t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), pale), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                            ("BOX", (0, 0), (-1, -1), .5, colors.HexColor("#CFC6AE")),
@@ -179,10 +185,20 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
     layout = preset.get("layout") or "area"
     dw = layout == "openings"
     catalogue = layout == "catalogue"
+    # MAP plasters: picture, finish (and colour code), description of the
+    # area, rate per sq. ft, area — the Gammadion Studios layout.
+    finish_layout = layout == "finish"
     # Picture price list (Furniture, e.g. the Ar Swathi quote): a large photo,
     # MRP beside the offer price and what the customer saves.
     pricelist = layout == "pricelist"
     spec_fields = preset.get("spec_fields") or []
+    # Specification printed in its own column (Furniture colour, MAP finish)
+    # when any line has it; the rest print under the description.
+    col_fields = [f for f in spec_fields if f.get("column")
+                  and any(str((l.get("specs") or {}).get(f["key"]) or "").strip() for l in lines)]
+    if finish_layout:
+        col_fields = [f for f in spec_fields if f.get("column")][:1]
+    desc_fields = [f for f in spec_fields if f not in col_fields]
     any_dims = dw or any(float(l.get("w") or 0) > 0 and float(l.get("h") or 0) > 0 for l in lines)
     builder = layout == "builder"
     if builder:
@@ -192,8 +208,14 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
         hdr = ["Sl No", "Product", "Description", "MRP (₹)", "Offer Price (₹)", "Qty", "Amount (₹)"]
         cw = [.05, .30, .21, .11, .12, .06, .15]
     elif catalogue:
-        hdr = ["Sl No", "Product Picture", "Model Number", "Description", "Unit Price", "Qty", "Amount"]
-        cw = [.06, .18, .12, .30, .13, .07, .14]
+        extra = [f["label"] for f in col_fields]
+        hdr = ["Sl No", "Product Picture", "Model Number"] + extra + ["Description", "Unit Price", "Qty", "Amount"]
+        desc_w = .30 - .11 * len(extra)
+        cw = [.06, .18, .12] + [.11] * len(extra) + [max(desc_w, .16), .13, .07, .14]
+    elif finish_layout:
+        hdr = ["Sl No", "Product Picture", (col_fields[0]["label"] if col_fields else "Finish"), "Description",
+               "Rate\n(₹/Sft)", "Area\n(Sft)", "Amount (₹)"]
+        cw = [.06, .17, .21, .22, .11, .09, .14]
     elif dw:
         hdr = ["S.No", "Typology", "Description of Goods", "Width\n(mm)", "Height\n(mm)", "Sft", "Qty",
                "Total\nSft", "Rate\n(₹/Sft)", "Amount\n(₹)"]
@@ -208,11 +230,12 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
     def row_for(n: int, l: dict) -> list:
         desc = e(l.get("description"))
         specs = l.get("specs") or {}
-        spec_lines = [f"{e(f['label'])}: {e(specs.get(f['key']))}" for f in spec_fields
+        spec_lines = [f"{e(f['label'])}: {e(specs.get(f['key']))}" for f in desc_fields
                       if str(specs.get(f["key"]) or "").strip()]
         if l.get("finish"):
             spec_lines.append(f"Finish: {e(l['finish'])}")
         cell = "<br/>".join(x for x in [desc] + spec_lines if x) or "—"
+        cols = [P(e(specs.get(f["key"])) or "—", small) for f in col_fields]
         if builder:
             return [P(str(n), centre), P(cell, small), P(e(l.get("dimensions")), small),
                     P(_num(l.get("qty"), 0), centre), P(inr(l.get("rate"), 2), right),
@@ -229,12 +252,28 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
                     P(inr(l.get("amount"), 2), right)]
         if catalogue:
             img = _image(l.get("image_url"), cw[1] * width - 4, 32 * mm)
-            return [P(str(n), centre), img or P("", centre), P(e(l.get("model_no") or l.get("sku")), centre),
+            return [P(str(n), centre), img or P("", centre), P(e(l.get("model_no") or l.get("sku")), centre)] + cols + [
                     P(cell, small), P(inr(l.get("rate"), 2), right), P(_num(l.get("qty"), 0), centre),
                     P(inr(l.get("amount"), 2), right)]
+        if finish_layout:
+            img = _image(l.get("image_url"), cw[1] * width - 4, 30 * mm)
+            finish = "<br/>".join(x for x in [e(specs.get(col_fields[0]["key"])) if col_fields else ""] + spec_lines if x) or "—"
+            area_note = []
+            if float(l.get("w") or 0) > 0 and float(l.get("h") or 0) > 0:
+                area_note.append(f"{_num(l.get('w'))}′ × {_num(l.get('h'))}′" +
+                                 (f" × {_num(l.get('qty'), 0)}" if float(l.get("qty") or 1) != 1 else ""))
+            if float(l.get("wastage_pct") or 0) > 0:
+                area_note.append(f"(incl. {float(l['wastage_pct']):g}% wastage)")
+            about = "<br/>".join(x for x in [desc, " ".join(area_note)] if x) or "—"
+            area = float(l.get("sft") or 0) or float(l.get("qty") or 0)
+            return [P(str(n), centre), img or P("", centre), P(finish, small), P(about, small),
+                    P(inr(l.get("rate"), 2), right), P(_num(area), right), P(inr(l.get("amount"), 2), right)]
         if dw:
             img = _image(l.get("image_url"), cw[1] * width - 4, 30 * mm)
-            return [P(str(n), centre), img or P("", centre), P(cell, small),
+            name = P(e(l.get("typology_name")), ParagraphStyle("tn", parent=small, alignment=TA_CENTER, fontSize=6.5)) \
+                if l.get("typology_name") else None
+            typ_cell = [x for x in (img, name) if x] or P("", centre)
+            return [P(str(n), centre), typ_cell, P(cell, small),
                     P(_num(l.get("w"), 0), right), P(_num(l.get("h"), 0), right),
                     P(_num(l.get("sft_each")), right), P(_num(l.get("qty"), 0), right),
                     P(_num(l.get("sft")), right), P(inr(l.get("rate")), right),
@@ -288,19 +327,32 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
     story.append(t)
 
     # ── totals ──
+    # Per division (quotation_templates): Doors & Windows "Less : Discount"
+    # then the taxable value, transport, GST @ 18% (on value + transport),
+    # round off, NET AMOUNT PAYABLE; Furniture Subtotal, After Discount, H&T,
+    # GST, TOTAL; MAP areas + H & T with "GST (18%) Extra" and the GRAND
+    # TOTAL before GST.
+    tax_pct = quote.get("tax_pct") if quote.get("tax_pct") is not None else 18
+    gst_extra = bool(preset.get("gst_extra"))
+    disc = float(totals.get("discount") or 0)
+    pct = float(totals.get("discount_pct") or 0)
     tot = [("Sub Total", inr(totals.get("subtotal")), True)]
-    if float(totals.get("discount") or 0) > 0:
-        tot += [("Discount", "-" + inr(totals.get("discount")), False),
-                ("Taxable Value", inr(totals.get("value")), True)]
-    else:
-        tot += [("Taxable Value", inr(totals.get("value")), True)]
+    if disc > 0 and preset.get("discount_style") == "after":
+        tot.append(("After Discount", inr(totals.get("value")), True))
+    elif disc > 0:
+        tot += [(f"Less : Discount{f' ({pct:g}%)' if pct else ''}", "-" + inr(disc), False),
+                ("Taxable Value (After Discount)", inr(totals.get("value")), True)]
+    elif not gst_extra:
+        tot.append(("Taxable Value", inr(totals.get("value")), True))
     if float(totals.get("transport") or 0) > 0:
         tot.append((f"Add : {e(preset.get('transport_label') or 'Transport / Handling')}",
                     inr(totals.get("transport")), False))
-    tax_pct = quote.get("tax_pct") if quote.get("tax_pct") is not None else 18
-    tot.append((totals.get("tax_label") or f"GST @ {float(tax_pct):g}%", inr(totals.get("tax_total")), False))
-    if float(totals.get("round_off") or 0):
-        tot.append(("Round Off", inr(totals.get("round_off")), False))
+    if gst_extra:
+        tot.append((f"GST ({float(tax_pct):g}%) Extra", "", False))
+    else:
+        tot.append((totals.get("tax_label") or f"GST @ {float(tax_pct):g}%", inr(totals.get("tax_total")), False))
+        if float(totals.get("round_off") or 0):
+            tot.append(("Round Off", inr(totals.get("round_off")), False))
     trows = [[P(""), P(f"<b>{lab}</b>" if b else lab, right), P(f"<b>{val}</b>" if b else val, right)]
              for lab, val, b in tot]
     t = Table(trows, colWidths=[width * .55, width * .28, width * .17])
@@ -308,9 +360,10 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
                            ("BACKGROUND", (1, 0), (-1, -1), pale),
                            ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
     story.append(t)
-    net = Table([[P("NET AMOUNT PAYABLE (₹)", ParagraphStyle("n", parent=right_b, textColor=gold, fontSize=10.5)),
-                  P(inr(totals.get("grand_total")), ParagraphStyle("nv", parent=right_b, textColor=colors.white,
-                                                                     fontSize=11))]],
+    payable = totals.get("before_tax") if gst_extra else totals.get("grand_total")
+    net = Table([[P(e(preset.get("total_label") or "NET AMOUNT PAYABLE (₹)"),
+                    ParagraphStyle("n", parent=right_b, textColor=gold, fontSize=10.5)),
+                  P(inr(payable), ParagraphStyle("nv", parent=right_b, textColor=colors.white, fontSize=11))]],
                 colWidths=[width * .78, width * .22])
     net.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), navy), ("TOPPADDING", (0, 0), (-1, -1), 5),
                              ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
@@ -329,6 +382,18 @@ def render(*, quote: dict, lines: list, totals: dict, summary: dict, preset: dic
                                ("INNERGRID", (0, 1), (-1, -1), .3, colors.HexColor("#D8D0BC")),
                                ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
         story += [Spacer(1, 5 * mm), t]
+
+    # ── payment schedule ── (the division's terms in rupees for this quote)
+    if schedule and len(schedule) > 1:
+        prow = [[P("<b>PAYMENT SCHEDULE</b>", head), "", ""]]
+        prow += [[P(e(x.get("label"))), P(f"{float(x.get('pct') or 0):g}%", centre), P(inr(x.get("amount")), right_b)]
+                 for x in schedule]
+        t = Table(prow, colWidths=[55 * mm, 18 * mm, 32 * mm], hAlign="CENTER")
+        t.setStyle(TableStyle([("SPAN", (0, 0), (-1, 0)), ("BACKGROUND", (0, 0), (-1, 0), navy),
+                               ("BOX", (0, 0), (-1, -1), .5, colors.HexColor("#BBB4A0")),
+                               ("INNERGRID", (0, 1), (-1, -1), .3, colors.HexColor("#D8D0BC")),
+                               ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
+        story += [Spacer(1, 4 * mm), t]
 
     def section(title: str, items: list, numbered: bool):
         if not items:

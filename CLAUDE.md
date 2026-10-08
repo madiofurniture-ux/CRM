@@ -145,13 +145,20 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
 - No cross-tenant reads, ever.
 - One codebase. Divisions and tenants are configuration, not forks.
 - Quotation is ONE engine with per-division templates (`quotation_templates.py`);
-  only the formats differ. Division presets (`division_preset(tenant, division)`:
+  only the formats differ. Division presets (`division_preset(tenant, division, settings)`:
   layout, mm/ft lines, rounding, GST, standard terms, highlights, bank, logo in
   `backend/assets/brand/<tenant>/`) drive the workspace and the branded PDF
   (`backend/quote_pdf.py`, `GET /quotes/{id}/pdf`). Quote Builder quotes
   (sections, no lines) print in the same branded format (`layout="builder"`);
   workspace lines carry `group` (printed with subtotals) and `image_url`
-  (typology / product picture).
+  (typology / product picture). Money rules per division/company:
+  `tax_transport` (D&W: GST on transport too), `gst_extra` (MAP: printed
+  total before GST; stored `grand_total` still includes it), `discount_pct`,
+  `markup` (D&W rate = line `cost_rate` × 1.6; `cost_rate` is a landing price,
+  redacted for non-cost staff, never on the sale), `validity_days`,
+  `payment_plans`, `quote_fields` (aluminium rate term). Stored quote totals
+  follow the lines (`_refresh_quote_totals`). Typologies + markup live in
+  Master Data → Quotations (`/quote-settings`). See `docs/QUOTATIONS.md`.
 - Don't rename or restructure modules outside the task's scope.
 
 ## End-to-end flow (the spine)

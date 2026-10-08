@@ -7,6 +7,7 @@ import LocationsManager from "@/components/LocationsManager";
 import DivisionsManager from "@/components/DivisionsManager";
 import VendorsManager from "@/components/VendorsManager";
 import PicklistsManager from "@/components/PicklistsManager";
+import QuoteSettingsManager from "@/components/QuoteSettingsManager";
 
 // Single home for tenant-wide reference lists that get reused across
 // screens instead of each screen managing its own copy — Locations
@@ -39,6 +40,7 @@ export default function MasterData() {
           : <LocationsManager floors={floors} onChange={setFloors} />}
         <DivisionsManager divisions={divisions} onChange={setDivisions} onSaved={reloadTenantConfig} />
         <PicklistsManager />
+        <QuoteSettingsManager />
         <VendorsManager />
       </div>
     </>

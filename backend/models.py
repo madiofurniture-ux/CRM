@@ -331,9 +331,18 @@ class QuoteBase(BaseModel):
     # an open quote past it reads as expired (lc.quote_expired).
     valid_until: Optional[str] = ""
     discount: Optional[float] = 0
-    # Transport / handling, added after GST (untaxed), and the rounding that
-    # makes the net payable a round figure — see lifecycle.quote_total.
+    # When set, the discount is this % of the subtotal and follows the lines
+    # ("Less : Discount 10%"); `discount` then holds the amount it comes to.
+    discount_pct: Optional[float] = 0
+    # Transport / handling (taxed or not per the division preset) and the
+    # rounding that makes the net payable a round figure — lifecycle.quote_total.
     transport: Optional[float] = 0
+    # Per-quotation facts the division prints as terms, e.g. Doors & Windows'
+    # aluminium 6063 rate at the time of quotation ({"aluminium_rate": 480}).
+    extra: Optional[dict] = None
+    # Server-owned: the totals come from workspace lines (kept in step with
+    # them on every line change), not from a typed value.
+    priced_by_lines: Optional[bool] = False
     # "" = the division's standard quotation; "pricelist" = picture price list.
     print_layout: Optional[str] = ""
     round_off: Optional[float] = 0
@@ -1618,6 +1627,19 @@ class QuoteLineBase(BaseModel):
     # Picked from stock and not re-priced by hand: the rate follows the item's
     # quantity price breaks (inventory.price_tiers) whenever qty changes.
     price_auto: Optional[bool] = False
+    # Manufacturer's rate (Doors & Windows: MFG ₹/sft) — a landing price, so
+    # only admin, accounts and "Can see landing price" staff see or set it.
+    # With rate_auto the customer rate is cost_rate × the division's markup
+    # (1.6 at MADIO) until someone types a rate.
+    cost_rate: Optional[float] = 0
+    rate_auto: Optional[bool] = False
+    # Doors & Windows typology (code in Master Data → Quotations): its
+    # pattern fills the specification and its diagram prints on the quotation.
+    typology: Optional[str] = ""
+    # Model number printed on the Furniture quotation (stock lines take the item's).
+    model_no: Optional[str] = ""
+    # MAP: billed area = measured area plus this much ("area includes wastage").
+    wastage_pct: Optional[float] = 0
 
 class DWOpeningBase(BaseModel):
     model_config = ConfigDict(extra="ignore")

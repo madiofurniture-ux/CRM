@@ -13,6 +13,8 @@ gst_rate — line_total is always computed, never trusted from a template.
 """
 from __future__ import annotations
 
+import copy
+
 
 def _item(description, dimensions="", finish="", qty=1, unit_rate=0, discount_pct=0, gst_rate=18):
     return {
@@ -160,26 +162,58 @@ def get_template(template_id: str) -> dict | None:
 # GENERIC applies to every company. COMPANY_PRESETS layers a company's own
 # branding on top (logo files live in backend/assets/brand/<tenant>/).
 
+# Specification printed under each line. `list` names the Master Data list
+# the value comes from; `strict` lists refuse other values (the others only
+# suggest); `column` prints the value in its own column rather than in the
+# description (Furniture's colour, MAP's finish).
 DW_SPEC_FIELDS = [
-    {"key": "pattern", "label": "Pattern"}, {"key": "series", "label": "Series"},
-    {"key": "section", "label": "Section Company"}, {"key": "glass", "label": "Glass"},
-    {"key": "color_type", "label": "Color Type"}, {"key": "color_name", "label": "Color Name"},
-    {"key": "location", "label": "Location"}, {"key": "make", "label": "Make"},
-    {"key": "brand", "label": "Brand"},
+    {"key": "pattern", "label": "Pattern"},
+    {"key": "series", "label": "Series", "list": "dw_series", "strict": True},
+    {"key": "section", "label": "Section Company", "list": "dw_sections", "strict": True},
+    {"key": "glass", "label": "Glass", "list": "dw_spec_glass", "strict": True},
+    {"key": "color_type", "label": "Color Type", "list": "dw_color_types", "strict": True},
+    {"key": "color_name", "label": "Color Name", "list": "dw_color_names"},
+    {"key": "location", "label": "Location", "list": "dw_locations"},
+    {"key": "make", "label": "Make", "list": "dw_makes", "strict": True},
+    {"key": "brand", "label": "Brand", "list": "dw_brands", "strict": True},
+]
+FURNITURE_SPEC_FIELDS = [
+    {"key": "colour", "label": "Colour / Finish", "column": True},
+    {"key": "size", "label": "Size"},
+]
+MAP_SPEC_FIELDS = [
+    {"key": "finish", "label": "Finish", "list": "map_finishes", "column": True},
+    {"key": "colour", "label": "Colour code"},
 ]
 
-# layout: "catalogue" (picture, model number, description, unit price, qty),
-# "openings" (Doors & Windows: typology, specification, W×H mm, sft) or
+# layout: "catalogue" (picture, model number, colour, description, unit price,
+# qty), "openings" (Doors & Windows: typology, specification, W×H mm, sft),
+# "finish" (MAP: picture, finish, description, rate per sft, area) or
 # "area" (W×H / sft lines when a line has dimensions, else qty × rate).
+#
+# Money behaviour, all off unless a division/company turns it on:
+#   tax_transport  GST is charged on transport / H&T too
+#   gst_extra      the quotation's grand total is before GST, with "GST extra"
+#                  (the order value kept by the CRM still includes it)
+#   discount_style "less" prints Less : Discount then the taxable value;
+#                  "after" prints the value after discount (Furniture)
+#   markup         customer rate = MFG rate × markup on lines that carry one
+#   validity_days  a new quotation's validity (0 = the CRM default)
+#   payment_plans  [{"above": ₹, "stages": [{"label", "pct"}]}]
+#   quote_fields   per-quotation facts printed as terms, e.g. the aluminium rate
 _BLANK = {"tax_pct": None, "spec_fields": [], "spec_defaults": {}, "terms": [], "highlights": [], "bank": [], "contact": "",
-          "note": "", "logo": "", "tagline": "", "invocation": ""}
+          "note": "", "logo": "", "tagline": "", "invocation": "", "tax_transport": False, "gst_extra": False,
+          "discount_style": "less", "total_label": "NET AMOUNT PAYABLE (₹)", "markup": 0, "validity_days": 0,
+          "payment_plans": [], "quote_fields": [], "wastage": False, "typologies": False}
 GENERIC = {
     "Furniture": {**_BLANK, "layout": "catalogue", "dims": "ft", "round_to": 1, "line_label": "Items",
-                  "transport_label": "H&T"},
-    "MAP": {**_BLANK, "layout": "area", "dims": "ft", "round_to": 1, "line_label": "Areas",
-            "transport_label": "Transport / Handling"},
+                  "transport_label": "H&T", "spec_fields": FURNITURE_SPEC_FIELDS, "discount_style": "after",
+                  "total_label": "TOTAL"},
+    "MAP": {**_BLANK, "layout": "finish", "dims": "ft", "round_to": 1, "line_label": "Areas",
+            "transport_label": "Transport / Handling", "spec_fields": MAP_SPEC_FIELDS, "wastage": True,
+            "total_label": "GRAND TOTAL"},
     "D&W": {**_BLANK, "layout": "openings", "dims": "mm", "round_to": 100, "line_label": "Windows",
-            "spec_fields": DW_SPEC_FIELDS, "transport_label": "Transport / Handling"},
+            "spec_fields": DW_SPEC_FIELDS, "transport_label": "Transport / Handling", "typologies": True},
 }
 
 COMPANY_PRESETS = {
@@ -190,17 +224,30 @@ COMPANY_PRESETS = {
             "phone": "040-3520 9199 • +91 99486 01899",
             "contact": "Manager: +91 99486 01899 / +91 91007 88899",
         },
+        # As on MADIO's Doors & Windows quotation template (AF-2610-182,
+        # Oct 2026): rate = MFG ₹/sft × 1.6, "Less : Discount", GST @ 18% on
+        # the taxable value and transport, net payable rounded.
         "D&W": {
             "invocation": "|| Shree Ganeshaya Namah ||",
             "name": "Madio Doors & Windows", "logo": "dw.png", "tagline": "Premium Aluminium Doors & Windows",
             "payable_to": "MADIO DOORS & WINDOWS",
-            "spec_defaults": {"section": "CPHN REGULAR", "glass": "5 mm Clear Toughen",
-                              "color_type": "AkzoNobel Coating", "make": "Hivik", "brand": "MDW"},
+            "markup": 1.6, "tax_transport": True, "validity_days": 3,
+            "spec_defaults": {"series": "Madio Domal 27", "section": "CPHN REGULAR", "glass": "5 mm Clear Toughen",
+                              "color_type": "Akzonobel Coating", "make": "Hivik", "brand": "MDW"},
+            "payment_plans": [
+                {"above": 100000, "stages": [{"label": "Advance with PO", "pct": 70},
+                                             {"label": "Before dispatch", "pct": 20},
+                                             {"label": "After delivery", "pct": 10}]},
+                {"above": 0, "stages": [{"label": "Advance with confirmed order", "pct": 100}]},
+            ],
+            "quote_fields": [{"key": "aluminium_rate", "label": "Aluminium 6063 rate (₹/kg)", "type": "number",
+                              "term": "Aluminium alloy 6063 price at the time of quotation: ₹{value}/kg plus GST."}],
             "highlights": [
                 "6063 Virgin Aluminium — Certified premium grade, produced from primary aluminium for purity and consistency.",
                 "T6 Temper — Heat-treated for maximum strength and rigidity, ensuring structural reliability.",
                 "AkzoNobel Powder Coating — World-class finish with superior UV resistance, colour stability and corrosion protection.",
-                "Custom Glass Solutions — Glass as specified for each opening, with diversified glass options to suit bespoke architectural visions.",
+                "Custom Glass Solutions — This project integrates {glass} as requested, while also offering diversified "
+                "glass options to suit bespoke architectural visions.",
             ],
             "terms": [
                 "Area calculation is accurate only for simple rectangular frames.",
@@ -220,8 +267,12 @@ COMPANY_PRESETS = {
             ],
         },
         # Terms as on MADIO's MAP quotations (e.g. AF-2610-178, Oct 2026).
+        # GST is quoted extra: GRAND TOTAL = areas + H & T, "GST (18%) Extra"
+        # (AF-2610-178). The order value the CRM keeps includes the GST.
         "MAP": {"name": "MAP — Madio Architectural Plasters", "logo": "map.png",
                 "tagline": "Premium Architectural Plasters", "transport_label": "H & T Charges",
+                "gst_extra": True, "tax_transport": True,
+                "payment_plans": [{"above": 0, "stages": [{"label": "Before delivery", "pct": 100}]}],
                 "terms": [
                     "Scaffolding / stools / ladders, power and water on site are in the customer's scope.",
                     "Applicators' accommodation is in the customer's scope.",
@@ -230,8 +281,16 @@ COMPANY_PRESETS = {
                     "100% payment before delivery (cheque payments after clearance only).",
                     "Area includes wastage.",
                 ]},
+        # Subtotal → After Discount → H&T (untaxed) → GST 18% on the value
+        # after discount → TOTAL (Sohini Builders, AF-2602-100).
         "Furniture": {
             "name": "Madio Furniture", "logo": "furniture.png", "tagline": "Madio Furniture",
+            "validity_days": 7,
+            "payment_plans": [
+                {"above": 100000, "stages": [{"label": "Advance with PO", "pct": 70},
+                                             {"label": "Before dispatch", "pct": 30}]},
+                {"above": 0, "stages": [{"label": "Before dispatch / delivery", "pct": 100}]},
+            ],
             "print_layouts": [{"key": "", "label": "Catalogue (standard)"},
                               {"key": "pricelist", "label": "Picture price list (MRP / offer price)"}],
             "note": "Thank you for considering Madio Furniture. We appreciate the opportunity to collaborate on "
@@ -266,14 +325,44 @@ def division_key(division: str) -> str:
     return DIVISION_ALIASES.get(d.lower(), d if d in GENERIC else "Furniture")
 
 
-def division_preset(tenant_id: str, division: str) -> dict:
-    """The quotation preset for a company's division (always a fresh copy)."""
+def division_preset(tenant_id: str, division: str, settings: dict | None = None) -> dict:
+    """The quotation preset for a company's division (always a fresh copy).
+    `settings` is the company's saved quotation settings (Master Data →
+    Quotations): a markup set there replaces the preset's."""
     key = division_key(division)
     company = COMPANY_PRESETS.get(str(tenant_id or ""), {})
     out = {"division": key, "name": "", "invocation": "", "address": "", "phone": "", "payable_to": "",
-           **{k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v)
-              for k, v in GENERIC[key].items()}}
+           **copy.deepcopy(GENERIC[key])}
     for layer in (company.get("_all") or {}, company.get(key) or {}):
         for k, v in layer.items():
-            out[k] = list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v
+            out[k] = copy.deepcopy(v)
+    saved = ((settings or {}).get("markup") or {}).get(key)
+    if saved is not None:
+        try:
+            out["markup"] = max(0.0, float(saved))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def glass_highlight(text: str, lines: list) -> str:
+    """Fill "{glass}" in a highlight with the glass the quotation's lines use."""
+    if "{glass}" not in text:
+        return text
+    seen = []
+    for l in lines or []:
+        g = str(((l.get("specs") or {}).get("glass")) or "").strip()
+        if g and g.lower() not in [x.lower() for x in seen]:
+            seen.append(g)
+    glass = " / ".join(seen) + " glass" if seen else "the specified glass"
+    return text.replace("{glass}", glass)
+
+
+def quote_field_terms(preset: dict, extra: dict | None) -> list[str]:
+    """Terms carrying a per-quotation fact (the aluminium rate), when filled."""
+    out = []
+    for f in preset.get("quote_fields") or []:
+        value = str((extra or {}).get(f["key"]) or "").strip()
+        if value and f.get("term"):
+            out.append(f["term"].replace("{value}", value))
     return out

@@ -518,7 +518,10 @@ MM_PER_SFT = 90000
 def calc_line(line: dict) -> dict:
     """sft = W×H×qty (feet in, square feet out); amount bills by area when there is one.
     A line with dim_unit "mm" takes W and H in millimetres (Doors & Windows):
-    sft_each = W×H / MM_PER_SFT, sft = sft_each × qty."""
+    sft_each = W×H / MM_PER_SFT, sft = sft_each × qty.
+
+    wastage_pct (MAP plasters, "area includes wastage") bills the measured
+    area plus that much: sft_measured keeps the wall area as measured."""
     w, h = money(line.get("w")), money(line.get("h"))
     qty, rate = money(line.get("qty")), money(line.get("rate"))
     if line.get("dim_unit") == "mm":
@@ -527,8 +530,30 @@ def calc_line(line: dict) -> dict:
         line["sft"] = round(each * (qty or 1), 2)
     else:
         line["sft"] = round(w * h * (qty or 1), 2) if w > 0 and h > 0 else 0
+        wastage = min(max(money(line.get("wastage_pct")), 0), 100)
+        if wastage and line["sft"]:
+            line["sft_measured"] = line["sft"]
+            line["sft"] = round(line["sft"] * (1 + wastage / 100), 2)
     line["amount"] = round((line["sft"] or qty or 0) * rate, 2)
     return line
+
+
+def markup_rate(cost_rate: Any, markup: Any) -> float:
+    """Customer rate from the manufacturer's rate (Doors & Windows: MFG ₹/sft
+    × the markup factor, 1.6 at MADIO)."""
+    cost, factor = money(cost_rate), money(markup)
+    return round(cost * factor, 2) if cost > 0 and factor > 0 else 0.0
+
+
+def line_cost(line: dict, unit_cost: Any = None) -> float:
+    """What a line costs MADIO: its MFG rate over the same base the rate bills
+    (sft, else qty), or a stock item's landing price × qty."""
+    base = money(line.get("sft")) or money(line.get("qty")) or 0
+    if money(line.get("cost_rate")) > 0:
+        return round(money(line["cost_rate"]) * base, 2)
+    if unit_cost is not None and money(unit_cost) > 0:
+        return round(money(unit_cost) * (money(line.get("qty")) or 1), 2)
+    return 0.0
 
 
 # ── P&L is stated before GST ───────────────────────────────────────────────
@@ -592,24 +617,57 @@ def payroll_approval_blocked(attendance_exceptions: list) -> bool:
 
 
 def quote_total(subtotal: float, discount: float, tax_pct: float,
-                transport: float = 0, round_to: float = 0) -> dict:
-    """Roll lines → subtotal → discount → tax → grand total. Discount is an absolute ₹.
+                transport: float = 0, round_to: float = 0, *,
+                tax_transport: bool = False, discount_pct: Any = None) -> dict:
+    """Roll lines → subtotal → discount → tax → grand total.
 
-    `transport` (transport / handling) is added after tax, untaxed, as on
-    MADIO's Doors & Windows quotes. `round_to` (e.g. 1 or 100) rounds the
-    grand total to that many rupees and reports the difference as round_off;
-    0 keeps the exact figure."""
+    Discount is an absolute ₹, or with `discount_pct` that percentage of the
+    subtotal ("Less : Discount 10%" on the Doors & Windows quotation), so it
+    follows the lines as they change.
+
+    `transport` (transport / handling, H&T) is added after the discount.
+    With `tax_transport` GST is charged on it too ("18% GST on all applicable
+    charges": Doors & Windows); without, it is added untaxed (Furniture's H&T).
+    `round_to` (e.g. 1 or 100) rounds the grand total to that many rupees
+    and reports the difference as round_off; 0 keeps the exact figure.
+    `before_tax` is taxable value + transport: the "GST extra" total MAP prints."""
     sub = round(money(subtotal), 2)
-    disc = min(money(discount), sub)            # a discount never exceeds the subtotal
+    pct = min(max(money(discount_pct), 0), 100) if discount_pct not in (None, "") else 0
+    disc = round(sub * pct / 100, 2) if pct else money(discount)
+    disc = min(max(disc, 0), sub)               # a discount never exceeds the subtotal
     taxable = round(sub - disc, 2)
-    tax = round(taxable * money(tax_pct) / 100, 2)
     carriage = round(max(money(transport), 0), 2)
+    tax = round((taxable + (carriage if tax_transport else 0)) * money(tax_pct) / 100, 2)
     total = round(taxable + tax + carriage, 2)
     step = money(round_to)
     rounded = round(round(total / step) * step, 2) if step > 0 else total
-    return {"subtotal": sub, "discount": round(disc, 2), "tax_total": tax,
-            "transport": carriage, "round_off": round(rounded - total, 2),
+    return {"subtotal": sub, "discount": round(disc, 2), "discount_pct": pct, "tax_total": tax,
+            "transport": carriage, "tax_on_transport": bool(tax_transport),
+            "before_tax": round(taxable + carriage, 2), "round_off": round(rounded - total, 2),
             "grand_total": rounded, "value": round(taxable, 2)}
+
+
+# ── payment schedule ───────────────────────────────────────────────────────
+# A division's payment terms as stages with amounts, e.g. Doors & Windows:
+# orders above ₹1,00,000 pay 70% with the PO, 20% before dispatch, 10% after
+# delivery; smaller orders 100% in advance. `plans` is [{"above": ₹,
+# "stages": [{"label", "pct"}]}], most specific (highest `above`) first.
+def payment_schedule(total: Any, plans: Iterable[dict]) -> list[dict]:
+    amount = round(money(total), 2)
+    if amount <= 0:
+        return []
+    plan = next((p for p in sorted(plans or [], key=lambda p: -money(p.get("above")))
+                 if amount > money(p.get("above"))), None)
+    stages = [s for s in (plan or {}).get("stages") or [] if money(s.get("pct")) > 0]
+    if not stages:
+        return []
+    out, left = [], amount
+    for i, s in enumerate(stages):
+        part = left if i == len(stages) - 1 else round(amount * money(s["pct"]) / 100)
+        left = round(left - part, 2)
+        out.append({"label": str(s.get("label") or f"Stage {i + 1}"), "pct": money(s["pct"]),
+                    "amount": round(part, 2)})
+    return out
 
 
 # --------------------------------------------------------- purchase orders
@@ -736,10 +794,12 @@ def _taxable_for_total(total: float, tax_pct: float) -> float:
 
 
 def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: Any,
-                            fallback_value: Any, fallback_label: str, transport: Any = 0) -> list[dict]:
+                            fallback_value: Any, fallback_label: str, transport: Any = 0,
+                            transport_tax_pct: Any = 0) -> list[dict]:
     """Quote/sale lines (w/h/sft, rate, amount) -> invoice LineItems. The
     quote's absolute discount is spread as the same % on every line so the
-    invoice total matches the quote's grand total."""
+    invoice total matches the quote's grand total. Transport carries GST
+    (transport_tax_pct) when the quotation's division taxes it."""
     lines = [calc_line(dict(l)) for l in sale_lines or []]
     subtotal = lines_subtotal(lines)
     tax = money(tax_pct)
@@ -759,7 +819,8 @@ def invoice_lines_from_sale(sale_lines: Iterable[dict], discount: Any, tax_pct: 
         })
     if out and money(transport) > 0:
         out.append({"sku": "", "hsn": "996511", "description": "Transport / Handling", "qty": 1,
-                    "rate": round(money(transport), 2), "unit": "", "discount_pct": 0, "tax_pct": 0})
+                    "rate": round(money(transport), 2), "unit": "", "discount_pct": 0,
+                    "tax_pct": money(transport_tax_pct)})
     if not out:
         base = money(fallback_value)
         out = [{"sku": "", "hsn": "", "description": fallback_label, "qty": 1,

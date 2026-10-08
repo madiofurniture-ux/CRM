@@ -38,7 +38,8 @@ def test_mm_lines_and_totals_match_the_naveen_reddy_quote():
     # Furniture: discount, then H&T untaxed (Sohini Builders quote).
     t = lc.quote_total(169920, 49920, 18, transport=4000, round_to=1)
     assert (t["value"], t["tax_total"], t["grand_total"]) == (120000, 21600, 145600)
-    assert lc.quote_total(100, 0, 18) == {"subtotal": 100, "discount": 0, "tax_total": 18, "transport": 0,
+    assert lc.quote_total(100, 0, 18) == {"subtotal": 100, "discount": 0, "discount_pct": 0, "tax_total": 18,
+                                          "transport": 0, "tax_on_transport": False, "before_tax": 100,
                                           "round_off": 0, "grand_total": 118, "value": 100}
 
 
@@ -76,14 +77,18 @@ def test_new_quote_gets_its_divisions_terms_and_the_workspace_and_pdf_follow_the
                                                 "specs": {"pattern": "Openable Door", "brand": "MDW"},
                                                 "created_at": "2026-09-12"})
         ws = await server.quote_workspace("q1", user=ADMIN)
-        assert ws["preset"]["dims"] == "mm" and ws["totals"]["grand_total"] == 160800
+        # The October D&W template charges GST on transport too ("18% GST on
+        # all applicable charges"): (1,29,478.50 + 8,000) × 18% = 24,746.13,
+        # 1,62,224.63 rounded to the hundred. (September's quote left it untaxed.)
+        assert ws["preset"]["dims"] == "mm" and ws["totals"]["grand_total"] == 162200
+        assert ws["totals"]["tax_total"] == 24746.13
         assert ws["sale"] is None
         await server.db.sales.insert_one({"id": "s9", "tenant_id": ADMIN["tenant_id"], "quote_id": "q1", "sale_no": "MF 9"})
         assert (await server.quote_workspace("q1", user=ADMIN))["sale"] == {"id": "s9", "sale_no": "MF 9"}
         assert ws["summary"] == {"openings": 1, "sft": 34.5, "avg_rate": 3753.0,
                                  "groups": [{"name": "", "subtotal": 129478.5, "sft": 34.5, "count": 1}]}
         saved = await server.quote_save_total("q1", {"discount": 0, "transport": 9000}, user=ADMIN)
-        assert saved["transport"] == 9000 and saved["grand_total"] == 161800
+        assert saved["transport"] == 9000 and saved["grand_total"] == 163400
         resp = await server.quote_pdf("q1", user=ADMIN)
         assert resp.body[:4] == b"%PDF" and len(resp.body) > 5000
     run(go())
