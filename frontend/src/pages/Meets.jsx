@@ -1,15 +1,20 @@
 import { useEffect, useState, useMemo } from "react";
 import Topbar from "@/components/Topbar";
-import api from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { ChevronLeft, ChevronRight, MapPin, Users as UsersIcon, X, Trash2 } from "lucide-react";
 import { todayIST, isoDateIST } from "@/lib/format";
 import { Link, useSearchParams } from "react-router-dom";
 import CustomerProjectPicker from "@/components/CustomerProjectPicker";
+import ArchitectPicker from "@/components/ArchitectPicker";
 
 const REMIND = [["", "No reminder"], [0, "At the time"], [5, "5 minutes before"], [10, "10 minutes before"],
   [15, "15 minutes before"], [30, "30 minutes before"], [60, "1 hour before"], [120, "2 hours before"]];
 const HOURS = Array.from({ length: 12 }, (_, i) => 8 + i); // 8..19
+// Who a meeting is with. Leads are prospect customers, so they're picked as customers.
+const WITH = [["customer", "Customer"], ["architect", "Architect"], ["internal", "Internal"]];
+const withOf = (m) => (m.architect_id || m.ref_type === "Architect" ? "architect"
+  : m.customer_id || ["Customer", "Lead"].includes(m.ref_type) ? "customer" : "internal");
 
 function startOfWeek(d) {
   const dt = new Date(d);
@@ -27,24 +32,31 @@ export default function Meets() {
   const [show, setShow] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
-  const empty = { title: "", date: todayIST(), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Internal", ref_name: "", agenda: "", status: "Scheduled", attendees: [], customer_id: "", project_id: "", remind_minutes: 15 };
+  const empty = { title: "", date: todayIST(), start_time: "10:00", end_time: "11:00", location: "", with_person: "", ref_type: "Customer", ref_name: "", agenda: "", status: "Scheduled", attendees: [], customer_id: "", project_id: "", architect_id: "", remind_minutes: 15 };
   const [form, setForm] = useState(empty);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const load = async () => { const { data } = await api.get("/meets"); setRows(data); };
   useEffect(() => { load(); }, []);
 
-  // /meets?new=1&customer_id=…&project_id=… (customer / project page)
-  // opens a new meeting already for that customer / project.
+  // /meets?new=1&customer_id=…&project_id=… (customer / project page) or
+  // ?new=1&architect_id=… (Architects) opens a new meeting already for them.
   useEffect(() => {
     if (searchParams.get("new") !== "1") return;
     const customer_id = searchParams.get("customer_id") || "";
     const project_id = searchParams.get("project_id") || "";
-    ["new", "customer_id", "project_id"].forEach((k) => searchParams.delete(k));
+    const architect_id = searchParams.get("architect_id") || "";
+    ["new", "customer_id", "project_id", "architect_id"].forEach((k) => searchParams.delete(k));
     setSearchParams(searchParams, { replace: true });
     setEditing(null);
-    setForm({ ...empty, customer_id, project_id, ref_type: "Customer" });
+    setForm({ ...empty, customer_id, project_id, architect_id, ref_type: architect_id ? "Architect" : "Customer" });
     setShow(true);
+    if (architect_id) {
+      api.get("/architects").then(({ data }) => {
+        const a = (data || []).find((x) => x.id === architect_id);
+        if (a) pickArchitect({ id: a.id, name: a.name, row: a });
+      }).catch(() => {});
+    }
     if (project_id && !customer_id) {
       api.get(`/projects/${project_id}/context`).then(({ data }) => setForm((f) => ({
         ...f, customer_id: data.customer?.id || "", ref_name: data.customer?.name || data.project?.customer || "",
@@ -54,11 +66,29 @@ export default function Meets() {
     }
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const onPick = ({ customer, project }) => setForm((f) => ({
-    ...f, customer_id: customer?.id || "", project_id: project?.id || "",
-    ref_type: customer ? "Customer" : f.ref_type, ref_name: customer ? customer.name : f.ref_name,
-    location: f.location || project?.site_address || "",
+  const onPick = ({ customer, project }) => setForm((f) => {
+    // For an architect meeting the customer is who it's about; the meeting stays the architect's.
+    const architect = withOf(f) === "architect";
+    return {
+      ...f, customer_id: customer?.id || "", project_id: project?.id || "",
+      ref_type: architect ? "Architect" : "Customer",
+      ref_name: architect ? f.ref_name : (customer ? customer.name : ""),
+      location: f.location || project?.site_address || "",
+    };
+  });
+  const pickArchitect = (a) => setForm((f) => ({
+    ...f, architect_id: a?.id || "", ref_type: "Architect", ref_name: a?.name || "",
+    with_person: f.with_person || a?.name || "",
+    location: f.location || a?.row?.location || "",
+    title: f.title || (a?.name ? `Meeting with ${a.row?.type === "Architect" ? "Ar. " : ""}${a.name}` : ""),
   }));
+  const setWith = (mode) => setForm((f) => {
+    if (mode === withOf(f)) return f;
+    if (mode === "internal") return { ...f, ref_type: "Internal", ref_name: "", architect_id: "", customer_id: "", project_id: "" };
+    if (mode === "architect") return { ...f, ref_type: "Architect", ref_name: "", architect_id: "" };
+    return { ...f, ref_type: "Customer", ref_name: "", architect_id: "" };
+  });
+  const mode = withOf(form);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart); d.setDate(d.getDate() + i); return d;
@@ -82,12 +112,13 @@ export default function Meets() {
   const openEdit = (m) => { setEditing(m); setForm(m); setShow(true); };
   const save = async () => {
     if (saving) return;
+    if (withOf(form) === "architect" && !form.architect_id && !form.ref_name) { toast.error("Pick the architect"); return; }
     setSaving(true);
     try {
       if (editing) { await api.put(`/meets/${editing.id}`, form); toast.success("Meet updated"); }
       else { await api.post("/meets", form); toast.success("Meet scheduled"); }
       setShow(false); load();
-    } catch { toast.error("Save failed"); }
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail) || "Save failed"); }
     finally { setSaving(false); }
   };
   const remove = async (id) => { if (!window.confirm("Delete meeting?")) return; await api.delete(`/meets/${id}`); load(); };
@@ -158,7 +189,7 @@ export default function Meets() {
                                 data-testid={`meet-${m.id}`}
                               >
                                 <div className="font-semibold truncate">{m.title}</div>
-                                <div className="text-[10px] text-[var(--ink-3)]">{m.start_time}–{m.end_time}</div>
+                                <div className="text-[10px] text-[var(--ink-3)] truncate">{m.start_time}–{m.end_time}{(m.ref_name || m.with_person) ? ` · ${m.ref_name || m.with_person}` : ""}</div>
                               </div>
                             ))}
                           </div>
@@ -184,7 +215,8 @@ export default function Meets() {
                     <span className="font-mono">{m.start_time}–{m.end_time}</span>
                     {m.location && <span className="flex items-center gap-1"><MapPin size={11} />{m.location}</span>}
                     {m.with_person && <span className="flex items-center gap-1"><UsersIcon size={11} />{m.with_person}</span>}
-                    {m.customer_id && <Link to={`/customers/${m.customer_id}`} onClick={(e) => e.stopPropagation()} className="text-[var(--brand)] hover:underline">{m.ref_name || "Customer"}</Link>}
+                    {m.architect_id && <span className="px-1.5 rounded bg-[var(--brand-soft)] text-[var(--brand)]" title="From Architects & Designers" data-testid={`meet-architect-${m.id}`}>{m.ref_name}</span>}
+                    {m.customer_id && <Link to={`/customers/${m.customer_id}`} onClick={(e) => e.stopPropagation()} className="text-[var(--brand)] hover:underline">{m.architect_id ? "Customer" : (m.ref_name || "Customer")}</Link>}
                     {m.project_id && <Link to={`/projects/${m.project_id}`} onClick={(e) => e.stopPropagation()} className="text-[var(--brand)] hover:underline">Project</Link>}
                   </div>
                   {m.agenda && <div className="text-xs text-[var(--ink-3)] mt-1.5 line-clamp-2">{m.agenda}</div>}
@@ -206,9 +238,25 @@ export default function Meets() {
             </div>
             <div className="p-5 grid grid-cols-2 gap-4">
               <F l="Title" v={form.title} oc={(v) => setForm({ ...form, title: v })} cls="col-span-2" t2="meet-title" />
-              <div className="col-span-2">
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Customer &amp; project (optional)</label>
-                <CustomerProjectPicker customerId={form.customer_id} projectId={form.project_id} onChange={onPick} testid="meet-cpp" compact />
+              <div className="col-span-2 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Meeting with</span>
+                  <div className="inline-flex rounded-lg border border-[var(--border)] overflow-hidden text-sm" role="radiogroup" aria-label="Meeting with">
+                    {WITH.map(([k, l]) => (
+                      <button key={k} type="button" role="radio" aria-checked={mode === k} onClick={() => setWith(k)}
+                              className={`px-3 py-1.5 ${mode === k ? "bg-[var(--brand)] text-white" : "bg-white"}`} data-testid={`meet-with-${k}`}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+                {mode === "architect" && (
+                  <div>
+                    <ArchitectPicker id={form.architect_id} name={form.architect_id ? "" : form.ref_name} onChange={pickArchitect} testId="meet-architect" />
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mt-2 mb-1">About a client's project (optional)</label>
+                  </div>
+                )}
+                {mode !== "internal" && (
+                  <CustomerProjectPicker customerId={form.customer_id} projectId={form.project_id} onChange={onPick} testid="meet-cpp" compact />
+                )}
               </div>
               <F l="Date" t="date" v={form.date} oc={(v) => setForm({ ...form, date: v })} />
               <div className="grid grid-cols-2 gap-2">
@@ -223,14 +271,7 @@ export default function Meets() {
                 </select>
               </div>
               <F l="Location" v={form.location} oc={(v) => setForm({ ...form, location: v })} />
-              <F l="With" v={form.with_person} oc={(v) => setForm({ ...form, with_person: v })} />
-              <div>
-                <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Type</label>
-                <select value={form.ref_type} onChange={(e) => setForm({ ...form, ref_type: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-white text-sm">
-                  <option>Lead</option><option>Architect</option><option>Customer</option><option>Internal</option>
-                </select>
-              </div>
-              <F l="Reference name" v={form.ref_name} oc={(v) => setForm({ ...form, ref_name: v })} />
+              <F l="People you're meeting" v={form.with_person} oc={(v) => setForm({ ...form, with_person: v })} cls="col-span-2 sm:col-span-1" t2="meet-with-person" />
               <div className="col-span-2">
                 <label className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-3)] block mb-1">Agenda</label>
                 <textarea value={form.agenda} onChange={(e) => setForm({ ...form, agenda: e.target.value })} rows="3" className="w-full px-3 py-2 rounded-lg border border-[var(--border)] text-sm resize-none focus:border-[var(--brand)] outline-none" />

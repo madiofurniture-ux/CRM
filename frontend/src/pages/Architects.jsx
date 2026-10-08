@@ -1,16 +1,18 @@
 import { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import SearchSelect from "@/components/SearchSelect";
 import api, { formatApiError } from "@/lib/api";
 import { fmtDate, todayIST } from "@/lib/format";
 import { validateIndianPhone } from "@/lib/phone";
-import { Phone, MapPin, Building, X, Pencil, Trash2, Plus } from "lucide-react";
+import { Phone, MapPin, Building, X, Pencil, Trash2, Plus, CalendarPlus } from "lucide-react";
 import { toast } from "sonner";
 import AttachmentPanel from "@/components/AttachmentPanel";
 import usePicklists from "@/hooks/usePicklists";
 
 
 export default function Architects() {
+  const nav = useNavigate();
   const { values: pick } = usePicklists();
   const [rows, setRows] = useState([]);
   const [staff, setStaff] = useState([]);
@@ -123,6 +125,14 @@ export default function Architects() {
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-[var(--brand-soft)] text-[var(--brand)] font-semibold uppercase tracking-wider">{a.type}</span>
+                  <button
+                    onClick={() => nav(`/meets?new=1&architect_id=${a.id}`)}
+                    className="p-1 rounded hover:bg-[var(--surface-2)] text-[var(--ink-2)]"
+                    title="Schedule a meeting"
+                    data-testid={`arch-meet-${a.id}`}
+                  >
+                    <CalendarPlus size={13} />
+                  </button>
                   <button
                     onClick={() => openEdit(a)}
                     className="p-1 rounded hover:bg-[var(--surface-2)] text-[var(--ink-2)]"

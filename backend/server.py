@@ -3642,8 +3642,28 @@ make_crud(api, "tasks", "tasks", TaskCreate, Task, module="tasks", owner_field="
           normalize=normalize_task, personal=True)
 make_crud(api, "invoices", "invoices", InvoiceCreate, Invoice, module="invoice-gen", owner_field="by_user",
           normalize=normalize_invoice, after_write=_invoice_after_write)
+async def normalize_meet(doc: dict, existing: dict | None, user: dict) -> None:
+    """A meeting with an architect is tied to their Architects record: the
+    name fills the reference (and "with", when that's blank). The customer /
+    project a meeting is about stays separate (relations.py), so an
+    architect meeting can still be about a client's project."""
+    if "architect_id" not in doc or doc.get("architect_id") == (existing or {}).get("architect_id"):
+        return
+    aid = str(doc.get("architect_id") or "").strip()
+    doc["architect_id"] = aid
+    if not aid:
+        return
+    arch = await db.architects.find_one(tenancy.scope({"id": aid}, "architects", user), {"_id": 0, "name": 1})
+    if not arch:
+        raise HTTPException(status_code=404, detail="That architect wasn't found")
+    doc["ref_type"] = "Architect"
+    doc["ref_name"] = arch.get("name", "")
+    if not str(doc.get("with_person") if "with_person" in doc else (existing or {}).get("with_person") or "").strip():
+        doc["with_person"] = arch.get("name", "")
+
+
 make_crud(api, "meets", "meets", MeetCreate, Meet, module="meetplan", owner_field="created_by",
-          personal=True)
+          personal=True, normalize=normalize_meet)
 
 
 # ── Reminders: the signed-in person's timed tasks and meetings ─────────────

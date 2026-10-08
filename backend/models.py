@@ -870,6 +870,9 @@ class MeetBase(BaseModel):
     with_person: Optional[str] = ""
     ref_type: Optional[str] = ""  # Lead / Architect / Customer / Internal
     ref_name: Optional[str] = ""
+    # A meeting with an architect / designer points at their Architects
+    # record (a customer meeting uses customer_id); ref_name keeps the name.
+    architect_id: Optional[str] = ""
     # Direct project linkage. Tasks already had this via their generic
     # ref/ref_type pair ("project" is one of the accepted ref_type values);
     # meetings had no equivalent, so a site meeting could not be tied to the

@@ -47,6 +47,13 @@ PDFs, WhatsApp, Tally and every list read it.
 
 A meeting's "With" and a task's linked name are never overwritten once typed.
 
+A meeting is with a **customer**, an **architect / designer** or **internal**
+(Meet Planner's "Meeting with" switch). An architect meeting carries
+`architect_id` (checked against the company's Architects; `ref_type`
+"Architect", `ref_name` their name, "With" filled when blank) and can still
+be about a client's project (`customer_id` / `project_id`). Architects never
+become customers.
+
 ## Orders join their project
 
 Approving / converting a quotation made on a project's page adds the order
@@ -113,7 +120,8 @@ stay unlinked — name matching would guess; link them from the order.
   (duplicate warning with "Use this one") and "+ New project" without
   leaving the form.
 - `?new=1&customer_id=…&project_id=…` on Quotations, Meetings and Tasks opens
-  a new record already for that customer / project.
+  a new record already for that customer / project; `/meets?new=1&architect_id=…`
+  (the calendar button on an architect's card) opens a meeting with them.
 - **Column filters** (`hooks/useColumnFilters.js` + `components/ColumnFilters.jsx`)
   on Leads, Customers, Quotations, Projects, Orders, Visitors, Calls,
   Invoices, Service, Purchase Orders, Vendor Orders: text / one-of / date

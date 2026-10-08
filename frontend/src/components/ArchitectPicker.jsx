@@ -17,6 +17,6 @@ export default function ArchitectPicker({ id = "", name = "", onChange, testId =
   return (
     <SearchSelect options={options} value={id || (name ? `legacy:${name}` : "")} testId={testId}
       placeholder="Pick from Architects…" emptyLabel="Not in Architects — add them there first"
-      onChange={(v, opt) => onChange?.(opt?.row ? { id: opt.row.id, name: opt.row.name } : (v ? { id: "", name } : null))} />
+      onChange={(v, opt) => onChange?.(opt?.row ? { id: opt.row.id, name: opt.row.name, row: opt.row } : (v ? { id: "", name } : null))} />
   );
 }
