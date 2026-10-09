@@ -39,6 +39,9 @@ import api_wallets
 import api_budget
 import operations as ops
 import catalogues as catx
+import catalogue_pdf
+import mockups
+import vendor_catalogue as vcat
 import relations as rel
 import lifecycle as lc
 import permissions as perm
@@ -2208,6 +2211,9 @@ async def normalize_inventory(doc: dict, existing: dict | None, user: dict) -> N
                 q["id"] = {"$ne": existing["id"]}
             if await db.inventory.find_one(q, {"_id": 0, "id": 1}):
                 raise HTTPException(status_code=400, detail=f"SKU \"{sku}\" already exists in inventory")
+            vq = tenancy.scope({"sku": q["sku"]}, "virtual_items", user)
+            if await db.virtual_items.find_one(vq, {"_id": 0, "id": 1}):
+                raise HTTPException(status_code=400, detail=f"SKU \"{sku}\" is a Virtual Catalogue product's code")
 
     if "cost" in doc or "mrp" in doc:
         cost = float(doc.get("cost", (existing or {}).get("cost")) or 0)
@@ -2766,10 +2772,7 @@ async def _branded_quote_pdf(quote: dict, lines: list, user: dict) -> bytes:
     if quote.get("print_layout") in quotation_templates.PRINT_LAYOUTS:
         preset = {**preset, "layout": quote["print_layout"]}
     # Picture, model number and MRP from the stock item a line was picked from.
-    skus = sorted({l.get("sku") for l in lines if l.get("sku")})
-    items = {i["sku"]: i async for i in db.inventory.find(
-        tenancy.scope({"sku": {"$in": skus}}, "inventory", user),
-        {"_id": 0, "sku": 1, "model_no": 1, "image_url": 1, "mrp": 1, "gst_pct": 1})} if skus else {}
+    items = await _products_by_sku([l.get("sku") for l in lines], user, ("model_no", "image_url", "mrp", "gst_pct"))
     typologies = {t.get("code"): t for t in settings["typologies"]}
     for l in lines:
         item = items.get(l.get("sku")) or {}
@@ -3386,10 +3389,29 @@ async def inventory_lookup(q: str = "", limit: int = 20, skus: str = "", user: d
     else:
         query = {"$or": [{f: {"$regex": term, "$options": "i"}} for f in ("name", "sku", "model_no", "tally_name")]} \
             if term else {}
+    cap = max(1, min(int(limit or 20), 50))
     items = await db.inventory.find(tenancy.scope(query, "inventory", user), {"_id": 0}) \
-        .sort("name", 1).to_list(max(1, min(int(limit or 20), 50)))
+        .sort("name", 1).to_list(cap)
+    # Virtual Catalogue products (made to order) are picked the same way;
+    # archived ones only for lines already on a document.
+    vquery = {"sku": {"$in": exact}} if exact else {
+        "status": {"$ne": "Archived"},
+        **({"$or": [{f: {"$regex": term, "$options": "i"}} for f in ("name", "sku", "category", "subtitle")]}
+           if term else {})}
+    virtual = await db.virtual_items.find(tenancy.scope(vquery, "virtual_items", user),
+                                          {"_id": 0, "images": 0}).sort("name", 1).to_list(cap)
     pos = await _stock_positions(user, [i.get("sku") for i in items if i.get("sku")])
-    return [{
+    see_cost = _can_see_cost_prices(user)
+    made_to_order = [{
+        "sku": v.get("sku", ""), "name": v.get("name", ""), "model_no": "",
+        "category": v.get("category", ""), "division": v.get("division", ""),
+        "mrp": lc.money(v.get("mrp")), "hsn": v.get("hsn") or "", "unit": v.get("unit") or "pcs",
+        "gst_pct": v.get("gst_pct"), "material_finish": vcat.finish_line(v.get("features")),
+        "price_tiers": [], "on_hand": None, "reserved": None, "available": None, "tally_qty": None,
+        "virtual": True, "thumb": v.get("thumb", ""),
+        **({"cost": lc.money(v.get("cost"))} if see_cost else {}),
+    } for v in virtual]
+    stock = [{
         "sku": i.get("sku", ""), "name": i.get("name", ""), "model_no": i.get("model_no", ""),
         "category": i.get("category", ""), "division": i.get("division", ""),
         "mrp": lc.money(i.get("mrp")), "hsn": i.get("hsn") or "", "unit": i.get("unit") or "pcs",
@@ -3399,8 +3421,12 @@ async def inventory_lookup(q: str = "", limit: int = 20, skus: str = "", user: d
         "tally_qty": i.get("tally_qty"),
         # Landing price only for those allowed to see it (admin, accounts,
         # anyone granted "Can see landing price").
-        **({"cost": lc.money(i.get("cost"))} if _can_see_cost_prices(user) else {}),
+        **({"cost": lc.money(i.get("cost"))} if see_cost else {}),
     } for i in items]
+    out = stock + made_to_order
+    if not exact:
+        out = sorted(out, key=lambda r: str(r.get("name") or "").lower())[:cap]
+    return out
 
 
 async def _reserve_for_sale(sale: dict, user: dict) -> None:
@@ -3477,9 +3503,14 @@ async def _invoice_stock_warnings(lines: list, user: dict) -> list:
     if not issues:
         return []
     pos = await _stock_positions(user, list(issues))
+    missing = [sku for sku in issues if sku not in pos]
+    made_to_order = {v["sku"] async for v in db.virtual_items.find(
+        tenancy.scope({"sku": {"$in": missing}}, "virtual_items", user), {"_id": 0, "sku": 1})} if missing else set()
     out = []
     for sku, qty in issues.items():
         p = pos.get(sku)
+        if p is None and sku in made_to_order:
+            continue                      # a Virtual Catalogue product: made to order, never stock
         if p is None:
             out.append(f"{sku}: not in inventory, stock won't be tracked")
         elif qty > p["on_hand"]:
@@ -5279,6 +5310,9 @@ PICKLISTS = {
     "units": ("Units", ["pcs", "nos", "set", "sqft", "rft", "sqm", "kg", "ltr", "box", "roll"]),
     "catalogue_types": ("Catalogue types", ["Price list", "Product catalogue", "Brochure", "Shade / swatch card",
                                             "Spec sheet", "Installation guide"]),
+    # Virtual Catalogue (vendor_catalogue.py): empty (anything accepted) until
+    # the company fills it.
+    "catalogue_categories": ("Catalogue product categories", []),
     # Doors & Windows quotation specification (quotation_templates.DW_SPEC_FIELDS)
     # and MAP finishes. Empty for a new company (anything accepted) until it
     # fills them; a company's own starting lists are in PICKLIST_COMPANY_DEFAULTS.
@@ -5324,6 +5358,7 @@ PICKLIST_FIELDS = {
                     "hardware_finish": "dw_hardware_finishes"},
     "inventory": {"category": "inventory_categories", "unit": "units"},
     "catalogues": {"kind": "catalogue_types"},
+    "virtual_items": {"category": "catalogue_categories", "unit": "units"},
 }
 
 
@@ -7502,8 +7537,7 @@ async def _auto_price(line: dict, gst_default, user: dict) -> None:
     """A stock-picked line priced from the item's quantity price breaks."""
     if not line.get("price_auto") or not line.get("sku"):
         return
-    item = await db.inventory.find_one(tenancy.scope({"sku": line["sku"]}, "inventory", user),
-                                       {"_id": 0, "mrp": 1, "price_tiers": 1, "gst_pct": 1})
+    item = (await _products_by_sku([line["sku"]], user, ("mrp", "price_tiers", "gst_pct"))).get(line["sku"])
     if not item:
         return
     gst = item.get("gst_pct") if item.get("gst_pct") not in (None, "") else gst_default
@@ -7944,11 +7978,8 @@ def _quote_view(q: dict, all_lines: list, preset: dict | None = None, *, can_cos
 
 
 async def _stock_costs(lines: list, user: dict) -> dict:
-    skus = sorted({l.get("sku") for l in lines if l.get("sku")})
-    if not skus:
-        return {}
-    return {i["sku"]: i.get("cost") async for i in db.inventory.find(
-        tenancy.scope({"sku": {"$in": skus}}, "inventory", user), {"_id": 0, "sku": 1, "cost": 1})}
+    return {sku: i.get("cost") for sku, i in
+            (await _products_by_sku([l.get("sku") for l in lines], user, ("cost",))).items()}
 
 
 async def _refresh_quote_totals(quote_id: str, user: dict) -> dict | None:
@@ -8953,7 +8984,8 @@ async def dc_import(name: str, request: Request, user: dict = Depends(require_ad
 async def global_search(q: str = "", user: dict = Depends(get_current_user)):
     """One search box across the entities people actually look someone/something
     up by: customer (name/phone/alt_phone), lead (name/phone/reference),
-    quotation, project, inventory (SKU/vendor code), and team members."""
+    quotation, project, inventory (SKU/vendor code), Virtual Catalogue
+    products (MV- code / name), and team members."""
     q = q.strip()
     if len(q) < 2:
         return []
@@ -8985,6 +9017,9 @@ async def global_search(q: str = "", user: dict = Depends(get_current_user)):
               "service_ticket", "ticket_no", lambda r: f"{r.get('customer', '')} · {r.get('status', '')}")
     await add(db.inventory.find(tenancy.scope({"$or": [{"sku": rx}, {"vendor_code": rx}, {"name": rx}]}, "inventory", user), {"_id": 0}),
               "inventory", "name", lambda r: f"SKU {r.get('sku', '')} · Vendor {r.get('vendor_code') or '—'}")
+    await add(db.virtual_items.find(tenancy.scope({"$or": [{"sku": rx}, {"name": rx}], "status": {"$ne": "Archived"}},
+                                                  "virtual_items", user), {"_id": 0, "images": 0, "thumb": 0}),
+              "virtual_item", "name", lambda r: f"{r.get('sku', '')} · made to order")
     await add(db.users.find({"tenant_id": tenancy.tenant_of(user) or "__no_tenant__", "name": rx}, {"_id": 0}),
               "employee", "name", lambda r: r.get("role", ""))
     return results
@@ -9701,9 +9736,17 @@ async def catalogue_sharepoint_files(user: dict = Depends(get_current_user)):
 
 
 @api.get("/catalogues")
-async def list_catalogues(status: str = "Current", division: str = "", user: dict = Depends(get_current_user)):
+async def list_catalogues(status: str = "Current", division: str = "", origin: str = "",
+                          user: dict = Depends(get_current_user)):
+    """MADIO's catalogues; with origin=vendor, the vendors' own brochures
+    (landing-price holders only, see "Vendor brochures" below)."""
     await _require_permission("documents", "view", user)
     q: dict = {}
+    if origin == "vendor":
+        _require_cost_holder(user, "open vendor brochures")
+        q["origin"] = "vendor"
+    else:
+        q["origin"] = {"$ne": "vendor"}
     if status in catx.STATUSES:
         q["status"] = status
     if division and division != "All":
@@ -9725,6 +9768,12 @@ async def list_catalogues(status: str = "Current", division: str = "", user: dic
         st["last_viewed_at"] = max(st["last_viewed_at"], sh.get("last_viewed_at") or "")
     for r in rows:
         r.update(stats.get(r.get("family_id"), {"share_count": 0, "view_count": 0, "last_viewed_at": ""}))
+    if origin == "vendor" and _can_see_vendor_names(user):
+        ids = list({r.get("vendor_id") for r in rows if r.get("vendor_id")})
+        names = {v["id"]: v.get("name", "") async for v in db.vendors.find(
+            tenancy.scope({"id": {"$in": ids}}, "vendors", user), {"_id": 0, "id": 1, "name": 1})}
+        for r in rows:
+            r["vendor_name"] = names.get(r.get("vendor_id"), "")
     return rows
 
 
@@ -9732,15 +9781,27 @@ async def list_catalogues(status: str = "Current", division: str = "", user: dic
 async def create_catalogue(title: str = Form(""), division: str = Form(""), kind: str = Form(""),
                            audience: str = Form(""), notes: str = Form(""), valid_from: str = Form(""),
                            replaces: str = Form(""), sharepoint_ref: str = Form(""),
+                           origin: str = Form(""), vendor_id: str = Form(""),
                            file: Optional[UploadFile] = File(None), user: dict = Depends(get_current_user)):
     """Publish a catalogue, or (with `replaces`) a new version of one: the new
     file becomes Current and the earlier version is archived. Blank fields on
-    a new version keep the earlier version's values."""
+    a new version keep the earlier version's values. origin=vendor files a
+    vendor's own brochure (landing-price holders only, never shared)."""
     await _require_permission("documents", "create", user)
     previous = await _catalogue_or_404(replaces, user) if replaces else {}
+    if previous and previous.get("origin") == "generated":
+        raise HTTPException(status_code=400, detail="This catalogue is made from the Virtual Catalogue; "
+                                                    "regenerate it there instead")
     given = {"title": title, "division": division, "kind": kind, "audience": audience,
              "notes": notes, "valid_from": valid_from}
     raw = {k: (v if str(v or "").strip() else previous.get(k, "")) for k, v in given.items()}
+    origin = previous.get("origin", "") if previous else ("vendor" if origin == "vendor" else "")
+    extra: dict = {}
+    if origin == "vendor":
+        _require_cost_holder(user, "file vendor brochures")
+        vendor = await _vendor_or_400(vendor_id or previous.get("vendor_id", ""), user)
+        raw["audience"] = "restricted"          # a vendor's own brochure never leaves the company
+        extra = {"origin": "vendor", "vendor_id": vendor["id"], "vendor_code": vendor.get("code", "")}
     try:
         meta = catx.clean_meta(raw)
     except catx.CatalogueError as e:
@@ -9772,9 +9833,16 @@ async def create_catalogue(title: str = Form(""), division: str = Form(""), kind
                   "sharepoint_web_url": item.get("web_url", "")}
     else:
         raise HTTPException(status_code=400, detail="Upload a file or pick one from SharePoint")
+    return await _publish_catalogue(meta, source, previous, user, extra)
+
+
+async def _publish_catalogue(meta: dict, source: dict, previous: dict, user: dict, extra: dict | None = None) -> dict:
+    """Store a catalogue version: the first of its family, or (with
+    `previous`) the next version, which becomes Current and archives the rest."""
     now = now_iso()
-    doc = {"id": new_id(), **meta, **source, "status": "Current", "published_at": now, "created_at": now,
-           "created_by": user.get("name", ""), "created_by_id": user.get("id", ""), "archived_at": ""}
+    doc = {"id": new_id(), **meta, **source, **(extra or {}), "status": "Current", "published_at": now,
+           "created_at": now, "created_by": user.get("name", ""), "created_by_id": user.get("id", ""),
+           "archived_at": ""}
     if previous:
         family = previous["family_id"]
         top = await db.catalogues.find_one(tenancy.scope({"family_id": family}, "catalogues", user),
@@ -9803,6 +9871,13 @@ async def update_catalogue(cat_id: str, payload: dict, user: dict = Depends(get_
         meta = catx.clean_meta(payload, partial=True)
     except catx.CatalogueError as e:
         raise _cat_bad(e)
+    if existing.get("origin") == "vendor":
+        if meta.get("audience", "restricted") != "restricted":
+            raise HTTPException(status_code=400, detail="A vendor's own brochure stays with landing-price holders. "
+                                                        "Import it to make MADIO's version for customers.")
+        if (payload or {}).get("vendor_id"):
+            vendor = await _vendor_or_400(payload["vendor_id"], user)
+            meta.update(vendor_id=vendor["id"], vendor_code=vendor.get("code", ""))
     await _check_picklists("catalogues", meta, existing, user)
     if meta:
         await db.catalogues.update_one(tenancy.scope({"id": cat_id}, "catalogues", user), {"$set": meta})
@@ -9841,13 +9916,16 @@ async def delete_catalogue(cat_id: str, user: dict = Depends(require_admin)):
         await db.catalogue_shares.update_many(
             tenancy.scope({"family_id": c["family_id"]}, "catalogue_shares", user),
             {"$set": {"revoked": True, "revoked_at": now_iso()}})
-    # A file uploaded here goes with it; a linked SharePoint file is the team's
-    # own and is never touched.
+    # A file uploaded (or made) here goes with it; a linked SharePoint file is
+    # the team's own and is never touched.
     if c.get("source") == "upload":
-        try:
-            await asyncio.to_thread(storage.delete, c["file_url"])
-        except Exception as e:
-            logger.warning(f"Catalogue file delete failed: {e}")
+        for url in (c["file_url"], c.get("kit_url")):
+            if not url:
+                continue
+            try:
+                await asyncio.to_thread(storage.delete, url)
+            except Exception as e:
+                logger.warning(f"Catalogue file delete failed: {e}")
     return {"ok": True}
 
 
@@ -9975,6 +10053,677 @@ async def public_catalogue_file(token: str, download: bool = False):
                                              {"$inc": {"downloads": 1}})
     return await _stored_file_response(c["file_url"], c.get("file_name", ""), c.get("content_type", ""),
                                        download=download or c.get("content_type") not in catx.INLINE_TYPES)
+
+
+@api.get("/catalogues/{cat_id}/render-kit")
+async def catalogue_render_kit(cat_id: str, user: dict = Depends(get_current_user)):
+    await _require_permission("documents", "view", user)
+    c = await _catalogue_or_404(cat_id, user)
+    if not c.get("kit_url"):
+        raise HTTPException(status_code=404, detail="This catalogue has no render kit")
+    return await _stored_file_response(c["kit_url"], f"{c['title']} render kit.zip", "application/zip", download=True)
+
+
+@api.get("/public/catalogues/{token}/render-kit")
+async def public_catalogue_render_kit(token: str):
+    """The architects' render kit made with a shared catalogue (stored when the
+    catalogue was made, so a public link never starts heavy work)."""
+    share, c, viewer = await _shared_catalogue(token)
+    if not c.get("kit_url"):
+        raise HTTPException(status_code=404, detail="This catalogue has no render kit")
+    await db.catalogue_shares.update_one(tenancy.scope({"id": share["id"]}, "catalogue_shares", viewer),
+                                         {"$inc": {"kit_downloads": 1}})
+    return await _stored_file_response(c["kit_url"], f"{c['title']} render kit.zip", "application/zip", download=True)
+
+
+# ------- Vendor brochures → virtual inventory → MADIO catalogues & mockups -------
+# (vendor_catalogue.py, catalogue_pdf.py, mockups.py; docs/VENDOR_CATALOGUES.md)
+# A vendor's own brochure is filed as an internal vendor brochure (catalogues
+# with origin "vendor": landing-price holders only, never shared outside).
+# Imported, its products become MADIO's virtual inventory (`virtual_items`):
+# the vendor's name, contacts and marketing copy taken out, MADIO codes
+# (MV-0001) and MADIO prices. Virtual items are picked on quotations like
+# stock but are made to order: never reserved, issued or counted as stock
+# value. From them staff make MADIO-branded catalogues (shared through the
+# Catalogues links, optionally with a render kit) and mockups for architects.
+# Viewing rides the quotes / invoices / stock grants (they are quoted);
+# importing and pricing need the landing price.
+VIRTUAL_PRIVATE = ("cost", "margin", "markup", "vendor_item_code", "vendor_id", "source_import_id", "source_page")
+
+
+def _require_cost_holder(user: dict, what: str = "do this") -> None:
+    if not _can_see_cost_prices(user):
+        raise HTTPException(status_code=403, detail=f"Only people who can see landing prices can {what}")
+
+
+async def _require_product_view(user: dict) -> None:
+    """Virtual items are quoted, so anyone who works on quotations, invoices
+    or stock can see them."""
+    for module in ("quotes", "invoice-gen", "inventory"):
+        try:
+            await _require_permission(module, "view", user)
+            return
+        except HTTPException:
+            continue
+    raise HTTPException(status_code=403, detail="Not permitted")
+
+
+async def _vendor_or_400(vendor_id: str, user: dict) -> dict:
+    v = await db.vendors.find_one(tenancy.scope({"id": vendor_id}, "vendors", user), {"_id": 0}) \
+        if vendor_id else None
+    if not v:
+        raise HTTPException(status_code=400, detail="Pick the vendor")
+    return v
+
+
+def _vbad(e: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(e))
+
+
+def _redact_virtual(item: dict, user: dict) -> dict:
+    """What a virtual item shows: the vendor's name only to admin/accounts,
+    the vendor's price, code and markup only to landing-price holders."""
+    out = {k: v for k, v in item.items() if k not in ("_id", "match_key")}
+    if not _can_see_vendor_names(user):
+        out.pop("vendor", None)
+    if not _can_see_cost_prices(user):
+        for f in VIRTUAL_PRIVATE:
+            out.pop(f, None)
+    return out
+
+
+async def _stored_file_bytes(url: str) -> bytes:
+    """Bytes of a file saved by storage.py (SharePoint or the server's disk)."""
+    if url.startswith(storage.SHAREPOINT_PREFIX):
+        try:
+            return await asyncio.to_thread(storage.read, url)
+        except storage.SharePointError as e:
+            logger.warning(f"File read failed: {e}")
+            raise HTTPException(status_code=502, detail="Couldn't fetch the file from SharePoint")
+    if url.startswith("/uploads/"):
+        root = storage.UPLOAD_ROOT.resolve()
+        path = (root / url[len("/uploads/"):]).resolve()
+        if root in path.parents and path.is_file():
+            return await asyncio.to_thread(path.read_bytes)
+    raise HTTPException(status_code=404, detail="File no longer available")
+
+
+async def _products_by_sku(skus, user: dict, fields: tuple) -> dict:
+    """sku -> product for quotation / invoice lines: stock items, then
+    virtual items (made to order) for codes stock doesn't have. A virtual
+    item's first picture is its image_url; it has no model number of its own."""
+    skus = sorted({str(s) for s in skus if s})
+    if not skus:
+        return {}
+    proj = {"_id": 0, "sku": 1, **{f: 1 for f in fields}}
+    out = {i["sku"]: i async for i in db.inventory.find(
+        tenancy.scope({"sku": {"$in": skus}}, "inventory", user), proj)}
+    rest = [s for s in skus if s not in out]
+    if rest:
+        vproj = {"_id": 0, "sku": 1, **{f: 1 for f in fields if f not in ("image_url", "model_no", "price_tiers")}}
+        if "image_url" in fields:
+            vproj["images"] = 1
+        async for v in db.virtual_items.find(tenancy.scope({"sku": {"$in": rest}}, "virtual_items", user), vproj):
+            if "image_url" in fields:
+                v["image_url"] = (v.pop("images", None) or [""])[0]
+            v.update(model_no="", price_tiers=[], virtual=True)
+            out[v["sku"]] = v
+    return out
+
+
+async def _virtual_codes(count: int, user: dict) -> list:
+    """The next free MADIO codes (MV-0001 …), clear of stock SKUs too."""
+    rx = {"$regex": f"^{vcat.VIRTUAL_PREFIX}-\\d+$"}
+    taken = [v["sku"] async for v in db.virtual_items.find(
+        tenancy.scope({"sku": rx}, "virtual_items", user), {"_id": 0, "sku": 1})]
+    taken += [i["sku"] async for i in db.inventory.find(tenancy.scope({"sku": rx}, "inventory", user),
+                                                         {"_id": 0, "sku": 1})]
+    return vcat.next_virtual_codes(taken, count)
+
+
+async def _catalogue_category(value: str, lists: dict) -> tuple[str, str]:
+    """(category, hint): a guessed category in the company's list, else none
+    and the guess kept as a hint for the reviewer."""
+    allowed = lists["catalogue_categories"]["values"]
+    if not value or not allowed:
+        return value, ""
+    match = next((v for v in allowed if v.lower() == value.lower()), "")
+    return (match, "") if match else ("", value)
+
+
+async def _import_or_404(import_id: str, user: dict) -> dict:
+    imp = await db.catalogue_imports.find_one(tenancy.scope({"id": import_id}, "catalogue_imports", user),
+                                              {"_id": 0})
+    if not imp:
+        raise HTTPException(status_code=404, detail="Import not found")
+    return imp
+
+
+def _import_out(imp: dict, user: dict) -> dict:
+    out = dict(imp)
+    if not _can_see_vendor_names(user):
+        out.pop("vendor_name", None)
+    return out
+
+
+async def _purge_stale_imports(user: dict) -> None:
+    """Imports left in review for two weeks go, with their pictures."""
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    stale = [i["id"] async for i in db.catalogue_imports.find(
+        tenancy.scope({"status": "Review", "created_at": {"$lt": cutoff}}, "catalogue_imports", user),
+        {"_id": 0, "id": 1})]
+    if stale:
+        await db.catalogue_import_items.delete_many(
+            tenancy.scope({"import_id": {"$in": stale}}, "catalogue_import_items", user))
+        await db.catalogue_imports.update_many(
+            tenancy.scope({"id": {"$in": stale}}, "catalogue_imports", user),
+            {"$set": {"status": "Discarded", "discarded_at": now_iso()}})
+
+
+@api.post("/vendor-catalogues/extract")
+async def extract_vendor_catalogue(vendor_id: str = Form(""), division: str = Form(""),
+                                   remove_words: str = Form(""), markup: str = Form(""),
+                                   brochure_id: str = Form(""), files: Optional[List[UploadFile]] = File(None),
+                                   user: dict = Depends(get_current_user)):
+    """Read a vendor's catalogue (a PDF, product pictures, or a filed vendor
+    brochure) into candidates to review: each product's pictures, name and
+    specification with the vendor's name, contacts and marketing copy taken
+    out. Nothing reaches the virtual inventory until the import is committed."""
+    _require_cost_holder(user, "import vendor catalogues")
+    brochure = {}
+    if brochure_id:
+        brochure = await _catalogue_or_404(brochure_id, user)
+        if brochure.get("origin") != "vendor":
+            raise HTTPException(status_code=400, detail="Pick one of the vendor brochures")
+        vendor_id = vendor_id or brochure.get("vendor_id", "")
+        division = division or (brochure.get("division") if brochure.get("division") != "All" else "")
+    vendor = await _vendor_or_400(vendor_id, user)
+    division = re.sub(r"\s+", " ", str(division or "")).strip()[:40]
+    if not division:
+        raise HTTPException(status_code=400, detail="Pick the division these products are for")
+    terms = vcat.remove_terms(vendor, remove_words)
+    pdf, pictures, file_name = None, [], ""
+    if brochure:
+        if not str(brochure.get("file_name", "")).lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF brochures can be imported; upload the pictures instead")
+        pdf, file_name = await _stored_file_bytes(brochure["file_url"]), brochure.get("file_name", "")
+    else:
+        total = 0
+        for f in files or []:
+            if not f or not f.filename:
+                continue
+            ext = f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+            if ext == "pdf":
+                if pdf is not None or pictures:
+                    raise HTTPException(status_code=400, detail="Upload one PDF, or product pictures — not both")
+                pdf, file_name = await _read_capped(f, vcat.MAX_PDF_BYTES), f.filename
+            elif ext in ("jpg", "jpeg", "png", "webp"):
+                if pdf is not None:
+                    raise HTTPException(status_code=400, detail="Upload one PDF, or product pictures — not both")
+                data = await _read_capped(f, vcat.MAX_PICTURE_BYTES)
+                total += len(data)
+                if total > vcat.MAX_PDF_BYTES or len(pictures) >= vcat.MAX_CANDIDATES:
+                    raise HTTPException(status_code=400, detail="Too many pictures at once; import them in batches")
+                pictures.append((f.filename, data))
+            else:
+                raise HTTPException(status_code=400, detail="Upload the vendor's catalogue as a PDF, or product "
+                                                            "pictures (JPG, PNG, WEBP)")
+        if pdf is None and not pictures:
+            raise HTTPException(status_code=400, detail="Upload the vendor's catalogue (PDF) or product pictures")
+        file_name = file_name or f"{len(pictures)} picture{'s' if len(pictures) != 1 else ''}"
+    if pdf is not None and not pdf[:1024].lstrip().startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="That file isn't a PDF")
+    try:
+        if pdf is not None:
+            cands, summary = await asyncio.to_thread(vcat.extract_pdf, pdf, terms)
+        else:
+            cands, summary = await asyncio.to_thread(vcat.extract_pictures, pictures, terms)
+    except Exception as e:
+        logger.warning(f"Vendor catalogue extraction failed: {e}")
+        raise HTTPException(status_code=400, detail="Couldn't read that catalogue. If it's a scanned or "
+                                                    "password-protected PDF, upload the product pictures instead.")
+    if not cands:
+        raise HTTPException(status_code=400, detail="No products were found in that catalogue. If its pages are "
+                                                    "scanned pictures, upload the product pictures instead.")
+    await _purge_stale_imports(user)
+    try:
+        mk = max(0.0, float(markup)) if str(markup or "").strip() else 0.0
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Markup must be a number, e.g. 1.6")
+    if not mk:
+        settings = await _quote_settings(user)
+        mk = float(quotation_templates.division_preset(tenancy.tenant_of(user), division, settings).get("markup") or 0)
+    lists = await _picklists(user)
+    existing = {v["match_key"]: v async for v in db.virtual_items.find(
+        tenancy.scope({"vendor_id": vendor["id"]}, "virtual_items", user),
+        {"_id": 0, "id": 1, "sku": 1, "name": 1, "mrp": 1, "match_key": 1})}
+    now = now_iso()
+    imp = {"id": new_id(), "vendor_id": vendor["id"], "vendor_code": vendor.get("code", ""),
+           "division": division, "file_name": file_name, "brochure_id": brochure.get("id", ""),
+           "source": "brochure" if brochure else ("pdf" if pdf is not None else "pictures"),
+           "remove_words": str(remove_words or "")[:300], "markup": mk, "summary": summary,
+           "candidate_count": len(cands), "status": "Review", "created_at": now,
+           "created_by": user.get("name", ""), "created_by_id": user.get("id", "")}
+    tenancy.stamp(imp, "catalogue_imports", user)
+    await db.catalogue_imports.insert_one(dict(imp))
+    docs = []
+    for c in cands:
+        category, hint = await _catalogue_category(c.get("category", ""), lists)
+        match = existing.get(vcat.match_key(vendor["id"], c.get("vendor_item_code"), c.get("name")))
+        doc = {"id": new_id(), "import_id": imp["id"], **c, "category": category, "category_hint": hint,
+               "suggested_price": vcat.madio_price(c.get("vendor_price"), mk),
+               "match": {k: match.get(k) for k in ("id", "sku", "name", "mrp")} if match else None}
+        tenancy.stamp(doc, "catalogue_import_items", user)
+        docs.append(doc)
+    await db.catalogue_import_items.insert_many([dict(d) for d in docs])
+    await record_activity("catalogue_import", imp["id"], "create", user,
+                          after={"file_name": file_name, "candidates": len(docs)})
+    imp.pop("_id", None)
+    for d in docs:
+        d.pop("_id", None)
+    return {**_import_out({**imp, "vendor_name": vendor.get("name", "")}, user), "candidates": docs}
+
+
+@api.get("/vendor-catalogues/imports")
+async def list_vendor_imports(user: dict = Depends(get_current_user)):
+    _require_cost_holder(user, "import vendor catalogues")
+    rows = await db.catalogue_imports.find(tenancy.scope({}, "catalogue_imports", user), {"_id": 0}) \
+        .sort("created_at", -1).to_list(50)
+    return [_import_out(r, user) for r in rows]
+
+
+@api.get("/vendor-catalogues/imports/{import_id}")
+async def get_vendor_import(import_id: str, user: dict = Depends(get_current_user)):
+    _require_cost_holder(user, "import vendor catalogues")
+    imp = await _import_or_404(import_id, user)
+    items = await db.catalogue_import_items.find(
+        tenancy.scope({"import_id": import_id}, "catalogue_import_items", user), {"_id": 0}).sort("page", 1) \
+        .to_list(vcat.MAX_CANDIDATES)
+    return {**_import_out(imp, user), "candidates": items}
+
+
+@api.delete("/vendor-catalogues/imports/{import_id}")
+async def discard_vendor_import(import_id: str, user: dict = Depends(get_current_user)):
+    _require_cost_holder(user, "import vendor catalogues")
+    imp = await _import_or_404(import_id, user)
+    await db.catalogue_import_items.delete_many(
+        tenancy.scope({"import_id": import_id}, "catalogue_import_items", user))
+    if imp.get("status") == "Review":
+        await db.catalogue_imports.update_one(tenancy.scope({"id": import_id}, "catalogue_imports", user),
+                                              {"$set": {"status": "Discarded", "discarded_at": now_iso()}})
+    return {"ok": True}
+
+
+@api.post("/vendor-catalogues/imports/{import_id}/commit")
+async def commit_vendor_import(import_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    """Add the reviewed products to the virtual inventory. A product this
+    vendor's earlier catalogue already brought in (same vendor product code,
+    else the same name) is updated in place and keeps its MADIO code; the
+    rest get the next codes. payload: {"items": [{key, name, subtitle,
+    category, features, description, unit, gst_pct, hsn, vendor_item_code,
+    vendor_price, mrp, images: [picture numbers to keep, in order]}]}; the
+    same key may appear more than once (a page split into its products)."""
+    _require_cost_holder(user, "import vendor catalogues")
+    imp = await _import_or_404(import_id, user)
+    if imp.get("status") != "Review":
+        raise HTTPException(status_code=400, detail="This import has already been added or discarded")
+    vendor = await _vendor_or_400(imp.get("vendor_id", ""), user)
+    rows = [r for r in (payload or {}).get("items") or [] if isinstance(r, dict)]
+    if not rows:
+        raise HTTPException(status_code=400, detail="Pick at least one product to add")
+    if len(rows) > vcat.MAX_CANDIDATES * vcat.IMAGES_PER_CANDIDATE:
+        raise HTTPException(status_code=400, detail="Too many products in one import")
+    cands = {c["key"]: c async for c in db.catalogue_import_items.find(
+        tenancy.scope({"import_id": import_id}, "catalogue_import_items", user), {"_id": 0})}
+    existing = {v["match_key"]: v async for v in db.virtual_items.find(
+        tenancy.scope({"vendor_id": vendor["id"]}, "virtual_items", user), {"_id": 0, "images": 0, "thumb": 0})}
+    try:
+        markup = max(0.0, float((payload or {}).get("markup", imp.get("markup")) or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Markup must be a number, e.g. 1.6")
+    prepared = []
+    for n, row in enumerate(rows, 1):
+        c = cands.get(row.get("key"))
+        if not c:
+            raise HTTPException(status_code=400, detail="That import has changed; open it again")
+        try:
+            fields = vcat.clean_item({**row, "division": row.get("division") or imp["division"]})
+            vendor_price = vcat._money(row.get("vendor_price", c.get("vendor_price")), "Vendor price")
+        except vcat.VirtualItemError as e:
+            raise HTTPException(status_code=400, detail=f"Product {n}: {e}")
+        await _check_picklists("virtual_items", fields, None, user)
+        picks = row.get("images")
+        picks = picks if isinstance(picks, list) else list(range(len(c.get("images") or [])))
+        pics = []
+        for i in picks:
+            if isinstance(i, int) and 0 <= i < len(c.get("images") or []) and c["images"][i] not in pics:
+                pics.append(c["images"][i])
+        fields.pop("cost", None)
+        mrp = fields["mrp"] if fields.get("mrp") else vcat.madio_price(vendor_price, markup)
+        prepared.append({**fields, "mrp": mrp, "cost": vendor_price, "images": pics[:vcat.IMAGES_PER_CANDIDATE],
+                         "source_page": c.get("page"), "_match_id": (c.get("match") or {}).get("id"),
+                         "_given": set(row)})
+    keys = [vcat.match_key(vendor["id"], p.get("vendor_item_code"), p["name"]) for p in prepared]
+    if len(set(keys)) != len(keys):
+        dup = prepared[next(i for i, k in enumerate(keys) if keys.index(k) != i)]
+        raise HTTPException(status_code=400, detail=f"“{dup['name']}” is in the list twice; give one a different "
+                                                    "name or vendor code")
+    now = now_iso()
+    created, updated = [], []
+    by_id = {v["id"]: v for v in existing.values()}
+    linked: set = set()
+    new_codes = iter(await _virtual_codes(sum(1 for k in keys if k not in existing), user))
+    for p, key in zip(prepared, keys):
+        match_id, given = p.pop("_match_id", None), p.pop("_given", set())
+        p["margin"] = round((p["mrp"] - p["cost"]) / p["cost"] * 100, 2) if p["cost"] > 0 and p["mrp"] else 0
+        p["thumb"] = vcat.thumb(p["images"][0]) if p["images"] else ""
+        common = {**p, "vendor_id": vendor["id"], "vendor_code": vendor.get("code", ""),
+                  "vendor": vendor.get("name", ""), "markup": markup, "match_key": key,
+                  "source_import_id": import_id, "virtual": True, "updated_at": now,
+                  "updated_by": user.get("name", "")}
+        # The item this product already is: same vendor code (else name), or
+        # the one the import matched when it was read (so a product MADIO
+        # has renamed since is still found).
+        prev = existing.get(key)
+        if (not prev or prev["id"] in linked) and match_id in by_id and match_id not in linked:
+            prev = by_id[match_id]
+        if prev and prev["id"] in linked:
+            prev = None
+        if prev:
+            linked.add(prev["id"])
+            if not p.get("vendor_item_code"):
+                common["match_key"] = prev.get("match_key") or key   # still found by the vendor's own name
+            if not p["images"]:
+                common.pop("images")      # keep the pictures it had
+                common.pop("thumb")
+            # What MADIO wrote itself stays unless the review gave a new value.
+            for k in ("description", "subtitle", "category", "hsn", "gst_pct", "unit", "features"):
+                if common.get(k) in ("", None) or k not in given:
+                    common.pop(k, None)
+            await db.virtual_items.update_one(tenancy.scope({"id": prev["id"]}, "virtual_items", user),
+                                              {"$set": {**common, "status": "Active"}})
+            updated.append({**prev, **common})
+        else:
+            doc = {"id": new_id(), **common, "status": "Active", "created_at": now,
+                   "created_by": user.get("name", "")}
+            tenancy.stamp(doc, "virtual_items", user)
+            for _ in range(5):
+                doc["sku"] = next(new_codes, None) or (await _virtual_codes(1, user))[0]
+                try:
+                    await db.virtual_items.insert_one(dict(doc))
+                    break
+                except DuplicateKeyError:          # another import took the code first
+                    new_codes = iter(await _virtual_codes(1, user))
+            else:
+                raise HTTPException(status_code=409, detail="Couldn't assign MADIO codes; try again")
+            created.append(doc)
+    await db.catalogue_import_items.delete_many(
+        tenancy.scope({"import_id": import_id}, "catalogue_import_items", user))
+    await db.catalogue_imports.update_one(
+        tenancy.scope({"id": import_id}, "catalogue_imports", user),
+        {"$set": {"status": "Committed", "committed_at": now, "committed_by": user.get("name", ""),
+                  "created_count": len(created), "updated_count": len(updated)}})
+    await record_activity("catalogue_import", import_id, "commit", user,
+                          after={"created": len(created), "updated": len(updated)},
+                          note=f"Virtual catalogue: {len(created)} added, {len(updated)} updated from {imp.get('file_name', '')}")
+    light = lambda d: _redact_virtual({k: v for k, v in d.items() if k != "images"}, user)  # noqa: E731
+    return {"created": len(created), "updated": len(updated),
+            "items": [light(d) for d in created] + [light(d) for d in updated]}
+
+
+@api.get("/virtual-items")
+async def list_virtual_items(division: str = "", category: str = "", q: str = "", status: str = "Active",
+                             vendor_id: str = "", user: dict = Depends(get_current_user)):
+    """MADIO's virtual inventory (lists carry a small picture, not the full ones)."""
+    await _require_product_view(user)
+    query: dict = {}
+    if status in vcat.ITEM_STATUSES:
+        query["status"] = status
+    if division and division != "All":
+        query["division"] = division
+    if category:
+        query["category"] = category
+    if vendor_id and _can_see_cost_prices(user):
+        query["vendor_id"] = vendor_id
+    term = re.escape(str(q or "").strip())[:60]
+    if term:
+        query["$or"] = [{f: {"$regex": term, "$options": "i"}} for f in ("name", "sku", "category", "subtitle")]
+    rows = await db.virtual_items.find(tenancy.scope(query, "virtual_items", user), {"_id": 0, "images": 0}) \
+        .sort("sku", 1).to_list(5000)
+    return [_redact_virtual(r, user) for r in rows]
+
+
+async def _virtual_or_404(item_id: str, user: dict, projection: dict | None = None) -> dict:
+    v = await db.virtual_items.find_one(tenancy.scope({"id": item_id}, "virtual_items", user),
+                                        projection or {"_id": 0})
+    if not v:
+        raise HTTPException(status_code=404, detail="Not found")
+    return v
+
+
+@api.get("/virtual-items/{item_id}")
+async def get_virtual_item(item_id: str, user: dict = Depends(get_current_user)):
+    await _require_product_view(user)
+    return _redact_virtual(await _virtual_or_404(item_id, user), user)
+
+
+@api.put("/virtual-items/{item_id}")
+async def update_virtual_item(item_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    """Edit a virtual item: MADIO's name, specification, description, price
+    and pictures (`images`: the pictures to keep, in order; a new one as a
+    data: URL)."""
+    _require_cost_holder(user, "edit the virtual catalogue")
+    existing = await _virtual_or_404(item_id, user)
+    payload = dict(payload or {})
+    try:
+        fields = vcat.clean_item(payload, partial=True)
+        if "images" in payload:
+            imgs = payload.get("images") or []
+            if not isinstance(imgs, list) or len(imgs) > vcat.IMAGES_PER_CANDIDATE:
+                raise vcat.VirtualItemError(f"Keep at most {vcat.IMAGES_PER_CANDIDATE} pictures.")
+            had = existing.get("images") or []
+            fields["images"] = [s if s in had else vcat.clean_picture(s, vcat.MAIN_PX if k == 0 else vcat.EXTRA_PX)
+                                for k, s in enumerate(imgs)]
+            fields["thumb"] = vcat.thumb(fields["images"][0]) if fields["images"] else ""
+    except vcat.VirtualItemError as e:
+        raise _vbad(e)
+    await _check_picklists("virtual_items", fields, existing, user)
+    if "cost" in fields or "mrp" in fields:
+        cost = fields.get("cost", existing.get("cost") or 0)
+        mrp = fields.get("mrp", existing.get("mrp") or 0)
+        fields["margin"] = round((mrp - cost) / cost * 100, 2) if cost > 0 and mrp else 0
+    if fields.get("vendor_item_code") and fields["vendor_item_code"] != existing.get("vendor_item_code"):
+        # Found by the vendor's code from now on. A MADIO rename leaves the
+        # key alone, so the vendor's next catalogue still finds the item.
+        fields["match_key"] = vcat.match_key(existing.get("vendor_id", ""), fields["vendor_item_code"], "")
+    fields.update(updated_at=now_iso(), updated_by=user.get("name", ""))
+    await db.virtual_items.update_one(tenancy.scope({"id": item_id}, "virtual_items", user), {"$set": fields})
+    return _redact_virtual({**existing, **fields}, user)
+
+
+@api.delete("/virtual-items/{item_id}")
+async def delete_virtual_item(item_id: str, user: dict = Depends(require_admin)):
+    """Gone for good (Archive keeps it for old quotations; this doesn't)."""
+    await _virtual_or_404(item_id, user, {"_id": 0, "id": 1})
+    await db.virtual_items.delete_one(tenancy.scope({"id": item_id}, "virtual_items", user))
+    return {"ok": True}
+
+
+async def _brand_label(division: str, user: dict) -> str:
+    preset = quotation_templates.division_preset(tenancy.tenant_of(user), division)
+    if preset.get("name"):
+        return preset["name"]
+    tenant = await db.tenants.find_one({"id": tenancy.tenant_of(user)}, {"_id": 0}) or {}
+    return tenant.get("display_name") or tenant.get("name") or "MADIO"
+
+
+@api.get("/virtual-items/{item_id}/mockup")
+async def virtual_item_mockup(item_id: str, kind: str = "", download: bool = False,
+                              user: dict = Depends(get_current_user)):
+    """A mockup of one product: cutout (transparent PNG for renders), room
+    (standing in a neutral room), wall (a finish across a wall) or framed.
+    The X-Background-Removed header says whether the backdrop came off."""
+    await _require_product_view(user)
+    item = await _virtual_or_404(item_id, user)
+    data = vcat.data_url_bytes((item.get("images") or [""])[0])
+    if not data:
+        raise HTTPException(status_code=400, detail="This product has no picture yet")
+    division = quotation_templates.division_key(item.get("division", ""))
+    kind = kind or mockups.DEFAULT_KIND.get(division, "room")
+    if kind not in mockups.KINDS:
+        raise HTTPException(status_code=400, detail=f"Mockup must be one of {', '.join(mockups.KINDS)}")
+    label = {"company": await _brand_label(division, user), "code": item.get("sku", ""),
+             "name": item.get("name", ""), "size_text": vcat.size_text(item.get("features"))}
+    try:
+        img, media, ok = await asyncio.to_thread(mockups.make, kind, data, **({} if kind == "cutout" else label))
+    except Exception as e:
+        logger.warning(f"Mockup failed: {e}")
+        raise HTTPException(status_code=400, detail="Couldn't make a mockup from this picture")
+    ext = "png" if media == "image/png" else "jpg"
+    name = f"{mockups.slug(item.get('sku'))}_{mockups.slug(item.get('name'))}_{kind}.{ext}"
+    return Response(content=img, media_type=media, headers={
+        "Content-Disposition": f'{"attachment" if download else "inline"}; filename="{name}"',
+        "Cache-Control": "private, max-age=300", "X-Background-Removed": "yes" if ok else "no",
+        "Access-Control-Expose-Headers": "X-Background-Removed"})
+
+
+async def _kit_items(item_ids: list, user: dict) -> list:
+    items = await db.virtual_items.find(tenancy.scope({"id": {"$in": item_ids}}, "virtual_items", user),
+                                        {"_id": 0}).to_list(len(item_ids))
+    order = {i: n for n, i in enumerate(item_ids)}
+    out = []
+    for v in sorted(items, key=lambda v: order.get(v["id"], 0)):
+        data = vcat.data_url_bytes((v.get("images") or [""])[0])
+        if data:
+            out.append({"code": v.get("sku", ""), "name": v.get("name", ""), "category": v.get("category", ""),
+                        "division": quotation_templates.division_key(v.get("division", "")),
+                        "image_bytes": data, "size_text": vcat.size_text(v.get("features")),
+                        "features": v.get("features") or []})
+    return out
+
+
+def _ids(payload: dict, limit: int) -> list:
+    ids = [str(i) for i in ((payload or {}).get("item_ids") or []) if isinstance(i, str) and i]
+    return list(dict.fromkeys(ids))[:limit]
+
+
+@api.post("/virtual-items/render-kit")
+async def virtual_render_kit(payload: dict, user: dict = Depends(get_current_user)):
+    """A ZIP for architects: each product cut out (PNG), its mockup, and a
+    CSV of MADIO codes, names and sizes."""
+    await _require_product_view(user)
+    ids = _ids(payload, mockups.MAX_KIT_ITEMS)
+    if not ids:
+        raise HTTPException(status_code=400, detail="Pick the products to include")
+    items = await _kit_items(ids, user)
+    if not items:
+        raise HTTPException(status_code=400, detail="None of these products has a picture yet")
+    company = await _brand_label(items[0]["division"], user)
+    data = await asyncio.to_thread(mockups.render_kit, items, company=company)
+    return Response(content=data, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{mockups.slug(company)}-render-kit.zip"',
+        "Cache-Control": "private, no-store"})
+
+
+async def _make_madio_catalogue(opts: dict, previous: dict, user: dict) -> dict:
+    """Render MADIO's catalogue of the chosen virtual items (and, if asked, its
+    render kit), store it and publish it as a catalogue version."""
+    ids = _ids(opts, catalogue_pdf.MAX_ITEMS)
+    if not ids:
+        raise HTTPException(status_code=400, detail="Pick the products to include")
+    items = await db.virtual_items.find(
+        tenancy.scope({"id": {"$in": ids}, "status": {"$ne": "Archived"}}, "virtual_items", user),
+        {"_id": 0}).to_list(len(ids))
+    order = {i: n for n, i in enumerate(ids)}
+    items.sort(key=lambda v: order.get(v["id"], 0))
+    if not items:
+        raise HTTPException(status_code=400, detail="None of those products is in the virtual catalogue any more")
+    division = str(opts.get("division") or "").strip()
+    if not division or division == "All":
+        counts: dict = {}
+        for v in items:
+            counts[v.get("division") or ""] = counts.get(v.get("division") or "", 0) + 1
+        brand_div = max(counts, key=counts.get)
+        division = "All" if len(counts) > 1 else brand_div
+    else:
+        brand_div = division
+    try:
+        meta = catx.clean_meta({"title": opts.get("title"), "division": division, "kind": "",
+                                "audience": opts.get("audience") or "external", "notes": opts.get("notes") or "",
+                                "valid_from": opts.get("valid_from") or ""})
+    except catx.CatalogueError as e:
+        raise _cat_bad(e)
+    kinds = (await _picklists(user))["catalogue_types"]["values"]
+    meta["kind"] = "Product catalogue" if not kinds or "Product catalogue" in kinds else ""
+    show_prices = opts.get("show_prices", True) is not False
+    tid = tenancy.tenant_of(user) or "__no_tenant__"
+    settings = await _quote_settings(user)
+    preset = quotation_templates.division_preset(tid, brand_div, settings)
+    office = await _get_settings(user)
+    subtitle = re.sub(r"\s+", " ", str(opts.get("subtitle") or "")).strip()[:120]
+    note = str(opts.get("note") or "").strip()[:600]
+    pdf = await asyncio.to_thread(
+        catalogue_pdf.render, title=meta["title"], subtitle=subtitle, items=[
+            {"code": v.get("sku", ""), "name": v.get("name", ""), "subtitle": v.get("subtitle", ""),
+             "category": v.get("category", ""), "features": v.get("features") or [],
+             "description": v.get("description", ""), "price": v.get("mrp") or 0, "unit": v.get("unit") or "",
+             "images": v.get("images") or []} for v in items],
+        preset=preset, tenant_id=tid, office=office, show_prices=show_prices,
+        valid_from=meta.get("valid_from", ""), note=note)
+    file_name = f"{mockups.slug(meta['title'])}.pdf"
+    kit_url, kit_size = "", 0
+    try:
+        file_url = await asyncio.to_thread(storage.save, tid, "catalogues", storage.safe_filename(file_name, new_id()), pdf)
+        if opts.get("render_kit"):
+            kit_items = await _kit_items([v["id"] for v in items][:mockups.MAX_KIT_ITEMS], user)
+            if kit_items:
+                kit = await asyncio.to_thread(mockups.render_kit, kit_items, company=preset.get("name") or "MADIO")
+                kit_url = await asyncio.to_thread(storage.save, tid, "catalogues",
+                                                  storage.safe_filename(file_name[:-4] + "-render-kit.zip", new_id()), kit)
+                kit_size = len(kit)
+    except storage.SharePointError as e:
+        logger.warning(f"Catalogue save failed: {e}")
+        raise HTTPException(status_code=502, detail="Couldn't save the catalogue to SharePoint. Try again.")
+    source = {"source": "upload", "file_url": file_url, "file_name": file_name, "content_type": "application/pdf",
+              "size_bytes": len(pdf), "sharepoint_web_url": ""}
+    extra = {"origin": "generated", "item_ids": [v["id"] for v in items], "show_prices": show_prices,
+             "subtitle": subtitle, "note": note, "render_kit": bool(opts.get("render_kit")),
+             "kit_url": kit_url, "kit_size": kit_size, "item_count": len(items)}
+    return await _publish_catalogue(meta, source, previous, user, extra)
+
+
+@api.post("/virtual-items/catalogue")
+async def make_madio_catalogue(payload: dict, user: dict = Depends(get_current_user)):
+    """MADIO's branded catalogue (PDF) of the chosen virtual items, published
+    on the Catalogues page to share with customers and architects. With
+    `replaces` (a catalogue made here) it becomes that catalogue's next
+    version, so links already shared open the new one."""
+    await _require_product_view(user)
+    await _require_permission("documents", "create", user)
+    previous = {}
+    if (payload or {}).get("replaces"):
+        previous = await _catalogue_or_404(payload["replaces"], user)
+        if previous.get("origin") != "generated":
+            raise HTTPException(status_code=400, detail="Only a catalogue made from the Virtual Catalogue can be replaced this way")
+    return await _make_madio_catalogue(payload or {}, previous, user)
+
+
+@api.post("/catalogues/{cat_id}/regenerate")
+async def regenerate_madio_catalogue(cat_id: str, user: dict = Depends(get_current_user)):
+    """Make a catalogue from the Virtual Catalogue again with today's names,
+    prices and pictures, as its next version (shared links follow it)."""
+    await _require_product_view(user)
+    await _require_permission("documents", "create", user)
+    c = await _catalogue_or_404(cat_id, user)
+    if c.get("origin") != "generated":
+        raise HTTPException(status_code=400, detail="Only a catalogue made from the Virtual Catalogue can be regenerated")
+    top = await db.catalogues.find_one(tenancy.scope({"family_id": c["family_id"], "status": "Current"}, "catalogues", user),
+                                       {"_id": 0}) or c
+    opts = {k: top.get(k) for k in ("title", "division", "audience", "notes", "valid_from", "subtitle", "note",
+                                    "show_prices", "render_kit", "item_ids")}
+    opts["valid_from"] = lc.today_iso()
+    return await _make_madio_catalogue(opts, top, user)
 
 
 @api.get("/admin/storage/status")
@@ -11179,6 +11928,15 @@ async def startup():
         await db.inventory.create_index([("tenant_id", 1), ("vendor_code", 1)])
     except Exception as e:
         logger.warning(f"Search indexes not created: {e}")
+    # Virtual Catalogue: one MADIO code per company (two imports committing
+    # at once can't hand out the same MV- code), and a vendor's items found
+    # quickly when their next catalogue is imported.
+    try:
+        await db.virtual_items.create_index([("tenant_id", 1), ("sku", 1)], unique=True)
+        await db.virtual_items.create_index([("tenant_id", 1), ("vendor_id", 1)])
+        await db.catalogue_import_items.create_index([("tenant_id", 1), ("import_id", 1)])
+    except Exception as e:
+        logger.warning(f"Virtual catalogue indexes not created: {e}")
 
     # Compound indexes behind the initial dashboard load and login: these
     # collections are scanned tenant-wide on every dashboard visit and (for

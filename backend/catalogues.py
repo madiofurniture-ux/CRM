@@ -176,4 +176,8 @@ def public_view(catalogue: dict, share: dict, company: str) -> dict:
         "updated_at": catalogue.get("published_at") or catalogue.get("created_at", ""),
         "company": company, "recipient_name": share.get("recipient_name", ""),
         "expires_at": share.get("expires_at", ""),
+        # A catalogue made from the Virtual Catalogue can carry a render kit
+        # (cut-outs and mockups) for architects.
+        "render_kit": bool(catalogue.get("kit_url")),
+        "kit_size": int(catalogue.get("kit_size") or 0) if catalogue.get("kit_url") else 0,
     }

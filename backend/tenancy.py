@@ -120,6 +120,9 @@ TENANT_COLLECTIONS = {
     "go_live_picture_runs",
     # Catalogues (catalogues.py): versions, and the links shared outside.
     "catalogues", "catalogue_shares",
+    # Virtual Catalogue (vendor_catalogue.py): MADIO's made-to-order products
+    # imported from vendors' catalogues, and the imports waiting for review.
+    "virtual_items", "catalogue_imports", "catalogue_import_items",
 }
 
 # Entities a tenant can define custom fields for. Values live on the record's
