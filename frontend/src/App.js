@@ -80,6 +80,8 @@ const AuditTrail = lazy(() => import("@/pages/AuditTrail"));
 const RecordChain = lazy(() => import("@/pages/RecordChain"));
 const Service = lazy(() => import("@/pages/Service"));
 const Catalogues = lazy(() => import("@/pages/Catalogues"));
+const VendorBrochures = lazy(() => import("@/pages/VendorBrochures"));
+const VirtualCatalogue = lazy(() => import("@/pages/VirtualCatalogue"));
 const PublicCatalogue = lazy(() => import("@/pages/PublicCatalogue"));
 const FollowUps = lazy(() => import("@/pages/FollowUps"));
 
@@ -150,6 +152,8 @@ function App() {
           <Route path="/projects" element={<ProtectedRoute page="projects"><Layout><Projects /></Layout></ProtectedRoute>} />
           <Route path="/projects/:id" element={<ProtectedRoute page="projects"><Layout><ProjectPage /></Layout></ProtectedRoute>} />
           <Route path="/catalogues" element={<ProtectedRoute page="quotes"><Layout><Catalogues /></Layout></ProtectedRoute>} />
+          <Route path="/virtual-catalogue" element={<ProtectedRoute page="quotes"><Layout><VirtualCatalogue /></Layout></ProtectedRoute>} />
+          <Route path="/vendor-brochures" element={<ProtectedRoute page="quotes"><Layout><VendorBrochures /></Layout></ProtectedRoute>} />
           <Route path="/service" element={<ProtectedRoute page="projects"><Layout><Service /></Layout></ProtectedRoute>} />
           <Route path="/follow-ups" element={<ProtectedRoute page="leads"><Layout><FollowUps /></Layout></ProtectedRoute>} />
           <Route path="/attendance" element={<ProtectedRoute page="attendance"><Layout><Attendance /></Layout></ProtectedRoute>} />

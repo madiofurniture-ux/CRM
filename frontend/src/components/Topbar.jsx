@@ -12,9 +12,10 @@ const RESULT_ROUTE = {
   customer: (r) => `/customers/${r.id}`, lead: (r) => `/leads?open=${r.id}`,
   quotation: (r) => `/quotes/ws/${r.id}`, project: (r) => `/projects/${r.id}`,
   service_ticket: (r) => `/service?ticket=${r.id}`, architect: () => "/architects",
+  virtual_item: (r) => `/virtual-catalogue?q=${encodeURIComponent((r.subtitle || "").split(" ")[0] || r.title)}`,
   inventory: () => "/inventory", employee: () => "/admin/roles",
 };
-const TYPE_LABEL = { service_ticket: "service" };
+const TYPE_LABEL = { service_ticket: "service", virtual_item: "catalogue" };
 
 export default function Topbar({ title, subtitle, onAdd, addLabel = "New", actions }) {
   const { isOtherHidden, requestUnlock, relock } = usePrivacyMode();

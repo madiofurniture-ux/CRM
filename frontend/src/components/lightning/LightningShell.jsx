@@ -33,7 +33,7 @@ export function ObjectTile({ id, size = 32, icon: IconOverride }) {
 /** Salesforce Lightning-style chrome: global header (search, reminders,
  * profile), then the app bar (App Launcher, app name, the app's tabs). */
 export default function LightningShell({ children }) {
-  const { user, tenant, logout, canAccess } = useAuth();
+  const { user, tenant, logout, canAccess, canSeeCost } = useAuth();
   const { pathname } = useLocation();
   const nav = useNavigate();
   const [launcher, setLauncher] = useState(false);
@@ -46,6 +46,7 @@ export default function LightningShell({ children }) {
     if (!item) return false;
     if (id in ITEM_FLAG && !ITEM_FLAG[id]) return false;
     if (item.adminOnly && user?.role !== "admin") return false;
+    if (item.costOnly && !canSeeCost) return false;
     return canAccess(item.perm || item.id);
   };
   const apps = useMemo(() => APPS.map((a) => ({ ...a, items: a.tabs.filter(visible).map((id) => NAV_BY_ID[id]) }))

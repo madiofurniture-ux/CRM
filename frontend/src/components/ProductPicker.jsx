@@ -6,7 +6,8 @@ import { inrFull } from "@/lib/format";
 /**
  * Search inventory by name, SKU or model and pick an item for a quotation or
  * invoice line. Shows live stock (available = on hand − reserved) and never
- * cost. `onPick(item)` gets the GET /inventory/lookup row.
+ * cost; Virtual Catalogue products (MV- codes) show as made to order.
+ * `onPick(item)` gets the GET /inventory/lookup row.
  */
 export default function ProductPicker({ onPick, placeholder = "Add from inventory…", testId = "product-picker", className = "" }) {
   const [q, setQ] = useState("");
@@ -78,6 +79,15 @@ export default function ProductPicker({ onPick, placeholder = "Add from inventor
 
 export function StockBadge({ item, qty = 0 }) {
   if (!item) return null;
+  if (item.virtual) {
+    // A Virtual Catalogue product: made to order by the vendor, never held in stock.
+    return (
+      <span title="Virtual Catalogue: made to order, not held in stock"
+            className="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--brand)]">
+        Made to order
+      </span>
+    );
+  }
   const avail = Number(item.available ?? item.on_hand ?? 0);
   const short = qty > 0 ? avail < qty : avail <= 0;
   return (

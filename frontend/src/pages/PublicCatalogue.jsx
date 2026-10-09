@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Download, ExternalLink, FileText } from "lucide-react";
+import { Download, ExternalLink, FileText, PackageOpen } from "lucide-react";
 import { API } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
 
@@ -71,6 +71,19 @@ export default function PublicCatalogue() {
                   <Download size={15} /> Download</a>
               </div>
             </div>
+            {data.render_kit && (
+              <div className="rounded-xl border border-[var(--color-border,#e5e5e5)] bg-[var(--color-surface,#fff)] p-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm min-w-0">
+                  <div className="font-medium">Render kit for architects and designers</div>
+                  <div className="text-[var(--color-text-muted,#666)]">
+                    Each product cut out on a transparent background (PNG), room mockups and a size sheet, for your 3D renders and mood boards{data.kit_size ? ` · ${size(data.kit_size)}` : ""}.
+                  </div>
+                </div>
+                <a href={base + "/render-kit"} data-testid="public-catalogue-kit"
+                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-[var(--color-border,#e5e5e5)] text-sm">
+                  <PackageOpen size={15} /> Download render kit</a>
+              </div>
+            )}
             {isPdf && (
               <iframe title={data.title} src={base + "/file"} className="w-full h-[78vh] rounded-xl border border-[var(--color-border,#e5e5e5)] bg-white" />
             )}

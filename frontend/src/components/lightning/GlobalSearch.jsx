@@ -8,10 +8,12 @@ const RESULT_ROUTE = {
   customer: (r) => `/customers/${r.id}`, lead: (r) => `/leads?open=${r.id}`,
   quotation: (r) => `/quotes/ws/${r.id}`, project: (r) => `/projects/${r.id}`,
   service_ticket: (r) => `/service?ticket=${r.id}`, architect: () => "/architects",
+  virtual_item: (r) => `/virtual-catalogue?q=${encodeURIComponent((r.subtitle || "").split(" ")[0] || r.title)}`,
   inventory: () => "/inventory", employee: () => "/admin/roles",
 };
 const TYPE_LABEL = { service_ticket: "Service", quotation: "Quotation", customer: "Customer", lead: "Lead",
-                     project: "Project", architect: "Architect", inventory: "Stock", employee: "Staff" };
+                     project: "Project", architect: "Architect", inventory: "Stock", virtual_item: "Catalogue product",
+                     employee: "Staff" };
 
 /** One search box for every record, in the global header (Ctrl/⌘ K). */
 export default function GlobalSearch() {

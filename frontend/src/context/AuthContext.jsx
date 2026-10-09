@@ -102,8 +102,12 @@ export function AuthProvider({ children }) {
     return action !== "approve" && action !== "export";
   };
 
+  // Landing (cost) prices: admin, accounts, or "Can see landing price" in
+  // Role Manager — the same rule as the server's _can_see_cost_prices.
+  const canSeeCost = !!user && (user.role === "admin" || user.role === "accountant" || !!user.can_view_cost);
+
   return (
-    <AuthContext.Provider value={{ user, loading, tenant, roles, refreshTenant: loadTenant, refreshRoles: loadRoles, login, logout, canAccess, canDo }}>
+    <AuthContext.Provider value={{ user, loading, tenant, roles, refreshTenant: loadTenant, refreshRoles: loadRoles, login, logout, canAccess, canDo, canSeeCost }}>
       {children}
     </AuthContext.Provider>
   );

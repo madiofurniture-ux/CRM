@@ -14,10 +14,11 @@ const PILL_COUNTS = { overview: 3, sales: 5, clients: 3, delivery: 5, inventory:
 export default function Header() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, canAccess, logout } = useAuth();
+  const { user, canAccess, logout, canSeeCost } = useAuth();
 
   const isVisible = (item) => {
     if (item.adminOnly && user?.role !== "admin") return false;
+    if (item.costOnly && !canSeeCost) return false;
     return canAccess(item.page);
   };
 

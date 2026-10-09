@@ -8,7 +8,8 @@ export const APPS = [
     // Day-to-day pages first, so on a narrow screen it's the occasional ones
     // (catalogues, the builder) that go under "More".
     tabs: ["dashboard", "leads", "followups", "pipeline", "quotes", "quote-followups", "sales", "customers", "calls",
-           "meetplan", "tasks", "visitors", "architects", "catalogues", "quote-builder"] },
+           "meetplan", "tasks", "visitors", "architects", "catalogues", "virtual-catalogue", "vendor-brochures",
+           "quote-builder"] },
   { id: "service", label: "Delivery", blurb: "Projects, surveys and service", color: "#3BA755",
     tabs: ["projects", "dwsurvey", "service", "outstanding", "tasks", "meetplan", "customers"] },
   { id: "stock", label: "Stock", blurb: "Inventory and purchasing", color: "#8A5A3B",
@@ -28,7 +29,7 @@ export const OBJECT_COLOR = {
   dashboard: "#5867E8", analytics: "#5867E8", "sales-tracker": "#5867E8", alerts: "#E4A201", reports: "#5867E8",
   executive: "#5867E8", "record-chain": "#5867E8",
   leads: "#F88962", followups: "#E4A201", calls: "#4BC076", pipeline: "#FCB95B", quotes: "#FCB95B",
-  "quote-builder": "#FCB95B", catalogues: "#9050E9", "quote-followups": "#E4A201", sales: "#3BA755", visitors: "#F88962",
+  "quote-builder": "#FCB95B", catalogues: "#9050E9", "virtual-catalogue": "#9050E9", "vendor-brochures": "#A86B32", "quote-followups": "#E4A201", sales: "#3BA755", visitors: "#F88962",
   customers: "#7F8DE1", architects: "#7F8DE1", meetplan: "#EB7092", tasks: "#4BC076", "daily-planner": "#4BC076",
   projects: "#3BA755", dwsurvey: "#2E6E73", service: "#F2CF5B", outstanding: "#BA0517",
   inventory: "#8A5A3B", "stock-ledger": "#8A5A3B", "purchase-orders": "#A86B32", "manufacturer-orders": "#A86B32",

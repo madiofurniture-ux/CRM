@@ -46,7 +46,7 @@ const SECTIONS = [
 
 export default function LightSidebar({ collapsed = false, onNavigate }) {
   const location = useLocation();
-  const { user, canAccess } = useAuth();
+  const { user, canAccess, canSeeCost } = useAuth();
   const byId = Object.fromEntries(NAV.map((n) => [n.id, n]));
 
   const isVisible = (id) => {
@@ -54,6 +54,7 @@ export default function LightSidebar({ collapsed = false, onNavigate }) {
     if (!item) return false;
     if (id in ITEM_FLAG && !ITEM_FLAG[id]) return false;
     if (item.adminOnly && user?.role !== "admin") return false;
+    if (item.costOnly && !canSeeCost) return false;
     return canAccess(item.perm || item.id);
   };
 

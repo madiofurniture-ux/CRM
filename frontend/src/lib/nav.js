@@ -7,13 +7,14 @@ import {
   Users, IndianRupee, AlertTriangle, FileSpreadsheet, PieChart, Fingerprint,
   Layers, Database, Contact, PhoneCall, TrendingUp, Wallet, LineChart, CalendarCheck2, HandCoins,
   LayoutTemplate, Landmark, ShoppingCart, Factory, MessageSquare, PhoneOutgoing,
-  AlarmClock, LifeBuoy, Workflow, Zap, BookOpen,
+  AlarmClock, LifeBuoy, Workflow, Zap, BookOpen, Images, BookLock,
 } from "lucide-react";
 
 // app: the switcher group · id: unique key · to: route · label/icon: display
 // perm (optional): the page grant that gates this item when it differs from
 // id — lets a new screen ride an existing grant (Follow-ups -> leads,
 // Service -> projects, Catalogues -> quotes) so no existing account needs re-permissioning.
+// costOnly: only for people who can see landing prices (admin, accounts, "Can see landing price").
 export const NAV = [
   // Overview (pinned — always shown above the app switcher)
   { app: "overview", id: "dashboard", to: "/", label: "Dashboard", icon: LayoutDashboard, pinned: true },
@@ -30,6 +31,9 @@ export const NAV = [
   { app: "sell", id: "quote-builder", to: "/quotes/builder", label: "Quote Builder", icon: LayoutTemplate },
   { app: "sell", id: "quote-followups", to: "/quotes/followups", label: "Quote Follow-ups", icon: PhoneCall },
   { app: "sell", id: "catalogues", perm: "quotes", to: "/catalogues", label: "Catalogues", icon: BookOpen },
+  { app: "sell", id: "virtual-catalogue", perm: "quotes", to: "/virtual-catalogue", label: "Virtual Catalogue", icon: Images },
+  // Vendors' own brochures: landing-price holders only (costOnly), like the prices inside them.
+  { app: "sell", id: "vendor-brochures", perm: "quotes", to: "/vendor-brochures", label: "Vendor Brochures", icon: BookLock, costOnly: true },
   { app: "sell", id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
   { app: "sell", id: "visitors", to: "/visitors", label: "Visitors", icon: UserPlus },
 

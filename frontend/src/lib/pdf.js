@@ -19,3 +19,20 @@ export async function downloadPdf(path, filename) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
+
+/**
+ * Fetch any authenticated file (a render kit, a mockup) and save it. `post`
+ * sends a JSON body (e.g. the products a render kit is made of).
+ */
+export async function downloadFile(path, filename, post = null) {
+  const opts = { skipCache: true, responseType: "blob" };
+  const { data } = post ? await api.post(path, post, opts) : await api.get(path, opts);
+  const url = URL.createObjectURL(data);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = String(filename || "download").replace(/[\\/:*?"<>|]+/g, "-");
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}

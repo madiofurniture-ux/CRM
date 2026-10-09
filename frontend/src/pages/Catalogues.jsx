@@ -2,14 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Archive, ArchiveRestore, Download, ExternalLink, Eye, FileImage, FileSpreadsheet, FileText, Globe, Lock,
-  MoreHorizontal, Pencil, Share2, ShieldCheck, Trash2, Upload, X, FolderOpen, RefreshCw,
+  MoreHorizontal, Pencil, Share2, ShieldCheck, Trash2, Upload, X, FolderOpen, RefreshCw, PackageOpen, Sparkles,
+  Boxes,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import Topbar from "@/components/Topbar";
 import PicklistSelect from "@/components/PicklistSelect";
+import VendorSelect from "@/components/VendorSelect";
 import ShareDialog, { openCatalogueFile } from "@/components/CatalogueShare";
 import { useAuth } from "@/context/AuthContext";
 import { useTenantConfig } from "@/context/TenantConfigContext";
 import api, { formatApiError } from "@/lib/api";
+import { downloadFile } from "@/lib/pdf";
 import { OBJECT_COLOR } from "@/lib/apps";
 import { fmtDate, fmtRelativeDateTime } from "@/lib/format";
 
@@ -38,11 +42,15 @@ function useDocsPermission() {
 
 /** Catalogues: each division's current price lists, brochures and shade
  * cards, kept in SharePoint, opened here and shared with customers and
- * architects by links that always show the newest version. */
-export default function Catalogues() {
-  const { user } = useAuth();
+ * architects by links that always show the newest version.
+ * vendorMode: the Vendor Brochures page — vendors' own brochures, kept for
+ * landing-price holders only and never shared outside; their products are
+ * imported into the Virtual Catalogue to make MADIO's own version. */
+export default function Catalogues({ vendorMode = false }) {
+  const { user, canSeeCost } = useAuth();
   const { divisions } = useTenantConfig();
   const can = useDocsPermission();
+  const navigate = useNavigate();
   const [rows, setRows] = useState(null);
   const [status, setStatus] = useState("Current");
   const [division, setDivision] = useState("All");
@@ -53,10 +61,11 @@ export default function Catalogues() {
   const [sharing, setSharing] = useState(null);
 
   const load = useCallback(() => {
-    api.get(`/catalogues?status=${status}`, { skipCache: true })
+    if (vendorMode && !canSeeCost) { setRows([]); return; }
+    api.get(`/catalogues?status=${status}${vendorMode ? "&origin=vendor" : ""}`, { skipCache: true })
       .then(({ data }) => setRows(data || []))
       .catch((e) => { setRows([]); toast.error(formatApiError(e.response?.data?.detail) || "Couldn't load catalogues"); });
-  }, [status]);
+  }, [status, vendorMode, canSeeCost]);
   useEffect(() => { setRows(null); load(); }, [load]);
 
   const shown = useMemo(() => {
@@ -64,7 +73,7 @@ export default function Catalogues() {
     return (rows || []).filter((c) =>
       (division === "All" || c.division === division || c.division === "All") &&
       (!kind || c.kind === kind) &&
-      (!term || [c.title, c.kind, c.division, c.file_name, c.notes].join(" ").toLowerCase().includes(term)));
+      (!term || [c.title, c.kind, c.division, c.file_name, c.notes, c.vendor_name, c.vendor_code].join(" ").toLowerCase().includes(term)));
   }, [rows, division, kind, q]);
 
   const act = async (fn, ok) => {
@@ -75,9 +84,23 @@ export default function Catalogues() {
   const field = "px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm";
   return (
     <>
-      <Topbar title="Catalogues" subtitle={rows ? `${shown.length} ${status === "Current" ? "current" : "archived"}` : "Loading…"}
-              onAdd={can("create") ? () => setPublishing({}) : undefined} addLabel="Publish catalogue" />
-      <div className="p-4 sm:p-6 space-y-4" data-testid="catalogues-page">
+      <Topbar title={vendorMode ? "Vendor Brochures" : "Catalogues"}
+              subtitle={rows ? `${shown.length} ${status === "Current" ? "current" : "archived"}${vendorMode ? " · internal, landing-price holders only" : ""}` : "Loading…"}
+              onAdd={can("create") && (!vendorMode || canSeeCost) ? () => setPublishing({}) : undefined}
+              addLabel={vendorMode ? "Add vendor brochure" : "Publish catalogue"} />
+      <div className="p-4 sm:p-6 space-y-4" data-testid={vendorMode ? "vendor-brochures-page" : "catalogues-page"}>
+        {vendorMode && (
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-muted,#f7f7f7)] px-4 py-3 text-sm flex flex-wrap items-center gap-x-3 gap-y-1">
+            <ShieldCheck size={16} className="text-[var(--color-warning,#b45309)] shrink-0" />
+            <span className="flex-1 min-w-[16rem]">Brochures and price lists exactly as vendors sent them — their names, prices and contacts included — so they stay with admin, accounts and landing-price holders and are never shared outside. <b>Import products</b> turns one into MADIO-coded products in the Virtual Catalogue, ready for a MADIO-branded catalogue.</span>
+            <button type="button" className="lx-btn inline-flex items-center gap-1" onClick={() => navigate("/virtual-catalogue")}><Boxes size={14} /> Virtual Catalogue</button>
+          </div>
+        )}
+        {vendorMode && !canSeeCost ? (
+          <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-sm text-[var(--color-text-muted)]">
+            Vendor brochures are open to admin, accounts and people who can see landing prices.
+          </div>
+        ) : (<>
         <div className="flex flex-wrap items-center gap-2">
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search catalogues…" aria-label="Search catalogues"
                  className={`${field} w-full sm:w-64`} data-testid="catalogue-search" />
@@ -97,12 +120,16 @@ export default function Catalogues() {
 
         {rows === null ? <div className="text-sm text-[var(--color-text-muted)]">Loading…</div> : !shown.length ? (
           <div className="rounded-xl border border-dashed border-[var(--color-border)] p-10 text-center text-sm text-[var(--color-text-muted)]" data-testid="catalogue-empty">
-            {status === "Current" ? "No catalogues yet. Publish a price list, brochure or shade card so everyone works from the same file." : "Nothing archived."}
+            {status === "Current" ? (vendorMode
+              ? "No vendor brochures yet. Add the brochures and price lists vendors send, then import their products into the Virtual Catalogue."
+              : "No catalogues yet. Publish a price list, brochure or shade card so everyone works from the same file.") : "Nothing archived."}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {shown.map((c) => (
-              <CatalogueCard key={c.id} c={c} can={can} isAdmin={user?.role === "admin"}
+              <CatalogueCard key={c.id} c={c} can={can} isAdmin={user?.role === "admin"} vendorMode={vendorMode}
+                             onImport={() => navigate(`/virtual-catalogue?brochure=${c.id}`)}
+                             onRegenerate={() => act(() => api.post(`/catalogues/${c.id}/regenerate`), "Made again with today's names, prices and pictures; shared links now open it")}
                              onShare={() => setSharing(c)} onNewVersion={() => setPublishing({ replaces: c })}
                              onEdit={() => setEditing(c)}
                              onArchive={() => act(() => api.post(`/catalogues/${c.id}/archive`), "Archived")}
@@ -112,21 +139,24 @@ export default function Catalogues() {
             ))}
           </div>
         )}
+        </>)}
       </div>
 
-      {publishing && <PublishDialog replaces={publishing.replaces} onClose={() => setPublishing(null)}
+      {publishing && <PublishDialog replaces={publishing.replaces} vendorMode={vendorMode} onClose={() => setPublishing(null)}
                                     onSaved={() => { setPublishing(null); setStatus("Current"); load(); }} />}
-      {editing && <EditDialog c={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {editing && <EditDialog c={editing} vendorMode={vendorMode} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {sharing && <ShareDialog catalogue={sharing} onClose={() => { setSharing(null); load(); }} />}
     </>
   );
 }
 
-function CatalogueCard({ c, can, isAdmin, onShare, onNewVersion, onEdit, onArchive, onRestore, onDelete }) {
+function CatalogueCard({ c, can, isAdmin, vendorMode, onImport, onRegenerate, onShare, onNewVersion, onEdit, onArchive, onRestore, onDelete }) {
   const [menu, setMenu] = useState(false);
   const Icon = fileIcon(c.content_type);
   const aud = AUDIENCE[c.audience] || AUDIENCE.external;
   const shareable = c.audience === "external" && c.status === "Current";
+  const generated = c.origin === "generated";
+  const importable = (c.content_type || "") === "application/pdf";
   const btn = "lx-btn inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed";
   return (
     <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-4 flex flex-col gap-3" data-testid={`catalogue-${c.id}`}>
@@ -138,6 +168,7 @@ function CatalogueCard({ c, can, isAdmin, onShare, onNewVersion, onEdit, onArchi
             <span>{c.division === "All" ? "All divisions" : c.division}</span>
             {c.kind && <span>· {c.kind}</span>}
             <span>· v{c.version}</span>
+            {vendorMode && (c.vendor_name || c.vendor_code) && <span data-testid={`catalogue-vendor-${c.id}`}>· {c.vendor_name || c.vendor_code}</span>}
           </div>
         </div>
         <div className="relative">
@@ -147,7 +178,10 @@ function CatalogueCard({ c, can, isAdmin, onShare, onNewVersion, onEdit, onArchi
             <div className="absolute right-0 mt-1 w-48 z-20 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg shadow-lg py-1 text-sm"
                  onMouseLeave={() => setMenu(false)}>
               {can("edit") && <MenuItem Icon={Pencil} onClick={() => { setMenu(false); onEdit(); }}>Edit details</MenuItem>}
-              {can("create") && c.status === "Current" && <MenuItem Icon={Upload} onClick={() => { setMenu(false); onNewVersion(); }} testid={`catalogue-newversion-${c.id}`}>Publish new version</MenuItem>}
+              {can("create") && c.status === "Current" && (generated
+                ? <MenuItem Icon={RefreshCw} onClick={() => { setMenu(false); onRegenerate(); }} testid={`catalogue-regenerate-${c.id}`}>Make again with today's prices</MenuItem>
+                : <MenuItem Icon={Upload} onClick={() => { setMenu(false); onNewVersion(); }} testid={`catalogue-newversion-${c.id}`}>Publish new version</MenuItem>)}
+              {generated && c.kit_url && <MenuItem Icon={PackageOpen} onClick={() => { setMenu(false); downloadFile(`/catalogues/${c.id}/render-kit`, `${c.title} render kit.zip`).catch(() => toast.error("Couldn't download the render kit")); }}>Download render kit</MenuItem>}
               <MenuItem Icon={Download} onClick={() => { setMenu(false); openCatalogueFile(c, true); }}>Download</MenuItem>
               {c.sharepoint_web_url && <MenuItem Icon={ExternalLink} onClick={() => { setMenu(false); window.open(c.sharepoint_web_url, "_blank", "noopener"); }}>Edit in SharePoint</MenuItem>}
               {can("edit") && (c.status === "Current"
@@ -168,6 +202,7 @@ function CatalogueCard({ c, can, isAdmin, onShare, onNewVersion, onEdit, onArchi
         <div className="text-[var(--color-text-muted)] truncate" title={c.file_name}>
           {c.source === "sharepoint" ? "SharePoint · " : ""}{c.file_name}{c.size_bytes ? ` · ${size(c.size_bytes)}` : ""}
         </div>
+        {generated && <div className="inline-flex items-center gap-1 text-[var(--color-primary)]"><Sparkles size={12} /> Made from the Virtual Catalogue · {c.item_count || (c.item_ids || []).length} products{c.render_kit ? " · with render kit" : ""}</div>}
         {c.notes && <div className="text-[var(--color-text)] line-clamp-2">{c.notes}</div>}
         {(c.share_count > 0 || c.view_count > 0) && (
           <div className="text-[var(--color-text-muted)]">
@@ -179,9 +214,15 @@ function CatalogueCard({ c, can, isAdmin, onShare, onNewVersion, onEdit, onArchi
 
       <div className="flex flex-wrap gap-2 mt-auto">
         <button type="button" className={btn} onClick={() => openCatalogueFile(c)} data-testid={`catalogue-open-${c.id}`}><Eye size={14} /> Open</button>
-        <button type="button" className={`${btn} ${shareable ? "lx-btn-brand" : ""}`} onClick={onShare} disabled={!shareable}
-                title={shareable ? "Share a link with a customer or architect" : c.status !== "Current" ? "Only the current version can be shared" : "Staff-only catalogues can't be shared outside"}
-                data-testid={`catalogue-share-${c.id}`}><Share2 size={14} /> Share</button>
+        {vendorMode ? (
+          <button type="button" className={`${btn} lx-btn-brand`} onClick={onImport} disabled={!importable || c.status !== "Current"}
+                  title={importable ? "Read its products into the Virtual Catalogue, without the vendor's name" : "Only PDF brochures can be imported"}
+                  data-testid={`catalogue-import-${c.id}`}><Boxes size={14} /> Import products</button>
+        ) : (
+          <button type="button" className={`${btn} ${shareable ? "lx-btn-brand" : ""}`} onClick={onShare} disabled={!shareable}
+                  title={shareable ? "Share a link with a customer or architect" : c.status !== "Current" ? "Only the current version can be shared" : "Staff-only catalogues can't be shared outside"}
+                  data-testid={`catalogue-share-${c.id}`}><Share2 size={14} /> Share</button>
+        )}
       </div>
     </div>
   );
@@ -196,7 +237,7 @@ function MenuItem({ Icon, children, onClick, danger, testid }) {
   );
 }
 
-function MetaFields({ form, set, optional }) {
+function MetaFields({ form, set, optional, vendorMode }) {
   const { divisions } = useTenantConfig();
   const field = "w-full px-2.5 py-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] text-sm";
   return (
@@ -223,6 +264,13 @@ function MetaFields({ form, set, optional }) {
           <input type="date" className={field} value={form.valid_from} onChange={(e) => set({ valid_from: e.target.value })} />
         </label>
       </div>
+      {vendorMode ? (
+        <div className="space-y-1">
+          <span className="text-sm font-medium">Vendor</span>
+          <VendorSelect value={form.vendor_id} onChange={(v) => set({ vendor_id: v })} testId="catalogue-vendor" />
+          <p className="text-xs text-[var(--color-text-muted)] inline-flex items-center gap-1"><ShieldCheck size={12} /> Kept for landing-price holders only; never shared outside.</p>
+        </div>
+      ) : (
       <fieldset className="space-y-1.5">
         <legend className="text-sm font-medium mb-1">Who is it for?</legend>
         {Object.entries(AUDIENCE).map(([k, a]) => (
@@ -233,6 +281,7 @@ function MetaFields({ form, set, optional }) {
           </label>
         ))}
       </fieldset>
+      )}
       <label className="block text-sm space-y-1">
         <span className="font-medium">Notes <span className="font-normal text-[var(--color-text-muted)]">(staff only)</span></span>
         <textarea className={field} rows={2} value={form.notes} onChange={(e) => set({ notes: e.target.value })}
@@ -242,10 +291,11 @@ function MetaFields({ form, set, optional }) {
   );
 }
 
-function PublishDialog({ replaces, onClose, onSaved }) {
+function PublishDialog({ replaces, vendorMode, onClose, onSaved }) {
   const [form, setForm] = useState({
-    title: "", division: replaces?.division || "All", kind: replaces?.kind || "", audience: replaces?.audience || "external",
-    valid_from: "", notes: "",
+    title: "", division: replaces?.division || "All", kind: replaces?.kind || (vendorMode ? "Brochure" : ""),
+    audience: vendorMode ? "restricted" : (replaces?.audience || "external"), valid_from: "", notes: "",
+    ...(vendorMode ? { vendor_id: replaces?.vendor_id || "" } : {}),
   });
   const set = (p) => setForm((f) => ({ ...f, ...p }));
   const [source, setSource] = useState("upload");
@@ -266,7 +316,9 @@ function PublishDialog({ replaces, onClose, onSaved }) {
     e.preventDefault();
     if (source === "upload" && !file) { toast.error("Choose the file"); return; }
     if (source === "sharepoint" && !spRef) { toast.error("Pick a file from SharePoint"); return; }
+    if (vendorMode && !replaces && !form.vendor_id) { toast.error("Pick the vendor"); return; }
     const fd = new FormData();
+    if (vendorMode) fd.append("origin", "vendor");
     Object.entries(form).forEach(([k, v]) => fd.append(k, v ?? ""));
     if (replaces) fd.append("replaces", replaces.id);
     if (source === "upload") fd.append("file", file); else fd.append("sharepoint_ref", spRef);
@@ -281,7 +333,7 @@ function PublishDialog({ replaces, onClose, onSaved }) {
   };
 
   return (
-    <Modal title={replaces ? `New version of “${replaces.title}”` : "Publish a catalogue"} onClose={onClose} testid="catalogue-publish">
+    <Modal title={replaces ? `New version of “${replaces.title}”` : vendorMode ? "Add a vendor brochure" : "Publish a catalogue"} onClose={onClose} testid="catalogue-publish">
       <form onSubmit={submit} className="p-5 space-y-4">
         {replaces && <p className="text-sm text-[var(--color-text-muted)]">This becomes v{replaces.version + 1}. Version {replaces.version} is archived, and links already shared show the new file. Leave fields blank to keep them as they are.</p>}
         <div className="inline-flex rounded-lg border border-[var(--color-border)] overflow-hidden text-sm" role="tablist">
@@ -327,7 +379,7 @@ function PublishDialog({ replaces, onClose, onSaved }) {
             )}
           </div>
         )}
-        <MetaFields form={form} set={set} optional={replaces ? replaces.title : ""} />
+        <MetaFields form={form} set={set} optional={replaces ? replaces.title : ""} vendorMode={vendorMode} />
         <div className="flex justify-end gap-2">
           <button type="button" className="lx-btn" onClick={onClose}>Cancel</button>
           <button type="submit" className="lx-btn lx-btn-brand" disabled={saving} data-testid="catalogue-publish-submit">{saving ? "Publishing…" : "Publish"}</button>
@@ -337,9 +389,10 @@ function PublishDialog({ replaces, onClose, onSaved }) {
   );
 }
 
-function EditDialog({ c, onClose, onSaved }) {
+function EditDialog({ c, vendorMode, onClose, onSaved }) {
   const [form, setForm] = useState({ title: c.title, division: c.division, kind: c.kind || "", audience: c.audience,
-                                     valid_from: c.valid_from || "", notes: c.notes || "" });
+                                     valid_from: c.valid_from || "", notes: c.notes || "",
+                                     ...(vendorMode ? { vendor_id: c.vendor_id || "" } : {}) });
   const [saving, setSaving] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
@@ -353,7 +406,7 @@ function EditDialog({ c, onClose, onSaved }) {
   return (
     <Modal title={`Edit “${c.title}”`} onClose={onClose} testid="catalogue-edit">
       <form onSubmit={submit} className="p-5 space-y-4">
-        <MetaFields form={form} set={(p) => setForm((f) => ({ ...f, ...p }))} />
+        <MetaFields form={form} set={(p) => setForm((f) => ({ ...f, ...p }))} vendorMode={vendorMode} />
         <div className="flex justify-end gap-2">
           <button type="button" className="lx-btn" onClick={onClose}>Cancel</button>
           <button type="submit" className="lx-btn lx-btn-brand" disabled={saving}>{saving ? "Saving…" : "Save"}</button>

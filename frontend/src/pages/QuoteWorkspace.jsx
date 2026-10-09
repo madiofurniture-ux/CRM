@@ -155,7 +155,7 @@ export default function QuoteWorkspace() {
         // Same basis as the rate (before GST): the price-list quotation prints both.
         mrp: rateFromMrp(item.mrp, item.gst_pct ?? taxPct),
       });
-      if (item.available <= 0) toast.warning(`${item.name}: none available in stock right now`);
+      if (!item.virtual && item.available <= 0) toast.warning(`${item.name}: none available in stock right now`);
       await load();
     } finally { setBusy(false); }
   };
