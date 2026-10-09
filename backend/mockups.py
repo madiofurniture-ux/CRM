@@ -13,7 +13,9 @@
 - render kit: a ZIP of every product's cut-out and mockup, with a CSV of
   codes, names and sizes, for an architect to use in their renders.
 
-Pure Pillow + numpy; MADIO's name and the product code go on every mockup.
+Pure Pillow + numpy (numpy imported only where a picture is cut out, so a
+server without it still starts); MADIO's name and the product code go on
+every mockup.
 """
 from __future__ import annotations
 
@@ -23,7 +25,6 @@ import re
 import zipfile
 from pathlib import Path
 
-import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 FONTS = Path(__file__).resolve().parent / "assets" / "fonts"
@@ -51,8 +52,9 @@ def load(data: bytes) -> Image.Image:
     return img.convert("RGB")
 
 
-def _grow(seed: np.ndarray, allowed: np.ndarray, limit: int = 600) -> np.ndarray:
-    """The part of `allowed` connected to `seed` (4-neighbour flood fill)."""
+def _grow(seed, allowed, limit: int = 600):
+    """The part of `allowed` connected to `seed` (4-neighbour flood fill;
+    boolean numpy arrays)."""
     region = seed & allowed
     for _ in range(limit):
         grown = region.copy()
@@ -69,6 +71,8 @@ def _grow(seed: np.ndarray, allowed: np.ndarray, limit: int = 600) -> np.ndarray
 
 def cutout(data: bytes, tolerance: int = 26) -> tuple[Image.Image, bool]:
     """(RGBA cut-out, whether the backdrop was removed)."""
+    import numpy as np
+
     img = load(data)
     img.thumbnail((1400, 1400))
     arr = np.asarray(img).astype(np.int16)

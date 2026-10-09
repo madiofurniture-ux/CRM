@@ -15,3 +15,5 @@ reportlab>=4.2.0           # server-rendered quote PDFs — pure-Python, no nati
 openpyxl>=3.1.0            # go-live data load reads the .xlsx books (go_live_import.py)
 requests>=2.31.0          # notifications.py (WhatsApp Cloud API) — imported at startup
 pillow>=9.0                # go-live product pictures shrunk to JPEG (go_live_import.picture_url)
+numpy>=1.26.0              # mockups.py cuts products out of their white backdrop (imported only when a mockup is made)
+pypdf>=5.1.0               # vendor_catalogue.py reads vendors' PDF catalogues — pure-Python
