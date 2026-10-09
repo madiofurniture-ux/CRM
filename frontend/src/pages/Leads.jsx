@@ -14,7 +14,6 @@ import StagePath from "@/components/StagePath";
 import useWorkflow, { stageErrorMessage } from "@/hooks/useWorkflow";
 import { leadLifecycleStages } from "@/lib/lifecycle";
 import CustomerResolver from "@/components/CustomerResolver";
-import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
 import CsvImportModal from "@/components/CsvImportModal";
 import RemarksTimeline from "@/components/RemarksTimeline";
@@ -331,13 +330,6 @@ export default function Leads() {
                   : null}
             </select>
           ))}
-        </div>
-        <div className="mb-4">
-          <SavedViewsBar
-            entity="leads"
-            filters={{ search, fStage, customFilters, columns: cf.values }}
-            onApply={(f) => { setSearch(f.search || ""); setFStage(f.fStage || "All"); setCustomFilters(f.customFilters || {}); cf.setValues(f.columns || {}); }}
-          />
         </div>
         <div className="mb-4">
           <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="leads-filters" />

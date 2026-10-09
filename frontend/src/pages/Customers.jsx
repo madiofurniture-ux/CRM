@@ -7,7 +7,6 @@ import { Link, useSearchParams } from "react-router-dom";
 import ColumnFilters from "@/components/ColumnFilters";
 import useColumnFilters from "@/hooks/useColumnFilters";
 import StarRating from "@/components/StarRating";
-import SavedViewsBar from "@/components/SavedViewsBar";
 import CustomFieldInput from "@/components/CustomFieldInput";
 import CsvImportModal from "@/components/CsvImportModal";
 import EmptyState from "@/components/EmptyState";
@@ -195,13 +194,6 @@ export default function Customers() {
                   : null}
             </select>
           ))}
-        </div>
-        <div className="mb-4">
-          <SavedViewsBar
-            entity="customers"
-            filters={{ search, fStage, customFilters, columns: cf.values }}
-            onApply={(f) => { setSearch(f.search || ""); setFStage(f.fStage || "All"); setCustomFilters(f.customFilters || {}); cf.setValues(f.columns || {}); }}
-          />
         </div>
         <div className="mb-4">
           <ColumnFilters filters={cf} rows={rows} shown={filtered.length} testid="customers-filters" />

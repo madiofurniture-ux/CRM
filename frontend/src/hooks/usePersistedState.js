@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
 
 /**
- * useState that survives a reload, for list-page filter state.
- *
- * Deliberately not the SavedViews feature (useSavedViews.js): that one is an
- * explicit, named, server-stored preset a user opts into and can share. This
- * is the implicit "I refreshed the page and my status filter was still set"
- * behaviour, which is per-browser and not worth a round trip.
+ * useState that survives a reload, for list-page filter state: the implicit
+ * "I refreshed the page and my status filter was still set" behaviour, which
+ * is per-browser and not worth a round trip. (The named, server-stored
+ * "Save view" presets were taken off Leads and Customers; column filters
+ * plus this cover what people used them for.)
  *
  * Storage is namespaced per page+key. Reads are defensive: a browser with
  * storage disabled, a private window, or a stale value left by an older
