@@ -16,6 +16,18 @@ each one. Files sit in SharePoint.
 | **Type** | Master Data list `catalogue_types` (Price list, Product catalogue, Brochure, Shade / swatch card, Spec sheet, Installation guide). |
 | **File types** | PDF, JPG, PNG, WEBP, Excel, Word, PowerPoint, ZIP, up to 50 MB. The served Content-Type comes from the extension, never from the upload, so nothing a browser would run (HTML, SVG, JS) is ever served. |
 
+## Made from the Virtual Catalogue, and vendors' own brochures
+
+- **MADIO catalogues** (`origin: "generated"`) are made from selected
+  Virtual Catalogue products as a branded PDF. They can carry a render kit
+  (cut-outs and mockups) that the share link offers to architects. *Make
+  again with today's prices* replaces *Publish new version* on them.
+- **Vendor brochures** (`origin: "vendor"`) are vendors' own files. They have
+  their own page (Sales → Vendor Brochures), are always restricted, and are
+  left out of this list.
+
+See `docs/VENDOR_CATALOGUES.md`.
+
 ## Sharing outside the company
 
 *Share* on a card, or *Share catalogue* on a customer's page, makes a link for
@@ -52,7 +64,7 @@ account needs re-granting. The screen rides the `quotes` page grant.
 
 | Route | |
 |---|---|
-| `GET /catalogues?status=Current\|Archived&division=` | list, with `share_count`, `view_count`, `last_viewed_at` |
+| `GET /catalogues?status=Current\|Archived&division=&origin=` | list, with `share_count`, `view_count`, `last_viewed_at`; `origin=vendor` lists vendor brochures instead |
 | `POST /catalogues` (multipart) | `title, division, kind, audience, notes, valid_from`, and either `file` or `sharepoint_ref`; `replaces=<id>` publishes a new version (blank fields keep the earlier values) |
 | `GET /catalogues/sharepoint-files` | files in the tenant's SharePoint catalogues folder that can be linked |
 | `PUT /catalogues/{id}` | edit details |
@@ -63,6 +75,8 @@ account needs re-granting. The screen rides the `quotes` page grant.
 | `GET /catalogues/{id}/shares`, `GET /catalogue-shares?customer_id=\|architect_id=` | links given out |
 | `DELETE /catalogue-shares/{id}` | stop a link |
 | `GET /public/catalogues/{token}`, `/file?download=` | no login; 404 unknown/stopped, 410 expired |
+| `GET /catalogues/{id}/render-kit`, `GET /public/catalogues/{token}/render-kit` | a generated catalogue's stored render kit |
+| `POST /catalogues/{id}/regenerate` | a generated catalogue's next version (see `docs/VENDOR_CATALOGUES.md`) |
 
 Collections: `catalogues` (`family_id` ties a catalogue's versions together,
 `version`, `status`) and `catalogue_shares`. Both are in `TENANT_COLLECTIONS`.

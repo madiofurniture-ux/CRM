@@ -127,6 +127,22 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
   login) that follow the latest version, expire, can be stopped, count views.
   `backend/catalogues.py`, `catalogues` + `catalogue_shares`, rides the
   `documents` permission and `quotes` page grant. See `docs/CATALOGUES.md`.
+- Vendor brochures → Virtual Catalogue (`/vendor-brochures`, `/virtual-catalogue`):
+  - vendors' own brochures are catalogues with `origin: "vendor"`, always
+    restricted and never shared (nav item `costOnly`);
+  - importing one (`backend/vendor_catalogue.py`, pypdf) takes out the
+    vendor's name, contacts, sales copy and logos, and after review makes
+    `virtual_items`: MADIO codes `MV-0001`, MADIO price = vendor price ×
+    markup, re-import updates in place;
+  - virtual items are quoted (lookup `virtual: true`, `_products_by_sku`)
+    but are never stock (no reservation, issue or stock value);
+  - MADIO-branded catalogue PDF (`backend/catalogue_pdf.py`, catalogues with
+    `origin: "generated"`, regenerate = next version);
+  - mockups and render kits (`backend/mockups.py`: cut-out / room / wall /
+    framed).
+  See `docs/VENDOR_CATALOGUES.md`.
+- "Save view" presets are off Leads and Customers (column filters cover
+  them); `/saved-views` stays in the API, unused by the UI.
 - Reminders: tasks carry `due_time` + `remind_minutes`, meetings
   `remind_minutes` (default 15); `GET /reminders` lists the signed-in
   person's timed tasks/meetings (yesterday–tomorrow) and `ReminderCenter`
