@@ -44,6 +44,15 @@ CLICK_TO_CHAT_EVENTS = {
 }
 
 
+# Click-to-chat sends whose message staff write themselves (the Virtual
+# Catalogue's product details and estimates): logged like the others, but
+# never offered as a template.
+MANUAL_CLICK_LOG = {
+    "product-shared": ("product_details", "Product details sent to {customer_name}: {ref}"),
+    "estimate-shared": ("estimate_shared", "Estimate sent to {customer_name}: {ref}"),
+}
+
+
 class _SafeDict(dict):
     def __missing__(self, key):
         return "{" + key + "}"
@@ -116,8 +125,12 @@ async def log_manual_click(db, user: dict, context: str, *, to: str, customer_na
     is distinguishable from an automated notify() send in the audit trail."""
     if not to:
         return
-    event = CLICK_TO_CHAT_EVENTS.get(context, context)
-    message = _render(event, customer_name=customer_name, ref=ref_id)
+    if context in MANUAL_CLICK_LOG:
+        event, template = MANUAL_CLICK_LOG[context]
+        message = template.format_map(_SafeDict(customer_name=customer_name, ref=ref_id))
+    else:
+        event = CLICK_TO_CHAT_EVENTS.get(context, context)
+        message = _render(event, customer_name=customer_name, ref=ref_id)
     doc = {
         "id": m.new_id(), "created_at": m.now_iso(), "event": event, "channel": "whatsapp",
         "to": to, "customer_name": customer_name, "ref_type": ref_type, "ref_id": ref_id,

@@ -1130,6 +1130,7 @@ def _candidate(key: str, n: int, p: dict, terms: list, summary: dict, images: Op
     madio_sku = code.upper() if MADIO_CODE_RE.match(code) else ""
     name = clean(p.get("name"), 120)
     name = _title(name) if name.isupper() else name
+    named = bool(name)
     features = [f for f in (clean(x, 140) for x in (p.get("features") or [])) if f][:MAX_FEATURES]
     dims = tidy_dimensions(p.get("dimensions")) or dimensions_of(features)
     category = clean(p.get("category"), 60)
@@ -1149,7 +1150,7 @@ def _candidate(key: str, n: int, p: dict, terms: list, summary: dict, images: Op
     summary["removed"] = summary.get("removed", 0) + removed
     return {"key": key, "page": n, "images": list(images or []), "picture_count": len(images or []),
             "removed": removed, "whole_page": False, "likely": bool(price or code or dims),
-            "name": name[:120], "subtitle": "", "category": category,
+            "name": name[:120], "named": named, "subtitle": "", "category": category,
             "features": with_size_line(features, dims), "vendor_item_code": "" if madio_sku else code,
             "madio_sku": madio_sku, "vendor_price": price if price and price > 0 else None, "dimensions": dims,
             "lead_time": clean(p.get("lead_time"), 60), "moq": clean(p.get("moq"), 40),

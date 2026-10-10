@@ -50,3 +50,13 @@ def test_click_with_no_phone_is_a_noop():
         await server.log_whatsapp_click({"context": "follow-up", "to": ""}, user=ADMIN)
         assert await server.db.notification_logs.find_one({}) is None
     asyncio.run(run())
+
+
+def test_a_product_shared_from_the_catalogue_is_logged_but_never_a_template():
+    async def run():
+        await server.log_whatsapp_click({"context": "product-shared", "to": "9876543210", "customer_name": "Ravi",
+                                         "ref_type": "lead", "ref_id": "MV-0025"}, user=ADMIN)
+        logged = await server.db.notification_logs.find_one({"to": "9876543210"})
+        assert (logged["event"], logged["message"]) == ("product_details", "Product details sent to Ravi: MV-0025")
+        assert "product-shared" not in await server.whatsapp_templates(user=ADMIN)
+    asyncio.run(run())

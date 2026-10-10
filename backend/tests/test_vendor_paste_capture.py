@@ -311,3 +311,40 @@ def test_a_picture_link_is_fetched_only_from_public_addresses(monkeypatch):
             await server.picture_from_url({"url": "https://cdn.example.com/p/table.png"}, user=MADIO_STAFF)
         assert e.value.status_code == 403
     run(go())
+
+
+# ── the PDF viewer's page reading, and who sees the catalogue ──────────────
+def test_a_pdf_page_is_read_the_way_the_automatic_import_reads_it():
+    async def go():
+        await _vendor("madio")
+        page = "MODEL NO:\nDT MJ1525\n2,80,000/-\nDIMENSION :-\n240 X 110 X 75 CM"
+        out = await server.vendor_catalogue_read_page({"vendor_id": "v1", "text": page}, user=MADIO)
+        assert (out["vendor_item_code"], out["vendor_price"], out["dimensions"]) == ("DT MJ1525", 280000, "240 × 110 × 75 cm")
+        assert out["name"] == ""                                  # the page doesn't name it: left to staff
+        named = await server.vendor_catalogue_read_page(
+            {"vendor_id": "v1", "text": "Acme Living Oval Table\nCode: OV 12\nPrice: ₹1,20,000"}, user=MADIO)
+        assert named["name"] == "Oval Table" and named["vendor_item_code"] == "OV 12"
+        assert await server.vendor_catalogue_read_page({"vendor_id": "v1", "text": "About us"}, user=MADIO) == {}
+        with pytest.raises(HTTPException) as e:
+            await server.vendor_catalogue_read_page({"vendor_id": "v1", "text": page}, user=MADIO_STAFF)
+        assert e.value.status_code == 403
+    run(go())
+
+
+def test_whoever_meets_visitors_or_leads_sees_the_catalogue_without_landing_prices():
+    async def go():
+        await _vendor("madio")
+        imp = await _paste()
+        await server.commit_vendor_import(imp["id"], {"items": _keep(imp)}, user=MADIO)
+        await server.db.roles.insert_many([
+            {"id": "r-front", "tenant_id": "madio", "name": "Front desk",
+             "permissions": [{"module": "visitors", "view": True, "create": True, "edit": True, "scope": "all"}]},
+            {"id": "r-none", "tenant_id": "madio", "name": "Store", "permissions": [{"module": "attendance", "view": True}]},
+        ])
+        front = {**MADIO_STAFF, "id": "m5", "role_id": "r-front"}
+        rows = await server.list_virtual_items(user=front)
+        assert len(rows) == 3 and not {"cost", "margin", "markup"} & set(rows[0])
+        with pytest.raises(HTTPException) as e:
+            await server.list_virtual_items(user={**MADIO_STAFF, "id": "m6", "role_id": "r-none"})
+        assert e.value.status_code == 403
+    run(go())

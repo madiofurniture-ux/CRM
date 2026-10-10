@@ -10110,9 +10110,10 @@ def _require_cost_holder(user: dict, what: str = "do this") -> None:
 
 
 async def _require_product_view(user: dict) -> None:
-    """Virtual items are quoted, so anyone who works on quotations, invoices
-    or stock can see them."""
-    for module in ("quotes", "invoice-gen", "inventory"):
+    """Virtual items are quoted and shown to visitors, so anyone who works on
+    quotations, invoices, stock, leads or walk-ins can see them (landing
+    prices stay with landing-price holders)."""
+    for module in ("quotes", "invoice-gen", "inventory", "leads", "visitors"):
         try:
             await _require_permission(module, "view", user)
             return
@@ -10372,6 +10373,22 @@ async def _save_import(vendor: dict, division: str, cands: list, summary: dict, 
     return {**_import_out({**imp, "vendor_name": vendor.get("name", "")}, user), "candidates": docs}
 
 
+@api.post("/vendor-catalogues/read-page")
+async def vendor_catalogue_read_page(payload: dict, user: dict = Depends(get_current_user)):
+    """What one page of a vendor's PDF says about its (first) product, for the
+    PDF viewer to fill its capture form: the same reading as a pasted list, so
+    a code comes out the way the automatic import reads it. {vendor_id, text}."""
+    _require_cost_holder(user, "import vendor catalogues")
+    vendor = await _vendor_or_400(str((payload or {}).get("vendor_id") or ""), user)
+    text = str((payload or {}).get("text") or "")[:20000]
+    cands, _ = vcat.parse_rows(text, vcat.remove_terms(vendor, str((payload or {}).get("remove_words") or "")))
+    c = next((c for c in cands if c["likely"]), None)
+    if not c:
+        return {}
+    return {k: c.get(k) or "" for k in ("vendor_item_code", "dimensions", "lead_time", "moq", "sale_terms")} | \
+        {"vendor_price": c.get("vendor_price") or "", "name": c["name"] if c.get("named") else ""}
+
+
 @api.post("/vendor-catalogues/rows")
 async def vendor_catalogue_rows(payload: dict, user: dict = Depends(get_current_user)):
     """Products typed or pasted instead of read from a file, into the same
@@ -10597,11 +10614,16 @@ async def commit_vendor_import(import_id: str, payload: dict, user: dict = Depen
 
 @api.get("/virtual-items")
 async def list_virtual_items(division: str = "", category: str = "", q: str = "", status: str = "Active",
-                             vendor_id: str = "", user: dict = Depends(get_current_user)):
-    """MADIO's virtual inventory (lists carry a small picture, not the full ones)."""
+                             vendor_id: str = "", skus: str = "", user: dict = Depends(get_current_user)):
+    """MADIO's virtual inventory (lists carry a small picture, not the full
+    ones). `skus` (comma-separated) picks given codes, whatever their status:
+    a shortlist or a quotation still shows an archived product."""
     await _require_product_view(user)
     query: dict = {}
-    if status in vcat.ITEM_STATUSES:
+    codes = [c.strip() for c in str(skus or "").split(",") if c.strip()][:200]
+    if codes:
+        query["sku"] = {"$in": codes}
+    elif status in vcat.ITEM_STATUSES:
         query["status"] = status
     if division and division != "All":
         query["division"] = division
@@ -10677,8 +10699,8 @@ SHORTLIST_ON = {"lead": ("leads", "leads", "assigned_to"), "visitor": ("visitors
 MAX_SHORTLIST = 60
 
 
-async def _shortlist_record(kind: str, record_id: str, user: dict) -> tuple[str, dict, dict]:
-    """(collection, scoped query, record) the user may edit; else 404/403."""
+async def _shortlist_record(kind: str, record_id: str, user: dict, action: str = "edit") -> tuple[str, dict, dict]:
+    """(collection, scoped query, record) the user may view / edit; else 404/403."""
     if kind not in SHORTLIST_ON:
         raise HTTPException(status_code=404, detail="Not found")
     collection, module, owner_field = SHORTLIST_ON[kind]
@@ -10686,11 +10708,59 @@ async def _shortlist_record(kind: str, record_id: str, user: dict) -> tuple[str,
     rec = await db[collection].find_one(owned, {"_id": 0})
     if not rec:
         raise HTTPException(status_code=404, detail="Not found")
-    roles = await _require_permission(module, "edit", user)
+    roles = await _require_permission(module, action, user)
     owners = await _scope_owners(user, roles, module)
     if owners is not None and owner_field and rec.get(owner_field) not in owners:
         raise HTTPException(status_code=404, detail="Not found")
     return collection, owned, rec
+
+
+@api.get("/shortlist/{kind}/{record_id}")
+async def get_shortlist(kind: str, record_id: str, user: dict = Depends(get_current_user)):
+    """Who a lead / walk-in is and what they have shortlisted (the Virtual
+    Catalogue's "Showing to" bar, opened from their record)."""
+    _, _, rec = await _shortlist_record(kind, record_id, user, "view")
+    return {"kind": kind, "id": rec["id"], "name": rec.get("name", ""),
+            "phone": rec.get("whatsapp") or rec.get("phone", ""), "lead_id": rec.get("lead_id", ""),
+            "customer_id": rec.get("customer_id", ""), "shortlist": rec.get("shortlist") or []}
+
+
+@api.get("/shortlist/clients")
+async def shortlist_clients(q: str = "", user: dict = Depends(get_current_user)):
+    """Who a product can be shortlisted for, for the Virtual Catalogue's
+    picker: leads (by name, phone or LD- number) and walk-in visitors not yet
+    a lead; with nothing typed, open leads and the last week's walk-ins.
+    Each list only if the user may see it, within their scope."""
+    from datetime import date as _d, timedelta as _td
+    term = str(q or "").strip()[:60]
+    rx = {"$regex": re.escape(term), "$options": "i"} if term else None
+    out: list = []
+    try:
+        roles = await _require_permission("leads", "view", user)
+        owners = await _scope_owners(user, roles, "leads")
+        query: dict = {"$or": [{"name": rx}, {"phone": rx}, {"lead_id": rx}]} if rx else \
+            {"stage": {"$nin": ["Won", "Lost"]}}
+        if owners is not None:
+            query["assigned_to"] = {"$in": owners}
+        async for r in db.leads.find(tenancy.scope(query, "leads", user), {"_id": 0, "log": 0, "remarks_history": 0}) \
+                .sort("date", -1).limit(15):
+            out.append({"kind": "lead", "id": r["id"], "name": r.get("name", ""), "phone": r.get("phone", ""),
+                        "lead_id": r.get("lead_id", ""), "customer_id": r.get("customer_id", ""),
+                        "stage": r.get("stage", ""), "date": r.get("date", ""), "division": r.get("division", ""),
+                        "shortlist": len(r.get("shortlist") or [])})
+    except HTTPException:
+        pass
+    try:
+        await _require_permission("visitors", "view", user)
+        query = {"$or": [{"name": rx}, {"phone": rx}]} if rx else {"date": {"$gte": (_d.today() - _td(days=7)).isoformat()}}
+        query["converted_lead_id"] = {"$in": [None, ""]}       # a converted walk-in shows as its lead
+        async for r in db.visitors.find(tenancy.scope(query, "visitors", user), {"_id": 0}).sort("date", -1).limit(15):
+            out.append({"kind": "visitor", "id": r["id"], "name": r.get("name", ""), "phone": r.get("phone", ""),
+                        "lead_id": "", "customer_id": r.get("customer_id", ""), "stage": r.get("stage", ""),
+                        "date": r.get("date", ""), "division": "", "shortlist": len(r.get("shortlist") or [])})
+    except HTTPException:
+        pass
+    return out
 
 
 @api.post("/shortlist/{kind}/{record_id}")

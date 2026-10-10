@@ -88,3 +88,30 @@ def test_a_walk_ins_shortlist_moves_to_the_lead_it_becomes():
         merged = await server.visitor_to_lead("vs2", user=STAFF)
         assert merged["id"] == "l1" and [e["sku"] for e in merged["shortlist"]] == ["MV-0001", "MV-0002"]
     run(go())
+
+
+def test_the_picker_finds_leads_by_number_and_recent_walk_ins():
+    async def go():
+        await _seed()
+        await server.add_to_shortlist("lead", "l1", {"skus": ["MV-0001"]}, user=STAFF)
+        found = await server.shortlist_clients(q="LD-2610", user=STAFF)
+        assert [(c["kind"], c["name"], c["shortlist"]) for c in found] == [("lead", "Ravi Kumar", 1)]
+        assert [c["name"] for c in await server.shortlist_clients(q="9812345678", user=STAFF)] == ["Meera Rao"]
+        await server.visitor_to_lead("vs1", user=STAFF)                    # now a lead: listed as one, not twice
+        kinds = sorted((c["kind"], c["name"]) for c in await server.shortlist_clients(q="Meera", user=STAFF))
+        assert kinds == [("lead", "Meera Rao")]
+        assert await server.shortlist_clients(q="Ravi", user=OTHER) == []
+    run(go())
+
+
+def test_the_showing_to_bar_reads_who_and_what_they_shortlisted():
+    async def go():
+        await _seed()
+        await server.add_to_shortlist("lead", "l1", {"skus": ["MV-0002"]}, user=STAFF)
+        out = await server.get_shortlist("lead", "l1", user=STAFF)
+        assert (out["name"], out["lead_id"], out["phone"]) == ("Ravi Kumar", "LD-2610-001", "+919876543210")
+        assert [e["sku"] for e in out["shortlist"]] == ["MV-0002"]
+        with pytest.raises(HTTPException) as e:
+            await server.get_shortlist("lead", "l1", user=OTHER)
+        assert e.value.status_code == 404
+    run(go())
