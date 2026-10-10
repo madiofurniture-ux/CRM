@@ -136,8 +136,12 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
     markup, re-import updates in place;
   - virtual items are quoted (lookup `virtual: true`, `_products_by_sku`)
     but are never stock (no reservation, issue or stock value);
+  - pages are read as one product each, or as a grid of coded captions
+    (shade cards: positions from pypdf's drawing instructions); labels on
+    their own line, "2,80,000/-" prices, divider pages, running titles;
   - MADIO-branded catalogue PDF (`backend/catalogue_pdf.py`, catalogues with
-    `origin: "generated"`, regenerate = next version);
+    `origin: "generated"`, `layout` products | swatches, regenerate = next
+    version);
   - mockups and render kits (`backend/mockups.py`: cut-out / room / wall /
     framed).
   See `docs/VENDOR_CATALOGUES.md`.

@@ -54,11 +54,30 @@ with customers and architects.
 
 | | |
 |---|---|
-| **The vendor's name** | The full name and its distinctive words ("Acme"), but not generic ones (Pvt, Ltd, Furniture, Living, Doors …), plus any brand or series names typed in *Also take out*. |
-| **Contacts** | Lines with an e-mail address, website or GSTIN; lines with contact words and numbers (Call, Tel, WhatsApp …); street addresses (address words with a PIN code, or several address words); short place lines ("Kondapur, Hyderabad"); phone numbers (8+ digits) on any line that isn't a measurement; ©, ®, ™. |
+| **The vendor's name** | The full name and its distinctive words ("Acme"), but not generic ones (Pvt, Ltd, Furniture, Living, Doors …), plus any brand or series names typed in *Also take out*. Handles, hashtags and web names built on a distinctive word go too ("@aarkapaints_"). |
+| **Contacts** | Lines with an e-mail address, website or GSTIN; lines with contact words and numbers (Call, Tel, WhatsApp …); street addresses (address words with a PIN code, or several address words); short place lines ("Kondapur, Hyderabad"); phone numbers (8+ digits) on any line that isn't a measurement or a model number; ©, ®, ™. A line nothing was taken from keeps its own punctuation ("MODEL NO:", "2,80,000/-"). |
 | **Sales copy** | Sentences over nine words that aren't specifications. Only the name, subtitle, category heading and specification lines (size, material, finish, colour …) are kept. MADIO writes its own description. |
 | **Logos and page furniture** | Pictures under 120 px or 40,000 pixels (icons, logos); thin banners (over 6 : 1); pictures that appear on more than half the pages (logos, backgrounds). Repeats are counted from each picture's stored bytes, so nothing is decoded to spot them. |
 | **Picture metadata** | Every kept picture is re-encoded as a JPEG: 1000 px main, 640 px extras, 280 px list thumbnail. Camera, author and software details don't survive. |
+
+## How a page is read
+
+| Layout | What happens |
+|---|---|
+| **One product a page** (most brochures, slides) | The page's pictures (largest first) and text become one product: name, subtitle, category heading, specification lines, the vendor's code and price. |
+| **A grid of captioned pictures** (a shade card) | Each picture with a *coded* caption printed just under it ("LWB + ARLW 01 + APC") becomes its own product. Positions come from the PDF's drawing instructions. Plain labels under pictures ("Track joint") are details of one product, so they don't split the page. Shades are numbered in shade order, and a shade shown twice (large on one page, in the grid on another) is one product with both pictures. |
+| **Label on one line, value on the next** | "DIMENSION :-" then "240 X 110 X 75 CM" is read as "Dimension: 240 X 110 X 75 CM". A "MODEL NO:" label takes the value lines that follow it. |
+| **Prices** | "₹ / Rs / MRP / Price 32,500", and Indian price lists' "2,80,000/-". |
+| **Only a model number, no name** ("DT MJ 1267 B ITALIAN LARGE WHITE") | The code ("DT MJ 1267 B") is kept as the vendor's code (internal). The name comes from the section and any words after the code ("Dining Table – Italian Large White"), else its size ("Dining Table 240 × 110 cm"). Edit names in the review. |
+| **A divider page** ("DINING TABLES") | Names the section, the category of the pages after it. It starts unticked. |
+| **A running title** ("Lime wash \| 5" on most pages) | The range's name: the category of a shade card, and how its shades are named ("Lime Wash 01") when captions are only codes. It is left out of product text. |
+| **A product-details page in a shade card** (pack sizes, coverage, thickness, tools) | Added to every shade's specification, and the page itself starts unticked. |
+| **Covers, "about us", warranty, contact pages** | Kept as candidates but unticked (no specification, price or code). |
+
+Checked on real brochures:
+- **Aarka's Lime wash shade card** (MAP, 12 pages, 24.7 MB) gives its 24 shades in about 6 s.
+- **TREZURE's dining-table price slides** (Furniture, 22 slides) give its 20 tables with price and size.
+- **MADIO's own Doors & Windows brochure** still gives its 7 systems.
 
 It can't remove a logo or text that is part of a product photo itself. A page
 that is one big picture (a scanned page) is flagged *whole page* so the
@@ -67,7 +86,7 @@ PDF with no text gives pictures only; upload the product pictures instead.
 
 Limits:
 - a PDF up to 40 MB and 120 pages;
-- up to 120 products per import, keeping 3 pictures each;
+- up to 200 products per import, keeping 3 pictures each;
 - pictures up to 8 MB each.
 
 The PDF is read with `pypdf` one page at a time and only small copies of the
@@ -102,8 +121,13 @@ then virtual items.
 `backend/catalogue_pdf.py` uses ReportLab with the quotation PDF's fonts,
 colours and division logo. It prints:
 - **a cover:** logo, title, subtitle, month, and the first four products;
-- **two products a page:** pictures, MV code, category, name, specification,
-  description, and the price or "Price on request";
+- **products, in one of two layouts** (`layout`):
+  - `products`, two a page: pictures, MV code, category, name,
+    specification, description, and the price or "Price on request";
+  - `swatches`, a shade card: twelve a page, each swatch filling its tile,
+    with its name, MV code and price, and the specification the shades
+    share printed once at the top. This is the default when every product is
+    MAP;
 - **a back page:** how to order (quote the MV code), the price note, and the
   showroom's address and phones.
 
@@ -117,6 +141,7 @@ It is saved as a catalogue with these fields:
 | `origin` | `"generated"` |
 | `item_ids` | the products in it |
 | `show_prices` | whether prices are printed |
+| `layout` | `products` or `swatches` (kept when it is made again) |
 | `render_kit` | whether a render kit was made with it |
 | `kit_url`, `kit_size` | the stored render kit |
 
@@ -171,7 +196,7 @@ Photoshop.
 | `DELETE /virtual-items/{id}` | admin |
 | `GET /virtual-items/{id}/mockup?kind=cutout\|room\|wall\|framed&download=` | the image |
 | `POST /virtual-items/render-kit` | `{item_ids}` → ZIP |
-| `POST /virtual-items/catalogue` | `{title, subtitle, division, item_ids, show_prices, render_kit, audience, note, valid_from, replaces}` → the catalogue |
+| `POST /virtual-items/catalogue` | `{title, subtitle, division, item_ids, show_prices, render_kit, layout, audience, note, valid_from, replaces}` → the catalogue |
 | `POST /catalogues/{id}/regenerate` | the next version of a generated catalogue with today's names, prices and pictures |
 | `GET /catalogues/{id}/render-kit`, `GET /public/catalogues/{token}/render-kit` | the stored render kit (staff / share link) |
 
