@@ -22,8 +22,11 @@ const COLUMNS = [
   { key: "stage", label: "Stage", type: "select", get: (r) => r.stage || "New" },
   { key: "ticket_value", label: "Value", type: "number" },
 ];
-import { Trash2, X, Phone, Pencil, Sparkles, CheckCircle2 } from "lucide-react";
+import { Trash2, X, Phone, Pencil, Sparkles, CheckCircle2, Sofa } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import CustomerResolver from "@/components/CustomerResolver";
+import ProductModal from "@/components/products/ProductModal";
+import ShortlistPanel from "@/components/products/ShortlistPanel";
 
 // Fallback only: the live list is the tenant's visitor workflow (Admin → Workflows).
 const DEFAULT_STAGES = ["New", "Qualified", "Quoted", "Negotiation", "Won", "Lost", "Delivered"];
@@ -44,6 +47,8 @@ export default function Visitors() {
   const [leadByVisitor, setLeadByVisitor] = useState({});
   const [leadsByPhone, setLeadsByPhone] = useState({});
   const [converting, setConverting] = useState(null);
+  const [shortlistOf, setShortlistOf] = useState(null);       // a walk-in's shortlisted products
+  const navigate = useNavigate();
   // Inline architect creation, same pattern the Lead modal uses: the sub-form
   // lives inside this modal so creating one never discards the half-filled
   // visitor form around it. null = not creating.
@@ -215,7 +220,14 @@ export default function Visitors() {
                 {filtered.map((v) => (
                   <tr key={v.id} className="border-t border-[var(--border-light)] hover:bg-[var(--surface-2)]/50">
                     <td className="px-4 py-3 text-[var(--ink-2)] whitespace-nowrap">{fmtDate(v.date)}</td>
-                    <td className="px-4 py-3 font-medium">{v.name}</td>
+                    <td className="px-4 py-3 font-medium">
+                      {v.name}
+                      {(v.shortlist || []).length > 0 && (
+                        <button type="button" onClick={() => setShortlistOf(v)} title="Products shortlisted from the Virtual Catalogue"
+                                className="ml-1.5 text-[10px] font-normal px-1.5 py-0.5 rounded bg-[var(--surface-2)] text-[var(--ink-2)]"
+                                data-testid={`visitor-shortlist-${v.id}`}>{v.shortlist.length} shortlisted</button>
+                      )}
+                    </td>
                     <td className="px-4 py-3 font-mono text-xs text-[var(--ink-2)]">
                       {v.phone && (
                         <span className="inline-flex items-center gap-1">
@@ -242,6 +254,8 @@ export default function Visitors() {
                         ) : (
                           <button onClick={() => convertToLead(v)} disabled={converting === v.id} className="p-1.5 rounded-md hover:bg-[var(--brand-soft)] text-[var(--brand)] disabled:opacity-60" title={converting === v.id ? "Converting…" : "Convert to Lead"} data-testid={`visitor-convert-${v.id}`}><Sparkles size={13} /></button>
                         )}
+                        <button onClick={() => navigate(`/virtual-catalogue?for=visitor:${v.id}`)} className="p-1.5 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-2)]"
+                                title="Show products from the Virtual Catalogue (shortlist what they like)" data-testid={`visitor-catalogue-${v.id}`}><Sofa size={13} /></button>
                         <button onClick={() => openEdit(v)} className="p-1.5 rounded-md hover:bg-[var(--surface-2)] text-[var(--ink-2)]" title="Edit visitor" data-testid={`visitor-edit-${v.id}`}><Pencil size={13} /></button>
                         <button onClick={() => remove(v.id)} className="p-1.5 rounded-md hover:bg-[var(--danger-soft)] text-[var(--danger)]" title="Delete visitor"><Trash2 size={13} /></button>
                       </div>
@@ -254,6 +268,17 @@ export default function Visitors() {
           </div>
         </div>
       </div>
+
+      {shortlistOf && (
+        <ProductModal title={`${shortlistOf.name} · shortlisted products`} onClose={() => setShortlistOf(null)} testid="visitor-shortlist">
+          <div className="p-4">
+            <ShortlistPanel kind="visitor" record={shortlistOf} onChange={(shortlist) => {
+              setShortlistOf((p) => ({ ...p, shortlist }));
+              setRows((p) => p.map((x) => (x.id === shortlistOf.id ? { ...x, shortlist } : x)));
+            }} />
+          </div>
+        </ProductModal>
+      )}
 
       {show && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShow(false)}>

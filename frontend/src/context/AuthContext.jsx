@@ -69,7 +69,9 @@ export function AuthProvider({ children }) {
     window.location.href = "/login";
   };
 
+  // A list of page ids means any of them (a page several roles share).
   const canAccess = (pageId) => {
+    if (Array.isArray(pageId)) return pageId.some((p) => canAccess(p));
     if (!user) return false;
     if (tenant && Array.isArray(tenant.enabled_modules) && !tenant.enabled_modules.includes(pageId)) return false;
     if (user.role === "admin") return true;

@@ -17,6 +17,7 @@ import CustomerResolver from "@/components/CustomerResolver";
 import CustomFieldInput from "@/components/CustomFieldInput";
 import CsvImportModal from "@/components/CsvImportModal";
 import RemarksTimeline from "@/components/RemarksTimeline";
+import ShortlistPanel from "@/components/products/ShortlistPanel";
 import StarRating from "@/components/StarRating";
 import EmptyState from "@/components/EmptyState";
 import ErrorState from "@/components/ErrorState";
@@ -391,6 +392,10 @@ export default function Leads() {
                           {l.division && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-primary-soft)] text-[var(--color-primary)] font-semibold">{l.division}</span>}
                           {l.priority && PRIORITY_TONE[l.priority] && <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${PRIORITY_TONE[l.priority]}`}>{l.priority}</span>}
                           {l.customer_id && <Link to={`/customers/${l.customer_id}`} className="text-[10px] text-[var(--color-primary)] hover:underline" title="Open the customer">Customer →</Link>}
+                          {(l.shortlist || []).length > 0 && (
+                            <button type="button" onClick={() => setLogLead(l)} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]"
+                                    title="Products shortlisted from the Virtual Catalogue" data-testid={`lead-shortlist-${l.id}`}>{l.shortlist.length} shortlisted</button>
+                          )}
                           <span className={`md:hidden text-[10px] ${overdue ? "text-[var(--color-danger)] font-semibold" : "text-[var(--color-text-muted)]"}`}>{l.follow_up_date ? `FU ${fmtDate(l.follow_up_date)}` : ""}</span>
                         </div>
                       </td>
@@ -634,6 +639,10 @@ export default function Leads() {
                 {canCreate && <button className="btn-ghost justify-center" disabled={!!converting} onClick={() => convert(logLead, "quote")} data-testid="lead-to-quote">{converting === "quote" ? "Creating…" : "Create quotation"}</button>}
                 {canCreate && <button className="btn-primary justify-center" disabled={!!converting} onClick={() => convert(logLead, "project")} data-testid="lead-to-project">{converting === "project" ? "Starting…" : "Start project"}</button>}
               </div>
+              <ShortlistPanel kind="lead" record={logLead} onChange={(shortlist) => {
+                setLogLead((p) => ({ ...p, shortlist }));
+                setRows((p) => p.map((x) => x.id === logLead.id ? { ...x, shortlist } : x));
+              }} />
               <StagePath wf={lw} value={logLead.stage} record={logLead} canEdit={canEdit}
                          onChange={(stage) => updateStage(logLead, stage)} />
               <StageProgressBar stages={leadLifecycleStages(logLead)} />

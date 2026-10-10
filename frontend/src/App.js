@@ -152,7 +152,7 @@ function App() {
           <Route path="/projects" element={<ProtectedRoute page="projects"><Layout><Projects /></Layout></ProtectedRoute>} />
           <Route path="/projects/:id" element={<ProtectedRoute page="projects"><Layout><ProjectPage /></Layout></ProtectedRoute>} />
           <Route path="/catalogues" element={<ProtectedRoute page="quotes"><Layout><Catalogues /></Layout></ProtectedRoute>} />
-          <Route path="/virtual-catalogue" element={<ProtectedRoute page="quotes"><Layout><VirtualCatalogue /></Layout></ProtectedRoute>} />
+          <Route path="/virtual-catalogue" element={<ProtectedRoute page={["quotes", "visitors", "leads"]}><Layout><VirtualCatalogue /></Layout></ProtectedRoute>} />
           <Route path="/vendor-brochures" element={<ProtectedRoute page="quotes"><Layout><VendorBrochures /></Layout></ProtectedRoute>} />
           <Route path="/service" element={<ProtectedRoute page="projects"><Layout><Service /></Layout></ProtectedRoute>} />
           <Route path="/follow-ups" element={<ProtectedRoute page="leads"><Layout><FollowUps /></Layout></ProtectedRoute>} />

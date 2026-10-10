@@ -6,7 +6,8 @@ import { shrinkImage } from "@/lib/image";
 import { useAuth } from "@/context/AuthContext";
 
 /** Master Data → Quotations: the markup that turns a manufacturer's rate
- * into the customer rate (only people who can see landing prices see it),
+ * into the customer rate and the one vendor catalogue prices are imported at
+ * (only people who can see landing prices see them),
  * the aluminium rate new Doors & Windows quotations print, and the D&W
  * typology library (name, pattern, diagram) every line picks from. */
 export default function QuoteSettingsManager() {
@@ -53,6 +54,27 @@ export default function QuoteSettingsManager() {
               {isAdmin && (
                 <button type="button" className="btn-ghost self-end text-sm" disabled={saving === "Markup"}
                         onClick={() => save({ markup: Object.fromEntries(Object.keys(st.markup).map((d) => [d, document.getElementById(`markup-${d}`)?.value || 0])) }, "Markup")}>
+                  Save markup
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {st.catalogue_markup && (
+          <div className="space-y-2" data-testid="quote-settings-catalogue-markup">
+            <div className="text-sm font-medium">Markup on vendor catalogue prices</div>
+            <p className="text-xs text-[var(--ink-3)]">Virtual Catalogue price = the vendor's (landing) price × markup, rounded up to ₹10, when a vendor's catalogue is imported; 0 uses the markup above. Only people who can see landing prices see this.</p>
+            <div className="flex flex-wrap gap-3">
+              {Object.entries(st.catalogue_markup).map(([div, v]) => (
+                <label key={div} className="text-xs text-[var(--ink-3)]">
+                  {div}
+                  <input type="number" step="0.05" min="0" defaultValue={v} disabled={!isAdmin} id={`cat-markup-${div}`}
+                         className={`${field} w-20 block text-right`} data-testid={`quote-catalogue-markup-${div}`} />
+                </label>
+              ))}
+              {isAdmin && (
+                <button type="button" className="btn-ghost self-end text-sm" disabled={saving === "Catalogue markup"}
+                        onClick={() => save({ catalogue_markup: Object.fromEntries(Object.keys(st.catalogue_markup).map((d) => [d, document.getElementById(`cat-markup-${d}`)?.value || 0])) }, "Catalogue markup")}>
                   Save markup
                 </button>
               )}

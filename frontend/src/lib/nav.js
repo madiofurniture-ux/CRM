@@ -31,7 +31,8 @@ export const NAV = [
   { app: "sell", id: "quote-builder", to: "/quotes/builder", label: "Quote Builder", icon: LayoutTemplate },
   { app: "sell", id: "quote-followups", to: "/quotes/followups", label: "Quote Follow-ups", icon: PhoneCall },
   { app: "sell", id: "catalogues", perm: "quotes", to: "/catalogues", label: "Catalogues", icon: BookOpen },
-  { app: "sell", id: "virtual-catalogue", perm: "quotes", to: "/virtual-catalogue", label: "Virtual Catalogue", icon: Images },
+  // The showroom's catalogue: whoever quotes, or meets visitors and leads (reception, sales).
+  { app: "sell", id: "virtual-catalogue", perm: ["quotes", "visitors", "leads"], to: "/virtual-catalogue", label: "Virtual Catalogue", icon: Images },
   // Vendors' own brochures: landing-price holders only (costOnly), like the prices inside them.
   { app: "sell", id: "vendor-brochures", perm: "quotes", to: "/vendor-brochures", label: "Vendor Brochures", icon: BookLock, costOnly: true },
   { app: "sell", id: "sales", to: "/sales", label: "Sales Register", icon: Receipt },
