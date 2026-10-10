@@ -15,10 +15,19 @@ with customers and architects.
    - It is stored in `catalogues` with `origin: "vendor"`, `vendor_id` and
      `vendor_code`, and versions like any other catalogue.
 2. **Import its products.** Use *Import products* on the brochure card, or
-   Virtual Catalogue → *Import vendor catalogue* with a PDF or product
-   pictures. Each page is read into a candidate product: its pictures, name,
-   category, specification lines, the vendor's product code and price.
-   Everything that identifies the vendor is taken out (see below).
+   Virtual Catalogue → *Import vendor catalogue*, in one of three ways:
+   - **PDF or pictures**, read automatically: each page becomes a candidate
+     product with its pictures, name, category, specification lines, the
+     vendor's product code and price (see "How a page is read");
+   - **Paste a list**: text copied from the vendor's PDF, a spreadsheet or OCR
+     (see "Pasting a list");
+   - **Tag from the PDF**: the PDF open beside a capture form; staff cut each
+     product's picture out of the page and capture its code, name, size and
+     price (see "Tagging products in the PDF").
+   Everything that identifies the vendor is taken out (see below). Lead time,
+   MOQ and terms can be typed once for every product the import brings in.
+   The markup defaults to the company's markup on vendor catalogue prices
+   (Master Data → Quotations; MADIO: 2.6).
 3. **Review** (nothing is added yet). Staff can:
    - tick the products to keep (covers and "about us" pages start unticked);
    - choose which pictures to keep (the first is the main one);
@@ -33,17 +42,18 @@ with customers and architects.
    - A product the same vendor's earlier catalogue already brought in is
      updated in place and keeps its code. It is matched on the vendor's
      product code, else on its name.
-   - **To change MADIO's markup on a vendor's products**, import the same
-     brochure again with the new *Markup ×* (e.g. 1.4). Every product is
-     matched ("Updates MV-0025"), its MADIO price becomes vendor price ×
-     markup (rounded up to ₹10), and its code, name and description stay.
-     Then use *Make again with today's prices* on the catalogue.
+   - **To change MADIO's markup on products already in**, select them and
+     use *Re-price* (MADIO price = landing price × markup, rounded up to
+     ₹10), or import the same brochure again with the new *Markup ×*: every
+     product is matched ("Updates MV-0025") and keeps its code, name and
+     description. Then use *Make again with today's prices* on the catalogue.
 5. **Quote it.**
    - The quotation and invoice product picker lists virtual items beside
      stock, marked *Made to order*. A line picked from one carries the MV
      code as its `sku` and is priced from MADIO's price.
    - The quotation PDF prints the MV code and the item's picture.
-6. **Share.** Select products, then *Make MADIO catalogue*.
+6. **Show it to a customer** in the showroom (see "In the showroom").
+7. **Share.** Select products, then *Make MADIO catalogue*.
    - This makes a branded PDF, saved on the Catalogues page and shared by
      the usual links.
    - The render kit can go with it for architects.
@@ -51,7 +61,7 @@ with customers and architects.
      version, so links already sent open the new one. It shows its progress
      while it runs (a few seconds, longer with a large render kit) and
      can't be started twice.
-7. **Mockups.** *Mockup* on a product shows it in a room, on a wall, framed,
+8. **Mockups.** *Mockup* on a product shows it in a room, on a wall, framed,
    or as a transparent cut-out, ready to download. Selecting products and
    using *Render kit (ZIP)* zips all of them.
 
@@ -100,13 +110,93 @@ The PDF is read with `pypdf` one page at a time and only small copies of the
 pictures are kept. MADIO's 11 MB, 10-page Doors & Windows brochure reads in
 about 4 s, peaking near 100 MB of memory.
 
+## Pasting a list
+
+*Paste a list* takes what staff copy out of a vendor's price list:
+
+- **A table** (cells split by tabs, `|` or `;`, as Excel and most PDF
+  viewers copy them) is one product a row. A heading row (`Code | Product |
+  Size | Price | Lead time | MOQ | Terms`, and the usual variants: Model No,
+  Description, Dimensions, MRP, Rate, TAT…) says which column is which;
+  without one, each cell is recognised by what it holds. A title above the
+  table ("DINING TABLES 2026") becomes the products' category.
+- **Free text** (OCR, a page copied as it is) is read line by line: a label on
+  its own line joins the value under it (`DIMENSION :-` then `240 X 110 X 75
+  CM`), and a new product starts where a line repeats what the current one
+  already has (a second code or price), or names a product after one was
+  priced. Terms printed once under the list ("Made to order, 3-4 weeks",
+  "GST included, transport extra") go to every product.
+
+Codes (`MV-0025`, `DT MJ 1267 B`), sizes (`240x110x75 CM`, `Ø 135 x 75 cm`,
+`8' x 4'`, tidied to `240 × 110 × 75 cm`), Indian prices (`2,80,000/-`, `Rs.
+1,52,000 per pcs`, `2.9 lakh`), lead times (`3-4 weeks`, `made to order`),
+MOQ (`MOQ 1`) and terms are found wherever they sit; a year
+("Collection 2026") is not a price. A MADIO code (`MV-0025`, pasted from
+MADIO's own list) updates that product of this vendor in place; it is never
+taken as the vendor's code. Pasting reads with `vendor_catalogue.parse_rows`.
+
+## Tagging products in the PDF
+
+*Tag from the PDF* opens the vendor's PDF (uploaded, or a filed vendor
+brochure) in the CRM's own PDF viewer: PDF.js 3.11.174, served from
+`frontend/public/vendor/pdfjs/3.11.174/` rather than a CDN, so no third-party
+script runs beside the signed-in user's token and office networks that block
+CDNs still work.
+
+- Pages are browsed (← →, zoom). On each page the code, size and price are
+  filled in from the page's text, read the same way as a pasted list
+  (`POST /vendor-catalogues/read-page`), so a product tagged by hand gets the
+  same code as the automatic import and updates the same item.
+- Staff drag a box round the product's photo (not the vendor's logo), type
+  or tap (from the page's text) what's missing, and *Capture product*.
+- *Review N products* sends them, with the cut-out pictures (re-encoded on
+  the server, metadata dropped), to the same review as every other import.
+
+In the review, any product can take more pictures: a file, or a picture's web
+address (`POST /vendor-catalogues/picture-from-url`: the server fetches it
+from public addresses only, the address checked once and pinned, redirects
+re-checked, 8 MB and pictures only; `backend/safe_fetch.py`).
+
+## In the showroom
+
+The Virtual Catalogue is also the showroom's product book; reception and
+sales open it with the visitors or leads page (landing prices stay hidden).
+
+- **Product cards** show the picture (click to zoom, swipe or ← → through the
+  pictures), the MADIO code, the brand tag (`MF`, `MAP`, `MDW`, from the
+  division's brand name), *Made to order* with the lead time, the size, MOQ,
+  MADIO's price (including GST) and the terms. Landing-price holders also see
+  the landing price, margin and markup.
+- **Showing to** (the bar above the cards): pick the customer once, a lead
+  (name, phone or LD- number) or a walk-in visitor, or add a new walk-in
+  there and then. It is kept for the browser tab. A lead's or visitor's
+  record opens the catalogue already showing to them (*Browse catalogue*).
+- **+ Add** puts the product on that customer's shortlist (`shortlist` on the
+  lead or visitor, with the name and price shown at the time; noted on the
+  lead's timeline). A walk-in's shortlist moves to the lead they become. The
+  lead's follow-up panel and the visitor's row show it.
+- **WhatsApp** on a card writes the message for the customer: "Hello Ravi,
+  here are the details for the Dining Table 240 × 110 cm (Code: MV-0001)
+  from Madio Furniture. Dimensions: 240 × 110 × 75 cm. Price: ₹7,28,000
+  (Made to order, 3-4 weeks). …", editable before it opens WhatsApp; on a
+  phone, *Send with the picture* shares the photo and the text together.
+  MADIO's code, name and price only, never the vendor's. The send is logged
+  in the customer's notification log.
+- **Quotation / estimate** (the shortlist, or selected products): quantities
+  and the total, then *Send estimate on WhatsApp* (one line per product and
+  the total) and / or *Make quotation in the CRM*. The quotation goes through
+  the quotation engine like any other: one per division, linked to the lead,
+  priced from MADIO's price before GST with the division's terms; it opens in
+  the quotation workspace for discounts, transport and the branded PDF.
+
 ## Virtual items (`virtual_items`)
 
 | Field | |
 |---|---|
 | `sku` | MADIO code `MV-0001`. It is unique per company (unique index `tenant_id, sku`) and skips any MV- code a stock item already uses. A stock item can't take one. |
 | `name`, `subtitle`, `category`, `division`, `features[]`, `description`, `unit`, `gst_pct`, `hsn` | MADIO's. `category` follows the Master Data list `catalogue_categories`. While the list is empty, anything is accepted. Once filled, an import maps its guess onto the list or leaves it blank with a hint, and saving checks it. |
-| `mrp` | MADIO's price, including GST like stock MRP; quotation lines take it before GST. At import it defaults to the vendor price × markup, rounded up to ₹10. The markup is the one typed at import, else the division's markup in Master Data → Quotations. Staff can change it. |
+| `mrp` | MADIO's price, including GST like stock MRP; quotation lines take it before GST. At import it defaults to the vendor price × markup, rounded up to ₹10. The markup is the one typed at import, else the division's markup on vendor catalogue prices (`catalogue_markup` in Master Data → Quotations; MADIO's preset 2.6), else its quotation markup. Staff can change it, or *Re-price* several at a markup. |
+| `dimensions`, `lead_time`, `moq`, `sale_terms` | The size (tidied: `240 × 110 × 75 cm`), lead time, minimum order and terms ("GST included, transport extra"), shown on cards, messages and quotation lines. The size is also the first specification line (`Size: …`), kept in step on every save, so catalogues and mockups print it. |
 | `cost`, `margin`, `markup`, `vendor_item_code`, `vendor_id`, `source_import_id`, `source_page` | Landing-price holders only (admin, accounts, *Can see landing price*). |
 | `vendor` | Vendor name: admin and accounts only. `vendor_code` (the vendor master's serial code) shows like it does on stock. |
 | `images[]`, `thumb` | Up to 3 pictures as data URLs (the first is the main one), and a small copy for lists. |
@@ -182,7 +272,9 @@ Photoshop.
 
 | | |
 |---|---|
-| See the Virtual Catalogue, pick products on quotations, make mockups and render kits | Anyone who can view quotations, invoices or stock (the page rides the `quotes` page grant) |
+| See the Virtual Catalogue, pick products on quotations, make mockups and render kits, share on WhatsApp | Anyone who can view quotations, invoices, stock, leads or visitors (the page opens with the `quotes`, `visitors` or `leads` page grant) |
+| Put products on a lead's / walk-in's shortlist | Whoever may edit that lead or visitor (same scope as editing it) |
+| Make a quotation from the catalogue | Whoever may create quotations |
 | Make a MADIO catalogue | The above, plus `documents` create (same as publishing a catalogue) |
 | Import, edit, price, archive | Landing-price holders (`_can_see_cost_prices`) |
 | Delete a virtual item | Admin |
@@ -194,11 +286,20 @@ Photoshop.
 |---|---|
 | `GET /catalogues?origin=vendor` | vendor brochures (landing-price holders); without `origin`, vendor brochures are left out |
 | `POST /catalogues` with `origin=vendor`, `vendor_id` | file a vendor brochure (always `restricted`) |
-| `POST /vendor-catalogues/extract` (multipart) | `vendor_id, division, remove_words, markup`, and `files` (one PDF or pictures) or `brochure_id`. Returns the import with its `candidates`. |
+| `POST /vendor-catalogues/extract` (multipart) | `vendor_id, division, remove_words, markup, lead_time, moq, sale_terms`, and `files` (one PDF or pictures) or `brochure_id`. Returns the import with its `candidates`. |
+| `POST /vendor-catalogues/rows` | `{vendor_id, division, remove_words, markup, lead_time, moq, sale_terms}` and `text` (a pasted list) or `rows` (captured products: `{name, vendor_item_code, vendor_price, dimensions, lead_time, page, picture}`, `file_name`, `brochure_id`). Same answer as `extract`. |
+| `POST /vendor-catalogues/read-page` | `{vendor_id, text}` → the first product the text describes (`vendor_item_code, vendor_price, dimensions, …`; `name` only if the text names it) |
+| `POST /vendor-catalogues/picture-from-url` | `{url}` → `{image}` (a data URL), public addresses only |
 | `GET /vendor-catalogues/imports`, `GET /vendor-catalogues/imports/{id}` | imports, and one with its candidates |
-| `POST /vendor-catalogues/imports/{id}/commit` | `{markup, items: [{key, name, subtitle, category, features, description, unit, gst_pct, hsn, vendor_item_code, vendor_price, mrp, images: [picture numbers]}]}` (a key may repeat: a page split into products) |
+| `POST /vendor-catalogues/imports/{id}/commit` | `{markup, items: [{key, name, subtitle, category, features, description, dimensions, lead_time, moq, sale_terms, unit, gst_pct, hsn, vendor_item_code, vendor_price, mrp, images: [picture numbers, or data URLs added in the review]}]}` (a key may repeat: a page split into products) |
 | `DELETE /vendor-catalogues/imports/{id}` | discard |
-| `GET /virtual-items?status=&division=&category=&q=&vendor_id=`, `GET /virtual-items/{id}` | list (with `thumb`, without `images`), one (with `images`) |
+| `GET /virtual-items?status=&division=&category=&q=&vendor_id=&skus=`, `GET /virtual-items/{id}` | list (with `thumb`, without `images`; `skus` picks given codes whatever their status), one (with `images`) |
+| `GET /virtual-items/meta` | `{brands: {division: brand name}}`, and `markup` per division for landing-price holders |
+| `POST /virtual-items/reprice` | `{item_ids, markup}` → MADIO price = landing price × markup for each (products without a landing price are skipped) |
+| `GET /shortlist/clients?q=` | leads (name, phone, LD- number) and walk-ins not yet a lead, for the *Showing to* picker |
+| `GET /shortlist/{lead\|visitor}/{id}` | who they are and their shortlist |
+| `POST /shortlist/{lead\|visitor}/{id}` | `{skus}` → added (a product already on it stays) |
+| `DELETE /shortlist/{lead\|visitor}/{id}/{sku}` | taken off |
 | `PUT /virtual-items/{id}` | edit; `images` = the pictures to keep in order, new ones as data URLs |
 | `DELETE /virtual-items/{id}` | admin |
 | `GET /virtual-items/{id}/mockup?kind=cutout\|room\|wall\|framed&download=` | the image |
@@ -214,6 +315,7 @@ Collections:
 | `virtual_items` | MADIO's made-to-order products |
 | `catalogue_imports` | one per import: its summary and status (`Review` / `Committed` / `Discarded`) |
 | `catalogue_import_items` | the candidates under review, deleted on commit or discard |
+| `leads.shortlist`, `visitors.shortlist` | `[{sku, name, division, price, virtual, added_at, added_by, added_by_id}]`, written only by the `/shortlist` routes |
 
 All three are in `TENANT_COLLECTIONS`.
 

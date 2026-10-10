@@ -143,7 +143,16 @@ delivery partners (vendors) fulfil orders on MADIO's behalf.
     `origin: "generated"`, `layout` products | swatches, regenerate = next
     version);
   - mockups and render kits (`backend/mockups.py`: cut-out / room / wall /
-    framed).
+    framed);
+  - also imported from a pasted list or products tagged in the PDF viewer
+    (`POST /vendor-catalogues/rows`, `parse_rows`; PDF.js self-hosted in
+    `frontend/public/vendor/pdfjs/3.11.174/`); items carry `dimensions`,
+    `lead_time`, `moq`, `sale_terms` (size mirrored as the `Size:` spec line);
+    import markup = `catalogue_markup` (Master Data → Quotations, MADIO 2.6);
+  - showroom: the page opens with the quotes, visitors or leads grant
+    (`canAccess` takes a list); zoom, WhatsApp text, quotation / estimate
+    builder (quotes go through the normal quote APIs), and `shortlist` on
+    leads / visitors (server-owned, `/shortlist/{lead|visitor}/{id}`).
   See `docs/VENDOR_CATALOGUES.md`.
 - "Save view" presets are off Leads and Customers (column filters cover
   them); `/saved-views` stays in the API, unused by the UI.
