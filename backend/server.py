@@ -1933,6 +1933,7 @@ def _lead_out(item: dict, user: dict) -> dict:
 
 
 async def normalize_visitor(doc: dict, existing: dict | None, user: dict) -> None:
+    doc.pop("shortlist", None)          # server-owned: /shortlist routes only
     if "phone" in doc:
         raw = doc.get("phone")
         # An untouched legacy value (edit didn't change the phone field) is left
@@ -1951,6 +1952,7 @@ async def normalize_visitor(doc: dict, existing: dict | None, user: dict) -> Non
 async def normalize_lead(doc: dict, existing: dict | None, user: dict) -> None:
     """Leads are this app's customer-intake record, so this is where phone
     uniqueness is enforced (see _reject_duplicate_phone)."""
+    doc.pop("shortlist", None)          # server-owned: /shortlist routes only
     if "phone" in doc:
         raw = doc.get("phone")
         if existing is not None and raw == existing.get("phone"):
@@ -9393,6 +9395,12 @@ async def visitor_to_lead(visitor_id: str, user: dict = Depends(get_current_user
         await db.visitors.update_one(
             tenancy.scope({"id": visitor_id}, "visitors", user),
             {"$set": {"stage": "Qualified", "converted_lead_id": existing["id"]}})
+        have = {e.get("sku") for e in existing.get("shortlist") or []}
+        more = [e for e in visitor.get("shortlist") or [] if e.get("sku") not in have]
+        if more:
+            existing["shortlist"] = (existing.get("shortlist") or []) + more
+            await db.leads.update_one(tenancy.scope({"id": existing["id"]}, "leads", user),
+                                      {"$set": {"shortlist": existing["shortlist"]}})
         return existing
     has_architect = bool(visitor.get("reference_id"))
     lead = {
@@ -9407,6 +9415,7 @@ async def visitor_to_lead(visitor_id: str, user: dict = Depends(get_current_user
         "assigned_to_id": visitor.get("attend_person_id", ""),
         "value": visitor.get("ticket_value", 0),
         "visitor_id": visitor_id, "customer_id": visitor.get("customer_id", ""),
+        "shortlist": list(visitor.get("shortlist") or []),
     }
     await _link("leads", lead, user)
     stamp_fy(lead, "leads")
@@ -10657,6 +10666,78 @@ async def reprice_virtual_items(payload: dict, user: dict = Depends(get_current_
     await record_activity("virtual_item", "reprice", "update", user, after={"markup": markup, "updated": len(done)},
                           note=f"Virtual catalogue re-priced at × {markup}: {len(done)} products")
     return {"updated": len(done), "skipped": skipped, "items": done}
+
+
+# ── Shortlist: the products a walk-in or a lead liked ──────────────────────
+# Kept on the visitor / lead record (`shortlist`, server-owned: the generic
+# edit routes never write it), each entry with the name and price shown when
+# it was added. A visitor's list moves to the lead it becomes; quotations are
+# made from it in the quotation engine like any other.
+SHORTLIST_ON = {"lead": ("leads", "leads", "assigned_to"), "visitor": ("visitors", "visitors", "")}
+MAX_SHORTLIST = 60
+
+
+async def _shortlist_record(kind: str, record_id: str, user: dict) -> tuple[str, dict, dict]:
+    """(collection, scoped query, record) the user may edit; else 404/403."""
+    if kind not in SHORTLIST_ON:
+        raise HTTPException(status_code=404, detail="Not found")
+    collection, module, owner_field = SHORTLIST_ON[kind]
+    owned = tenancy.scope({"id": record_id}, collection, user)
+    rec = await db[collection].find_one(owned, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Not found")
+    roles = await _require_permission(module, "edit", user)
+    owners = await _scope_owners(user, roles, module)
+    if owners is not None and owner_field and rec.get(owner_field) not in owners:
+        raise HTTPException(status_code=404, detail="Not found")
+    return collection, owned, rec
+
+
+@api.post("/shortlist/{kind}/{record_id}")
+async def add_to_shortlist(kind: str, record_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    """Add products (virtual catalogue or stock, by code) to a lead's or a
+    walk-in visitor's shortlist: {"skus": [...]}. A product already on it
+    stays as it is."""
+    collection, owned, rec = await _shortlist_record(kind, record_id, user)
+    skus = list(dict.fromkeys(str(x).strip() for x in (payload or {}).get("skus") or [] if str(x).strip()))
+    if not skus:
+        raise HTTPException(status_code=400, detail="Pick a product to add")
+    found = await _products_by_sku(skus, user, ("name", "mrp", "division"))
+    missing = [x for x in skus if x not in found]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Not in the catalogue or stock: {', '.join(missing[:5])}")
+    current = [e for e in rec.get("shortlist") or [] if isinstance(e, dict)]
+    have = {e.get("sku") for e in current}
+    now, added = now_iso(), []
+    for x in skus:
+        if x in have:
+            continue
+        p = found[x]
+        added.append({"sku": x, "name": p.get("name", ""), "division": p.get("division", ""),
+                      "price": float(p.get("mrp") or 0), "virtual": bool(p.get("virtual")),
+                      "added_at": now, "added_by": user.get("name", ""), "added_by_id": user.get("id", "")})
+    shortlist = current + added
+    if len(shortlist) > MAX_SHORTLIST:
+        raise HTTPException(status_code=400, detail=f"A shortlist holds up to {MAX_SHORTLIST} products")
+    update: dict = {"$set": {"shortlist": shortlist, "updated_at": now}}
+    if added and kind == "lead":
+        # On the lead's follow-up timeline, like any other note.
+        update["$push"] = {"log": {"at": now, "by": user.get("name", ""), "by_id": user.get("id", ""), "kind": "note",
+                                   "text": "Shortlisted " + "; ".join(f"{e['sku']} {e['name']}" for e in added)[:900]}}
+    await db[collection].update_one(owned, update)
+    if added:
+        await record_activity(kind, record_id, "update", user, after={"shortlist_added": [e["sku"] for e in added]},
+                              note=f"Shortlisted {', '.join(e['sku'] for e in added)}")
+    return {"shortlist": shortlist, "added": len(added), "name": rec.get("name", ""),
+            "lead_id": rec.get("lead_id", "")}
+
+
+@api.delete("/shortlist/{kind}/{record_id}/{sku}")
+async def remove_from_shortlist(kind: str, record_id: str, sku: str, user: dict = Depends(get_current_user)):
+    collection, owned, rec = await _shortlist_record(kind, record_id, user)
+    shortlist = [e for e in rec.get("shortlist") or [] if isinstance(e, dict) and e.get("sku") != sku]
+    await db[collection].update_one(owned, {"$set": {"shortlist": shortlist, "updated_at": now_iso()}})
+    return {"shortlist": shortlist}
 
 
 async def _virtual_or_404(item_id: str, user: dict, projection: dict | None = None) -> dict:
