@@ -10224,7 +10224,10 @@ async def _purge_stale_imports(user: dict) -> None:
 @api.post("/vendor-catalogues/extract")
 async def extract_vendor_catalogue(vendor_id: str = Form(""), division: str = Form(""),
                                    remove_words: str = Form(""), markup: str = Form(""),
-                                   brochure_id: str = Form(""), files: Optional[List[UploadFile]] = File(None),
+                                   brochure_id: str = Form(""),
+                                   # List (not Optional[List]): FastAPI 0.110 only gathers a single
+                                   # uploaded file into a list when the annotation is a plain List.
+                                   files: List[UploadFile] = File(None),
                                    user: dict = Depends(get_current_user)):
     """Read a vendor's catalogue (a PDF, product pictures, or a filed vendor
     brochure) into candidates to review: each product's pictures, name and

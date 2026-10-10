@@ -448,3 +448,32 @@ def test_reimport_keeps_madio_renames_and_its_own_details():
         assert (aria["description"], aria["gst_pct"], aria["unit"]) == ("Our bestseller", 18, "set")
         assert aria["match_key"] == vcat.match_key("v1", "", "Aria Chair")   # still the vendor's name
     run(go())
+
+
+def test_one_pdf_uploaded_over_http_is_read(monkeypatch):
+    """The screen sends one file as `files`; FastAPI must take it as a list
+    (it answered 422 when the parameter was Optional[List[UploadFile]])."""
+    from fastapi.testclient import TestClient
+    import auth
+
+    db = server.db
+    monkeypatch.setattr(server.app.state, "db", db)
+    admin = {"id": "u-http", "tenant_id": "acme", "name": "Admin", "role": "admin", "username": "admin-http"}
+
+    async def seed():
+        await db.users.insert_one(dict(admin))
+        await _vendor()
+    run(seed())
+    headers = {"Authorization": "Bearer " + auth.create_token(admin["id"], admin["username"], admin["role"])}
+    form = {"vendor_id": "v1", "division": "Furniture", "remove_words": "", "markup": "1.4", "brochure_id": ""}
+    client = TestClient(server.app)
+    one_pdf = client.post("/api/vendor-catalogues/extract", headers=headers, data=form,
+                          files=[("files", ("acme.pdf", build_pdf(), "application/pdf"))])
+    assert one_pdf.status_code == 200, one_pdf.text
+    assert len(one_pdf.json()["candidates"]) == 3
+    from vendor_pdf_fixture import product_photo
+    one_picture = client.post("/api/vendor-catalogues/extract", headers=headers, data=form,
+                              files=[("files", ("Aria Chair.jpg", product_photo((1, 2, 3)), "image/jpeg"))])
+    assert one_picture.status_code == 200 and len(one_picture.json()["candidates"]) == 1
+    nothing = client.post("/api/vendor-catalogues/extract", headers=headers, data=form)
+    assert nothing.status_code == 400
