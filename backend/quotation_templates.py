@@ -198,13 +198,15 @@ MAP_SPEC_FIELDS = [
 #   discount_style "less" prints Less : Discount then the taxable value;
 #                  "after" prints the value after discount (Furniture)
 #   markup         customer rate = MFG rate × markup on lines that carry one
+#   catalogue_markup  MADIO price = vendor (landing) price × this, for products
+#                  imported from vendors' catalogues (0 = use `markup`)
 #   validity_days  a new quotation's validity (0 = the CRM default)
 #   payment_plans  [{"above": ₹, "stages": [{"label", "pct"}]}]
 #   quote_fields   per-quotation facts printed as terms, e.g. the aluminium rate
 _BLANK = {"tax_pct": None, "spec_fields": [], "spec_defaults": {}, "terms": [], "highlights": [], "bank": [], "contact": "",
           "note": "", "logo": "", "tagline": "", "invocation": "", "tax_transport": False, "gst_extra": False,
           "discount_style": "less", "total_label": "NET AMOUNT PAYABLE (₹)", "markup": 0, "validity_days": 0,
-          "payment_plans": [], "quote_fields": [], "wastage": False, "typologies": False}
+          "payment_plans": [], "quote_fields": [], "wastage": False, "typologies": False, "catalogue_markup": 0}
 GENERIC = {
     "Furniture": {**_BLANK, "layout": "catalogue", "dims": "ft", "round_to": 1, "line_label": "Items",
                   "transport_label": "H&T", "spec_fields": FURNITURE_SPEC_FIELDS, "discount_style": "after",
@@ -223,6 +225,8 @@ COMPANY_PRESETS = {
             "address": "Plot No. 25, Road No. 1, Shilpa Hills, Izzath Nagar, Kondapur, Hyderabad – 500 084",
             "phone": "040-3520 9199 • +91 99486 01899",
             "contact": "Manager: +91 99486 01899 / +91 91007 88899",
+            # Vendor catalogue products sell at 2.6 × the brochure (landing) price.
+            "catalogue_markup": 2.6,
         },
         # As on MADIO's Doors & Windows quotation template (AF-2610-182,
         # Oct 2026): rate = MFG ₹/sft × 1.6, "Less : Discount", GST @ 18% on
@@ -328,7 +332,8 @@ def division_key(division: str) -> str:
 def division_preset(tenant_id: str, division: str, settings: dict | None = None) -> dict:
     """The quotation preset for a company's division (always a fresh copy).
     `settings` is the company's saved quotation settings (Master Data →
-    Quotations): a markup set there replaces the preset's."""
+    Quotations): a markup (or vendor catalogue markup) set there replaces the
+    preset's."""
     key = division_key(division)
     company = COMPANY_PRESETS.get(str(tenant_id or ""), {})
     out = {"division": key, "name": "", "invocation": "", "address": "", "phone": "", "payable_to": "",
@@ -336,12 +341,13 @@ def division_preset(tenant_id: str, division: str, settings: dict | None = None)
     for layer in (company.get("_all") or {}, company.get(key) or {}):
         for k, v in layer.items():
             out[k] = copy.deepcopy(v)
-    saved = ((settings or {}).get("markup") or {}).get(key)
-    if saved is not None:
-        try:
-            out["markup"] = max(0.0, float(saved))
-        except (TypeError, ValueError):
-            pass
+    for field in ("markup", "catalogue_markup"):
+        saved = ((settings or {}).get(field) or {}).get(key)
+        if saved is not None:
+            try:
+                out[field] = max(0.0, float(saved))
+            except (TypeError, ValueError):
+                pass
     return out
 
 

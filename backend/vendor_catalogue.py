@@ -94,6 +94,11 @@ def remove_terms(vendor: Optional[dict], extra: str = "") -> list[str]:
     name = re.sub(r"\s+", " ", str((vendor or {}).get("name") or "")).strip()
     if name:
         terms.append(name)
+        # "Acme Living Pvt Ltd" is printed as "Acme Living" too.
+        core = re.sub(r"(?:[\s,.]+(?:pvt|private|ltd|limited|llp|inc|co|company|corp(?:oration)?)\.?)+$", "", name,
+                      flags=re.I).strip(" ,.")
+        if len(core) >= 3 and core.lower() != name.lower():
+            terms.append(core)
         terms += [w for w in re.findall(r"[A-Za-z][A-Za-z&'.-]{2,}", name)
                   if w.lower().strip(".") not in _GENERIC and len(w) >= 3]
     for t in str(extra or "").split(","):
@@ -815,6 +820,378 @@ def extract_pictures(files: list[tuple[str, bytes]], terms: list[str]) -> tuple[
     return out, summary
 
 
+# ── pasted rows, and products captured from a PDF page ─────────────────────
+# Staff paste a vendor's price list (copied from a PDF, a spreadsheet or OCR)
+# or type what they read on a page: one product per row or block, its code,
+# name, size, price, lead time, MOQ and terms recognised wherever they are.
+MAX_PASTE_CHARS = 100_000
+# "240x110x75 CM", "240 X 110 cm", "Ø 135 x 75 cm", "8' x 4'".
+_DIM_UNIT = r"(?:mm|cms?|mtrs?|m|ft|feet|inch(?:es)?|in|[\"'″′])"
+DIMS_SPAN_RE = re.compile(rf"(?:[Øø⌀]\s*)?\d+(?:\.\d+)?\s*{_DIM_UNIT}?(?:\s*[x×*]\s*(?:[Øø⌀]\s*)?\d+(?:\.\d+)?\s*{_DIM_UNIT}?){{1,2}}"
+                          r"(?![\w])", re.I)
+SIZE_LABEL_RE = re.compile(r"^\s*(?:overall\s+)?(?:size|dimensions?|dims?)\b", re.I)
+_UNIT_WORDS = {"cm": "cm", "cms": "cm", "mm": "mm", "m": "m", "mtr": "m", "mtrs": "m", "ft": "ft", "feet": "ft",
+               "in": "in", "inch": "in", "inches": "in"}
+LEAD_TIME_RE = re.compile(r"\b\d+\s*(?:(?:-|–|to)\s*\d+\s*)?(?:working\s+)?(?:days?|weeks?|wks?|months?)\b|"
+                          r"\bmade[\s-]*to[\s-]*order\b|\bready\s+stock\b", re.I)
+MOQ_RE = re.compile(r"^\s*(?:moq|min(?:imum)?\.?\s*order(?:\s*(?:qty|quantity))?)\b\s*[:\-=]*\s*", re.I)
+SALE_TERMS_RE = re.compile(r"\b(?:gst|taxes|transport(?:ation)?|freight|installation|cartage|loading|unloading|"
+                           r"inclusive|included|exclusive|extra)\b", re.I)
+_PRICE_LABEL = re.compile(r"^\s*(?:mrp|price|rate|cost|amount|landing(?:\s*(?:cost|price))?|dealer\s*price|"
+                          r"net\s*(?:price|rate)|unit\s*price|offer\s*price)\b\s*[:\-=]*\s*", re.I)
+_PRICE_TAIL = re.compile(r"\s*(?:/-|/\s*-|(?:/|\bper\b)\s*(?:pcs?|pieces?|nos?|units?|sets?|each|sq\.?\s*ft|sft|rft)\.?|"
+                         r"\beach\b|\bonly\b|\+\s*gst|\bincl?\.?\s*gst)\s*$", re.I)
+_CURRENCY = re.compile(r"(?:₹|\brs\b\.?|\binr\b)\s*", re.I)
+# "MV-0025 …", "DT MJ 1267 B …": a code at the start of a line of free text.
+LEAD_CODE_RE = re.compile(r"^([A-Z]{1,6}(?:[ -][A-Z]{1,4}){0,2}[ \-/]?\d{2,6}(?:[ -]?[A-Z]\b)?)(?=\s|$)")
+# "… 2,80,000/-" at the end of a line. A bare number counts only with commas,
+# a ₹ / "Rs" / "/-" / "per pcs", or five digits, so "Collection 2026" isn't one.
+TRAIL_PRICE_RE = re.compile(r"(?P<cur>(?:₹|\brs\b\.?|\binr\b|\bmrp\b|\bprice\b|\brate\b)\s*[:\-]?\s*)?"
+                            r"(?P<num>\d{1,3}(?:,\d{2,3})+|\d{4,})(?:\.\d{1,2})?"
+                            r"(?P<tail>\s*(?:/-|/\s*-)|\s*(?:/|\bper\b)\s*(?:pcs?|pieces?|nos?|units?|sets?|each)\.?)?\s*$",
+                            re.I)
+MADIO_CODE_RE = re.compile(rf"^{VIRTUAL_PREFIX}-\d+$", re.I)
+# Column headings of a pasted table (or labels in free text), and the field each fills.
+HEADINGS = (
+    ("skip", r"(?:s\.?\s*no\.?|sr\.?\s*no\.?|sl\.?\s*no\.?|#|no\.?)"),
+    ("code", r"(?:product\s+|item\s+)?(?:code|sku|model(?:\s*no\.?)?|article(?:\s*no\.?)?|art\.?\s*no\.?|"
+             r"ref(?:erence)?(?:\s*no\.?)?|design\s*no\.?|madio\s*code)"),
+    ("dimensions", r"(?:overall\s+)?(?:size|dimensions?|dims?|l\s*x\s*w(?:\s*x\s*h)?)(?:\s*\(.*\))?"),
+    ("price", r"(?:mrp|price|rate|cost|amount|landing(?:\s*(?:cost|price))?|dealer\s*price|net\s*(?:price|rate)|"
+              r"unit\s*price|offer\s*price)(?:\s*\(.*\))?"),
+    ("lead_time", r"(?:lead\s*time|tat|turn\s*around(?:\s*time)?|delivery(?:\s*time)?|production\s*time)"),
+    ("moq", r"(?:moq|min(?:imum)?\.?\s*order(?:\s*(?:qty|quantity))?)"),
+    ("sale_terms", r"(?:terms|notes?|remarks?|conditions)"),
+    ("category", r"(?:category|type|collection|range|group)"),
+    ("name", r"(?:product(?:\s*name)?|name|item(?:\s*name)?|title|particulars|description|desc\.?)"),
+    ("feature", r"(?:material|finish|colou?r|top|base|legs?|fabric|upholstery|specifications?|specs?|features?|"
+                r"weight|warranty|thickness|glass|frame)"),
+)
+_HEADING_RES = [(k, re.compile(rf"^\s*{rx}\s*[:.]?\s*$", re.I)) for k, rx in HEADINGS]
+_LABELLED_RE = re.compile(r"^([A-Za-z][A-Za-z .()/&]{1,30}?)\s*[:：=]+-?\s*(.+)$")
+
+
+def tidy_dimensions(text: str) -> str:
+    """ "Size: 240X110X75 CM" → "240 × 110 × 75 cm"."""
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    t = re.sub(r"^(?:overall\s+)?(?:size|dimensions?|dims?)\s*[:：\-=]*\s*", "", t, flags=re.I).strip(" :-")
+    t = re.sub(r"(\d)\s*[x×*]\s*(?=[Øø⌀]?\s*\d)", r"\1 × ", t, flags=re.I)
+    t = re.sub(rf"(\d\s*{_DIM_UNIT})\s*[x×*]\s*(?=[Øø⌀]?\s*\d)", r"\1 × ", t, flags=re.I)
+    t = re.sub(r"(?<=\d)\s*(cms?|mm|mtrs?|m|ft|feet|inch(?:es)?|in)\b",
+               lambda m: " " + _UNIT_WORDS[m.group(1).lower()], t, flags=re.I)
+    return re.sub(r"\s{2,}", " ", t)[:80]
+
+
+def money_of(text) -> Optional[float]:
+    """A price in a cell or a line of its own: "₹2,80,000", "Rs. 280000/-",
+    "2,80,000 per pcs", "2.8 lakh". None when it isn't one."""
+    if isinstance(text, (int, float)) and not isinstance(text, bool):
+        v = float(text)
+        return v if 50 <= v <= 1e8 else None
+    t = _CURRENCY.sub("", _PRICE_LABEL.sub("", str(text or ""))).strip()
+    for _ in range(3):
+        t = _PRICE_TAIL.sub("", t).strip(" .:")
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(?:lakhs?|lacs?|l)", t, re.I)
+    if m:
+        v = float(m.group(1)) * 100_000
+    elif re.fullmatch(r"\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?", t):
+        v = float(t.replace(",", ""))
+    else:
+        return None
+    return v if 50 <= v <= 1e8 else None
+
+
+def _code_like(text: str, labelled: bool = False) -> str:
+    """A product code ("MV-0025", "DT KT 6087"): capitals and digits, short."""
+    v = re.sub(r"\s+", " ", str(text or "")).strip(" -/.:#")
+    toks = v.split()
+    if not v or len(v) > 30 or len(toks) > 5:
+        return ""
+    if not re.search(r"\d", v) or not all(t.isupper() or re.search(r"\d", t) for t in toks):
+        return ""
+    # A code's letter-only parts are abbreviations ("DT", "ARLW"), not words ("DINING").
+    if not labelled and (not re.search(r"[A-Za-z]", v) or any(t.isalpha() and len(t) > 4 for t in toks)):
+        return ""
+    return v
+
+
+def _parts(text: str, kind: str = "") -> list:
+    """What one cell, or one line of free text, says: [(field, value), ...].
+    `kind` is the cell's column heading, when the table has one."""
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not t or kind == "skip" or re.fullmatch(r":?-{2,}:?", t):
+        return []
+    if _is_contact_line(t):
+        return [("contact", t)]
+    if kind == "code":
+        code, words = _split_model(t) if re.search(r"\d", t) else (t, "")
+        return [("code", code[:40])] + ([("text", _title(words))] if words else [])
+    if kind == "price":
+        v = money_of(t)
+        return [("price", v)] if v else []
+    if kind == "dimensions":
+        return [("dimensions", tidy_dimensions(t))]
+    if kind == "moq":
+        return [("moq", MOQ_RE.sub("", t).strip())]
+    if kind in ("lead_time", "sale_terms", "category", "name"):
+        return [(kind, t)]
+    if kind == "feature":
+        return [("feature", t)]
+    # A labelled line: "Model No: DT KT 6087", "Size: 240 x 110", "Material: Marble".
+    lab = _LABELLED_RE.match(t)
+    if lab and not URL_RE.search(t):
+        head, value = lab.group(1).strip(), lab.group(2).strip()
+        field = next((k for k, rx in _HEADING_RES if rx.match(head)), "")
+        if field and field not in ("feature", "skip"):
+            return _parts(value, field)
+        return [("feature", f"{_title(head) if head.isupper() else head}: {value}")]
+    if MOQ_RE.match(t):
+        return [("moq", MOQ_RE.sub("", t).strip())]
+    v = money_of(t)
+    if v:
+        return [("price", v)]
+    if SALE_TERMS_RE.search(t) and len(t.split()) >= 2 and not DIMS_SPAN_RE.search(t):
+        return [("sale_terms", t)]
+    if LEAD_TIME_RE.search(t) and len(t.split()) <= 8 and not DIMS_SPAN_RE.search(t):
+        return [("lead_time", t)]
+    out = []
+    m = DIMS_SPAN_RE.search(t)
+    if m and DIM_RE.search(m.group(0)):
+        out.append(("dimensions", tidy_dimensions(m.group(0))))
+        t = (t[:m.start()] + " " + t[m.end():]).strip()
+    whole = _code_like(t)
+    if whole and whole == t.strip(" -/.:#"):
+        return out + [("code", whole)]
+    m = LEAD_CODE_RE.match(t)
+    if m and _code_like(m.group(1)):
+        code, words = _split_model(m.group(1))
+        out.append(("code", code))
+        t = (words + " " + t[m.end():]).strip(" -–|,:")
+    m = TRAIL_PRICE_RE.search(t)
+    if m and m.start() > 0 and (m.group("cur") or m.group("tail") or "," in m.group("num") or len(m.group("num")) >= 5):
+        v = money_of(m.group("num"))
+        if v:
+            out.append(("price", v))
+            t = t[:m.start()].strip(" -–|,:")
+    t = t.strip(" -–|,:·•")
+    if t and re.search(r"[A-Za-z]", t):
+        out.append(("text", t))
+    return out
+
+
+def _heading_map(cells: list) -> dict:
+    """{column: field} when a row is a table's headings ("Code | Product | Size | Price")."""
+    found = {}
+    for i, c in enumerate(cells):
+        k = next((k for k, rx in _HEADING_RES if rx.match(c)), "")
+        if k:
+            found[i] = k
+    named = [c for c in cells if c]
+    return found if len(found) >= 2 and len(found) >= len(named) - 1 else {}
+
+
+def _separator(lines: list) -> str:
+    for sep in ("\t", "|", ";"):
+        if lines and sum(1 for l in lines if sep in l) >= max(1, round(len(lines) * 0.6)):
+            return sep
+    return ""
+
+
+def _new_product(category: str = "") -> dict:
+    return {"name": "", "category": category, "features": [], "code": "", "price": None, "dimensions": "",
+            "lead_time": "", "moq": "", "sale_terms": ""}
+
+
+def _add(p: dict, field: str, value) -> None:
+    if field == "text":
+        if not p["name"]:
+            p["name"] = value
+        else:
+            p["features"].append(value)
+    elif field == "feature":
+        p["features"].append(value)
+    elif field in ("name", "code", "price", "dimensions", "lead_time", "moq", "sale_terms", "category"):
+        if not p[field]:
+            p[field] = value
+        elif field == "name":
+            p["features"].append(value)
+
+
+def _starts_new(p: dict, fields: set) -> bool:
+    """A line that begins another product: it repeats a code, price or size
+    this one already has, or names a product after this one was named and
+    priced (or comes with its own code or price)."""
+    if any(p[f] for f in ("code", "price", "dimensions") if f in fields):
+        return True
+    if fields & {"text", "name"} and p["name"]:
+        return bool(p["price"]) or bool(fields & {"code", "price"})
+    return False
+
+
+def parse_rows(text: str, terms: list[str]) -> tuple[list[dict], dict]:
+    """Candidates from a pasted price list, and a summary. A table (cells split
+    by tabs, | or ;) is one product a row, its heading row naming the columns;
+    free text is read line by line, a new product starting where a line
+    repeats what the current one already has (a second code or price)."""
+    text = str(text or "")[:MAX_PASTE_CHARS]
+    lines = [l.strip() for l in text.splitlines()]
+    filled = [l for l in lines if l]
+    summary = {"pages": 0, "rows": len(filled), "pictures_dropped": 0, "removed": 0, "whole_page": 0,
+               "source": "text"}
+    products: list = []
+    sep = _separator(filled)
+    if sep:
+        heads: dict = {}
+        section = ""
+        for line in filled:
+            cells = [c.strip() for c in line.split(sep)]
+            while cells and not cells[0]:
+                cells.pop(0)
+            while cells and not cells[-1]:
+                cells.pop()
+            if not cells or all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c):
+                continue
+            hm = _heading_map(cells)
+            if hm and not any(money_of(c) for c in cells):
+                heads = hm
+                continue
+            parts = [pp for i, c in enumerate(cells) for pp in _parts(c, heads.get(i, ""))]
+            summary["removed"] += sum(1 for f, _ in parts if f == "contact")
+            if len(cells) == 1 and {f for f, _ in parts} <= {"text"}:
+                section = _title(cells[0])[:60]             # a title above the rows: "DINING TABLES"
+                continue
+            p = _new_product(section)
+            for field, value in parts:
+                _add(p, field, value)
+            products.append(p)
+    else:
+        section = ""
+        for block in re.split(r"\n\s*\n", "\n".join(lines)):
+            rows = _join_labels([l for l in block.splitlines() if l.strip()])
+            if not rows:
+                continue
+            parts = [_parts(l) for l in rows]
+            summary["removed"] += sum(1 for ps in parts for f, _ in ps if f == "contact")
+            parts = [[(f, v) for f, v in ps if f != "contact"] for ps in parts]
+            kinds = {f for ps in parts for f, _ in ps}
+            if kinds <= {"text"} and len(rows) <= 2 and all(len(l.split()) <= 5 for l in rows):
+                section = _title(rows[0])                    # a heading on its own: "DINING TABLES"
+                continue
+            found, p = [], None
+            for ps in parts:
+                if not ps:
+                    continue
+                fields = {f for f, _ in ps}
+                if p is None or _starts_new(p, fields):
+                    p = _new_product(section)
+                    found.append(p)
+                for field, value in ps:
+                    _add(p, field, value)
+            # A first line naming what the rows under it are ("DINING TABLES").
+            first = found[0] if found else None
+            if first and len(found) > 1 and not (first["code"] or first["price"] or first["dimensions"]
+                                                 or first["features"]):
+                section = _title(first["name"])
+                found = found[1:]
+                for q in found:
+                    q["category"] = section
+            products += found
+        # Terms printed once under the list ("Made to order, 3-4 weeks",
+        # "GST included, transport extra") are every product's.
+        if len(products) >= 2:
+            for f in ("lead_time", "moq", "sale_terms"):
+                having = [q for q in products if q[f]]
+                if len(having) == 1 and having[0] is products[-1]:
+                    for q in products:
+                        q[f] = q[f] or having[0][f]
+    out = []
+    for p in products:
+        if len(out) >= MAX_CANDIDATES:
+            break
+        if not (p["name"] or p["code"] or p["price"] or p["dimensions"]):
+            continue
+        n = len(out) + 1
+        out.append(_candidate(f"t{n}", n, p, terms, summary))
+    summary["pages"] = len(out)
+    return out, summary
+
+
+def _candidate(key: str, n: int, p: dict, terms: list, summary: dict, images: Optional[list] = None) -> dict:
+    """A review candidate from parsed or typed fields, the vendor's identity
+    taken out of every word a customer could see."""
+    removed = 0
+
+    def clean(v, limit: int) -> str:
+        nonlocal removed
+        s, r = scrub(str(v or ""), terms)
+        removed += r
+        return re.sub(r"\s+", " ", s.replace("\n", " ")).strip()[:limit]
+    code = re.sub(r"\s+", " ", str(p.get("code") or "")).strip()[:40]
+    madio_sku = code.upper() if MADIO_CODE_RE.match(code) else ""
+    name = clean(p.get("name"), 120)
+    name = _title(name) if name.isupper() else name
+    features = [f for f in (clean(x, 140) for x in (p.get("features") or [])) if f][:MAX_FEATURES]
+    dims = tidy_dimensions(p.get("dimensions")) or dimensions_of(features)
+    category = clean(p.get("category"), 60)
+    if not name:
+        base = _singular(category) or "Product"
+        nums = re.findall(r"\d+(?:\.\d+)?", dims)[:2]
+        unit = re.search(r"\b(mm|cm|m|in|ft)\b", dims)
+        if len(nums) == 2:
+            name = f"{base} {nums[0]} × {nums[1]}" + (f" {unit.group(1)}" if unit else "")
+        else:
+            name = f"{base} {code}" if code and not madio_sku else base
+    price = p.get("price")
+    try:
+        price = float(price) if price not in (None, "") else None
+    except (TypeError, ValueError):
+        price = money_of(price)
+    summary["removed"] = summary.get("removed", 0) + removed
+    return {"key": key, "page": n, "images": list(images or []), "picture_count": len(images or []),
+            "removed": removed, "whole_page": False, "likely": bool(price or code or dims),
+            "name": name[:120], "subtitle": "", "category": category,
+            "features": with_size_line(features, dims), "vendor_item_code": "" if madio_sku else code,
+            "madio_sku": madio_sku, "vendor_price": price if price and price > 0 else None, "dimensions": dims,
+            "lead_time": clean(p.get("lead_time"), 60), "moq": clean(p.get("moq"), 40),
+            "sale_terms": clean(p.get("sale_terms"), 300)}
+
+
+def captured_candidates(rows: list, terms: list[str]) -> tuple[list[dict], dict]:
+    """Candidates from products staff typed while looking at a vendor's PDF
+    page ("Capture product"), with the picture they cut out of the page."""
+    summary = {"pages": 0, "rows": 0, "pictures_dropped": 0, "removed": 0, "whole_page": 0, "source": "capture"}
+    out, pages = [], set()
+    for r in [r for r in rows or [] if isinstance(r, dict)][:MAX_CANDIDATES]:
+        pic = str(r.get("picture") or "")
+        images = []
+        if pic:
+            try:
+                images = [clean_picture(pic, MAIN_PX)]
+            except VirtualItemError:
+                summary["pictures_dropped"] += 1
+        feats = r.get("features") or []
+        if isinstance(feats, str):
+            feats = feats.splitlines()
+        raw_price = r.get("vendor_price")
+        p = {**_new_product(r.get("category") or ""), "name": r.get("name") or "",
+             "code": r.get("vendor_item_code") or "", "dimensions": r.get("dimensions") or "",
+             "price": money_of(raw_price) if raw_price not in (None, "") else None,
+             "lead_time": r.get("lead_time") or "", "moq": r.get("moq") or "", "sale_terms": r.get("sale_terms") or "",
+             "features": [str(f) for f in feats]}
+        if not (str(p["name"]).strip() or str(p["code"]).strip() or p["price"] or images):
+            continue
+        try:
+            page = max(0, int(r.get("page") or 0))
+        except (TypeError, ValueError):
+            page = 0
+        pages.add(page)
+        c = _candidate(f"c{len(out) + 1}", page or len(out) + 1, p, terms, summary, images)
+        c["likely"] = True
+        out.append(c)
+    summary.update(pages=len(pages - {0}) or len(out), rows=len(out))
+    return out, summary
+
+
 # ── MADIO codes and prices ─────────────────────────────────────────────────
 def next_virtual_codes(existing: Iterable[str], count: int, prefix: str = VIRTUAL_PREFIX) -> list[str]:
     top = 0
@@ -917,6 +1294,12 @@ def clean_item(raw: dict, *, partial: bool = False) -> dict:
         out["status"] = st
     if has("vendor_item_code"):
         out["vendor_item_code"] = _line(raw.get("vendor_item_code"), 40)
+    # Shown on the product card, the WhatsApp message and the quotation line.
+    if has("dimensions"):
+        out["dimensions"] = tidy_dimensions(raw.get("dimensions"))
+    for k, n in (("lead_time", 60), ("moq", 40), ("sale_terms", 300)):
+        if has(k):
+            out[k] = _line(raw.get(k), n)
     return out
 
 
@@ -962,3 +1345,32 @@ def size_text(features: list) -> str:
         if re.match(r"\s*(size|dimensions?|dim)\b", str(f), re.I) or DIM_RE.search(str(f)):
             return str(f)[:80]
     return ""
+
+
+def dimensions_of(features) -> str:
+    """The product's size from its specification: a size line's value, else
+    the first unlabelled line with a measurement like 240 x 110."""
+    lines = [str(f) for f in features or []]
+    for f in lines:
+        if SIZE_LABEL_RE.match(f):
+            v = tidy_dimensions(f)
+            if re.search(r"\d", v):
+                return v
+    for f in lines:
+        if not _LABELLED_RE.match(f):
+            m = DIMS_SPAN_RE.search(f)
+            if m and DIM_RE.search(m.group(0)):
+                return tidy_dimensions(m.group(0))
+    return ""
+
+
+def with_size_line(features, dimensions: str) -> list:
+    """The specification with one size line, "Size: <dimensions>", first: the
+    catalogue, mockups and quotations print the size from there."""
+    feats = [str(f).strip() for f in features or [] if str(f).strip()]
+    dims = tidy_dimensions(dimensions)
+    if not dims:
+        return feats[:MAX_FEATURES]
+    key = lambda v: re.sub(r"[^0-9a-zø×.]", "", tidy_dimensions(v).lower())  # noqa: E731
+    rest = [f for f in feats if not SIZE_LABEL_RE.match(f) and key(f) != key(dims)]
+    return ([f"Size: {dims}"] + rest)[:MAX_FEATURES]
