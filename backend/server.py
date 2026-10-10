@@ -10660,6 +10660,9 @@ async def _make_madio_catalogue(opts: dict, previous: dict, user: dict) -> dict:
     kinds = (await _picklists(user))["catalogue_types"]["values"]
     meta["kind"] = "Product catalogue" if not kinds or "Product catalogue" in kinds else ""
     show_prices = opts.get("show_prices", True) is not False
+    # A shade card for MAP finishes, product pages for everything else.
+    layout = opts.get("layout") if opts.get("layout") in catalogue_pdf.LAYOUTS else (
+        "swatches" if all(quotation_templates.division_key(v.get("division", "")) == "MAP" for v in items) else "products")
     tid = tenancy.tenant_of(user) or "__no_tenant__"
     settings = await _quote_settings(user)
     preset = quotation_templates.division_preset(tid, brand_div, settings)
@@ -10673,7 +10676,7 @@ async def _make_madio_catalogue(opts: dict, previous: dict, user: dict) -> dict:
              "description": v.get("description", ""), "price": v.get("mrp") or 0, "unit": v.get("unit") or "",
              "images": v.get("images") or []} for v in items],
         preset=preset, tenant_id=tid, office=office, show_prices=show_prices,
-        valid_from=meta.get("valid_from", ""), note=note)
+        valid_from=meta.get("valid_from", ""), note=note, layout=layout)
     file_name = f"{mockups.slug(meta['title'])}.pdf"
     kit_url, kit_size = "", 0
     try:
@@ -10690,7 +10693,7 @@ async def _make_madio_catalogue(opts: dict, previous: dict, user: dict) -> dict:
         raise HTTPException(status_code=502, detail="Couldn't save the catalogue to SharePoint. Try again.")
     source = {"source": "upload", "file_url": file_url, "file_name": file_name, "content_type": "application/pdf",
               "size_bytes": len(pdf), "sharepoint_web_url": ""}
-    extra = {"origin": "generated", "item_ids": [v["id"] for v in items], "show_prices": show_prices,
+    extra = {"origin": "generated", "item_ids": [v["id"] for v in items], "show_prices": show_prices, "layout": layout,
              "subtitle": subtitle, "note": note, "render_kit": bool(opts.get("render_kit")),
              "kit_url": kit_url, "kit_size": kit_size, "item_count": len(items)}
     return await _publish_catalogue(meta, source, previous, user, extra)
@@ -10699,7 +10702,8 @@ async def _make_madio_catalogue(opts: dict, previous: dict, user: dict) -> dict:
 @api.post("/virtual-items/catalogue")
 async def make_madio_catalogue(payload: dict, user: dict = Depends(get_current_user)):
     """MADIO's branded catalogue (PDF) of the chosen virtual items, published
-    on the Catalogues page to share with customers and architects. With
+    on the Catalogues page to share with customers and architects. `layout`
+    "products" (two a page) or "swatches" (a shade card; MAP's default). With
     `replaces` (a catalogue made here) it becomes that catalogue's next
     version, so links already shared open the new one."""
     await _require_product_view(user)
@@ -10724,7 +10728,7 @@ async def regenerate_madio_catalogue(cat_id: str, user: dict = Depends(get_curre
     top = await db.catalogues.find_one(tenancy.scope({"family_id": c["family_id"], "status": "Current"}, "catalogues", user),
                                        {"_id": 0}) or c
     opts = {k: top.get(k) for k in ("title", "division", "audience", "notes", "valid_from", "subtitle", "note",
-                                    "show_prices", "render_kit", "item_ids")}
+                                    "show_prices", "render_kit", "item_ids", "layout")}
     opts["valid_from"] = lc.today_iso()
     return await _make_madio_catalogue(opts, top, user)
 

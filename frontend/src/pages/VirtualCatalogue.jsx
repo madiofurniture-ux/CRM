@@ -490,7 +490,13 @@ function ReviewImport({ imp, onBack, onClose, onDone, onDiscard }) {
           <span>{s.removed || 0} vendor details taken out</span>
           {imp.vendor_name && <span>Vendor: {imp.vendor_name}</span>}
           <span>Division: {imp.division}</span>
+          {s.collection && <span>Range: {s.collection}</span>}
         </div>
+        {(s.common_features || []).length > 0 && (
+          <div className="text-xs text-[var(--color-text-muted)]" data-testid="vc-common-features">
+            The brochure's product details were added to every shade: {s.common_features.join(" · ")}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" className="lx-btn !py-1" onClick={() => setRows((l) => l.map((r) => ({ ...r, keep: true })))}>Keep all</button>
           <button type="button" className="lx-btn !py-1" onClick={() => setRows((l) => l.map((r) => ({ ...r, keep: false })))}>Keep none</button>
@@ -749,6 +755,8 @@ function MakeCatalogueDialog({ items, onClose, onMade }) {
   const [form, setForm] = useState({
     title: `${divs.length === 1 ? divs[0] : "MADIO"} Collection — ${month}`, subtitle: "", division: divs.length === 1 ? divs[0] : "All",
     show_prices: true, render_kit: items.length <= MAX_KIT, audience: "external", note: "", replaces: "",
+    // MAP finishes print as a shade card (twelve a page); the rest two a page.
+    layout: divs.length === 1 && divs[0] === "MAP" ? "swatches" : "products",
   });
   const set = (p) => setForm((f) => ({ ...f, ...p }));
   const [existing, setExisting] = useState([]);
@@ -785,6 +793,16 @@ function MakeCatalogueDialog({ items, onClose, onMade }) {
               {existing.map((c) => <option key={c.id} value={c.id}>{c.title} (v{c.version})</option>)}
             </select></label>
         </div>
+        <fieldset className="space-y-1">
+          <legend className="text-sm font-medium mb-1">Layout</legend>
+          <div className="inline-flex rounded-lg border border-[var(--color-border)] overflow-hidden text-sm" role="radiogroup">
+            {[["products", "Product pages · 2 a page"], ["swatches", "Shade card · 12 a page"]].map(([k, l]) => (
+              <button key={k} type="button" role="radio" aria-checked={form.layout === k} onClick={() => set({ layout: k })}
+                      className={`px-3 py-1.5 ${form.layout === k ? "bg-[var(--color-primary)] text-white" : "bg-[var(--color-surface)]"}`}
+                      data-testid={`vc-make-layout-${k}`}>{l}</button>
+            ))}
+          </div>
+        </fieldset>
         <div className="space-y-1.5 text-sm">
           <label className="flex items-center gap-2"><input type="checkbox" checked={form.show_prices} onChange={(e) => set({ show_prices: e.target.checked })} data-testid="vc-make-prices" /> Show MADIO prices</label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={form.render_kit} disabled={items.length > MAX_KIT}

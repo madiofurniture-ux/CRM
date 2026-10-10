@@ -55,10 +55,26 @@ def _month(valid_from: str) -> str:
     return d.strftime("%B %Y")
 
 
+LAYOUTS = ("products", "swatches")   # two products a page | a shade card, twelve a page
+SWATCH_COLS, SWATCH_ROWS = 3, 4
+
+
+def common_features(items: list) -> list:
+    """Specification lines every item shares (a shade card's coverage, pack
+    sizes, …), in the first item's order."""
+    lists = [i.get("features") or [] for i in items if i]
+    if not lists:
+        return []
+    return [f for f in lists[0] if all(f in other for other in lists[1:])]
+
+
 def render(*, title: str, items: list, preset: dict, tenant_id: str, office: Optional[dict] = None,
-           subtitle: str = "", show_prices: bool = True, valid_from: str = "", note: str = "") -> bytes:
+           subtitle: str = "", show_prices: bool = True, valid_from: str = "", note: str = "",
+           layout: str = "products") -> bytes:
     """items: [{code, name, subtitle, category, features[], description,
-    price, unit, images[data URL]}] — MADIO's fields only."""
+    price, unit, images[data URL]}] — MADIO's fields only. layout
+    "swatches" prints a shade card: twelve to a page, with the
+    specification they share printed once."""
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
     from reportlab.lib.pagesizes import A4
@@ -145,7 +161,17 @@ def render(*, title: str, items: list, preset: dict, tenant_id: str, office: Opt
             x, y = M + col * (cw + gap), box_top - (row + 1) * ch - row * gap
             c.setFillColor(pale)
             c.rect(x, y, cw, ch, stroke=0, fill=1)
-            _fit(c, r, x + 4 * mm, y + 4 * mm, cw - 8 * mm, ch - 8 * mm)
+            if layout == "swatches":                    # textures fill their tile
+                iw, ih = r.getSize()
+                sc = max(cw / iw, ch / ih)
+                c.saveState()
+                clip = c.beginPath()
+                clip.rect(x, y, cw, ch)
+                c.clipPath(clip, stroke=0, fill=0)
+                c.drawImage(r, x + (cw - iw * sc) / 2, y + (ch - ih * sc) / 2, width=iw * sc, height=ih * sc, mask="auto")
+                c.restoreState()
+            else:
+                _fit(c, r, x + 4 * mm, y + 4 * mm, cw - 8 * mm, ch - 8 * mm)
     c.setFillColor(navy)
     c.rect(0, 0, W, 30 * mm, stroke=0, fill=1)
     strip = [x for x in (preset.get("tagline"), address, phone) if x]
@@ -157,23 +183,85 @@ def render(*, title: str, items: list, preset: dict, tenant_id: str, office: Opt
         y -= 6 * mm
     c.showPage()
 
-    # ── products, two a page ──
+    def page_head() -> None:
+        draw_logo(M, H - 16 * mm, 9 * mm)
+        c.setFont(font, 8)
+        c.setFillColor(grey)
+        c.drawRightString(W - M, H - 12 * mm, str(title)[:80])
+        c.setStrokeColor(gold)
+        c.setLineWidth(0.8)
+        c.line(M, H - 19 * mm, W - M, H - 19 * mm)
+
+    def cover_fit(reader, x, y, w, h) -> None:
+        """A picture filling the box, cropped to it (a swatch)."""
+        iw, ih = reader.getSize()
+        s = max(w / iw, h / ih)
+        c.saveState()
+        path = c.beginPath()
+        path.rect(x, y, w, h)
+        c.clipPath(path, stroke=0, fill=0)
+        c.drawImage(reader, x + (w - iw * s) / 2, y + (h - ih * s) / 2, width=iw * s, height=ih * s, mask="auto")
+        c.restoreState()
+
     head_h, foot_h = 22 * mm, 16 * mm
-    slot_h = (H - head_h - foot_h - 6 * mm) / 2
     page = 2
-    for k, it in enumerate(items):
+    if layout == "swatches" and items:
+        # ── a shade card: the shared specification once, then the shades ──
+        shared = common_features(items)
+        per_page = SWATCH_COLS * SWATCH_ROWS
+        gap = 5 * mm
+        cell_w = (W - 2 * M - gap * (SWATCH_COLS - 1)) / SWATCH_COLS
+        for start in range(0, len(items), per_page):
+            if start:
+                footer(page)
+                c.showPage()
+                page += 1
+            page_head()
+            top = H - head_h - 2 * mm
+            if start == 0 and shared:
+                c.setFillColor(colors.HexColor("#F7F3E8"))
+                p = para("<br/>".join(f"•&nbsp;&nbsp;{e(f)}" for f in shared[:8]), 8.5, 12)
+                _, bh = p.wrapOn(c, W - 2 * M - 8 * mm, H)
+                c.roundRect(M, top - bh - 12 * mm, W - 2 * M, bh + 12 * mm, 2 * mm, stroke=0, fill=1)
+                put(para("<b>Specification</b>", 10, 13, bold, navy), M + 4 * mm, top - 2.5 * mm, W - 2 * M)
+                p.drawOn(c, M + 4 * mm, top - 9 * mm - bh)
+                top -= bh + 16 * mm
+            label_h = 13 * mm if show_prices else 9 * mm
+            rows = SWATCH_ROWS
+            cell_h = (top - foot_h - 2 * mm - gap * (rows - 1)) / rows
+            pic_h = cell_h - label_h
+            for k, it in enumerate(items[start:start + per_page]):
+                col, row = k % SWATCH_COLS, k // SWATCH_COLS
+                if row >= rows:
+                    break
+                x = M + col * (cell_w + gap)
+                y = top - (row + 1) * cell_h - row * gap
+                c.setFillColor(pale)
+                c.rect(x, y + label_h, cell_w, pic_h, stroke=0, fill=1)
+                r = _reader((it.get("images") or [""])[0])
+                if r:
+                    cover_fit(r, x, y + label_h, cell_w, pic_h)
+                c.setFillColor(navy)
+                c.setFont(bold, 8.5)
+                c.drawString(x, y + label_h - 4.5 * mm, str(it.get("name") or "")[:34])
+                c.setFillColor(colors.HexColor("#8A6D1A"))
+                c.setFont(bold, 7)
+                c.drawString(x, y + label_h - 8 * mm, str(it.get("code") or ""))
+                if show_prices:
+                    price = float(it.get("price") or 0)
+                    c.setFillColor(ink)
+                    c.setFont(font, 7.5)
+                    c.drawRightString(x + cell_w, y + label_h - 8 * mm,
+                                      f"{qpdf.inr(price)} / {it.get('unit') or 'unit'}" if price > 0 else "Price on request")
+            # (a whole page of twelve, or what's left on the last one)
+    slot_h = (H - head_h - foot_h - 6 * mm) / 2
+    for k, it in enumerate(items if layout != "swatches" else []):
         if k % 2 == 0:
             if k:
                 footer(page)
                 c.showPage()
                 page += 1
-            draw_logo(M, H - 16 * mm, 9 * mm)
-            c.setFont(font, 8)
-            c.setFillColor(grey)
-            c.drawRightString(W - M, H - 12 * mm, str(title)[:80])
-            c.setStrokeColor(gold)
-            c.setLineWidth(0.8)
-            c.line(M, H - 19 * mm, W - M, H - 19 * mm)
+            page_head()
         slot_top = H - head_h - (k % 2) * (slot_h + 6 * mm)
         slot_bottom = slot_top - slot_h
         if k % 2:
