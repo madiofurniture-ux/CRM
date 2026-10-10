@@ -80,6 +80,19 @@ export default function Catalogues({ vendorMode = false }) {
     try { await fn(); toast.success(ok); load(); }
     catch (e) { toast.error(formatApiError(e.response?.data?.detail) || "That didn't work"); }
   };
+  // Making a catalogue again re-renders its PDF (and render kit), which can
+  // take a while: say so at once, and don't let it be started twice.
+  const [remaking, setRemaking] = useState("");
+  const remake = (c) => {
+    if (remaking) return;
+    setRemaking(c.id);
+    const run = api.post(`/catalogues/${c.id}/regenerate`).finally(() => setRemaking(""));
+    toast.promise(run, {
+      loading: `Making “${c.title}” again with today's names, prices and pictures…`,
+      success: () => { load(); return "Made again; shared links now open the new version"; },
+      error: (e) => formatApiError(e?.response?.data?.detail) || "Couldn't make it again",
+    });
+  };
 
   const field = "px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-[var(--color-border)] text-sm";
   return (
@@ -129,7 +142,7 @@ export default function Catalogues({ vendorMode = false }) {
             {shown.map((c) => (
               <CatalogueCard key={c.id} c={c} can={can} isAdmin={user?.role === "admin"} vendorMode={vendorMode}
                              onImport={() => navigate(`/virtual-catalogue?brochure=${c.id}`)}
-                             onRegenerate={() => act(() => api.post(`/catalogues/${c.id}/regenerate`), "Made again with today's names, prices and pictures; shared links now open it")}
+                             onRegenerate={() => remake(c)} remaking={remaking === c.id}
                              onShare={() => setSharing(c)} onNewVersion={() => setPublishing({ replaces: c })}
                              onEdit={() => setEditing(c)}
                              onArchive={() => act(() => api.post(`/catalogues/${c.id}/archive`), "Archived")}
@@ -150,7 +163,7 @@ export default function Catalogues({ vendorMode = false }) {
   );
 }
 
-function CatalogueCard({ c, can, isAdmin, vendorMode, onImport, onRegenerate, onShare, onNewVersion, onEdit, onArchive, onRestore, onDelete }) {
+function CatalogueCard({ c, can, isAdmin, vendorMode, onImport, onRegenerate, remaking, onShare, onNewVersion, onEdit, onArchive, onRestore, onDelete }) {
   const [menu, setMenu] = useState(false);
   const Icon = fileIcon(c.content_type);
   const aud = AUDIENCE[c.audience] || AUDIENCE.external;
@@ -179,7 +192,7 @@ function CatalogueCard({ c, can, isAdmin, vendorMode, onImport, onRegenerate, on
                  onMouseLeave={() => setMenu(false)}>
               {can("edit") && <MenuItem Icon={Pencil} onClick={() => { setMenu(false); onEdit(); }}>Edit details</MenuItem>}
               {can("create") && c.status === "Current" && (generated
-                ? <MenuItem Icon={RefreshCw} onClick={() => { setMenu(false); onRegenerate(); }} testid={`catalogue-regenerate-${c.id}`}>Make again with today's prices</MenuItem>
+                ? <MenuItem Icon={RefreshCw} onClick={() => { setMenu(false); onRegenerate(); }} testid={`catalogue-regenerate-${c.id}`}>{remaking ? "Making it again…" : "Make again with today's prices"}</MenuItem>
                 : <MenuItem Icon={Upload} onClick={() => { setMenu(false); onNewVersion(); }} testid={`catalogue-newversion-${c.id}`}>Publish new version</MenuItem>)}
               {generated && c.kit_url && <MenuItem Icon={PackageOpen} onClick={() => { setMenu(false); downloadFile(`/catalogues/${c.id}/render-kit`, `${c.title} render kit.zip`).catch(() => toast.error("Couldn't download the render kit")); }}>Download render kit</MenuItem>}
               <MenuItem Icon={Download} onClick={() => { setMenu(false); openCatalogueFile(c, true); }}>Download</MenuItem>

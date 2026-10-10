@@ -33,6 +33,11 @@ with customers and architects.
    - A product the same vendor's earlier catalogue already brought in is
      updated in place and keeps its code. It is matched on the vendor's
      product code, else on its name.
+   - **To change MADIO's markup on a vendor's products**, import the same
+     brochure again with the new *Markup ×* (e.g. 1.4). Every product is
+     matched ("Updates MV-0025"), its MADIO price becomes vendor price ×
+     markup (rounded up to ₹10), and its code, name and description stay.
+     Then use *Make again with today's prices* on the catalogue.
 5. **Quote it.**
    - The quotation and invoice product picker lists virtual items beside
      stock, marked *Made to order*. A line picked from one carries the MV
@@ -43,7 +48,9 @@ with customers and architects.
      the usual links.
    - The render kit can go with it for architects.
    - *Make again with today's prices* on the catalogue makes its next
-     version, so links already sent open the new one.
+     version, so links already sent open the new one. It shows its progress
+     while it runs (a few seconds, longer with a large render kit) and
+     can't be started twice.
 7. **Mockups.** *Mockup* on a product shows it in a room, on a wall, framed,
    or as a transparent cut-out, ready to download. Selecting products and
    using *Render kit (ZIP)* zips all of them.
