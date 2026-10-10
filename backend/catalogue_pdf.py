@@ -27,6 +27,16 @@ DEFAULT_NOTE = ("Prices in ₹ include GST and are subject to change without not
                 "installation are extra unless stated. Pictures are indicative; finishes may vary slightly.")
 
 
+# Master Data units as a customer reads them ("per piece", not "per pcs").
+UNIT_WORDS = {"pcs": "piece", "pc": "piece", "nos": "piece", "no": "piece", "sqft": "sq. ft", "sft": "sq. ft",
+              "rft": "running ft", "sqm": "sq. m", "ltr": "litre", "l": "litre"}
+
+
+def unit_word(unit: str) -> str:
+    u = str(unit or "").strip()
+    return UNIT_WORDS.get(u.lower(), u) or "piece"
+
+
 def _reader(src: str):
     from reportlab.lib.utils import ImageReader
 
@@ -252,7 +262,7 @@ def render(*, title: str, items: list, preset: dict, tenant_id: str, office: Opt
                     c.setFillColor(ink)
                     c.setFont(font, 7.5)
                     c.drawRightString(x + cell_w, y + label_h - 8 * mm,
-                                      f"{qpdf.inr(price)} / {it.get('unit') or 'unit'}" if price > 0 else "Price on request")
+                                      f"{qpdf.inr(price)} / {unit_word(it.get('unit'))}" if price > 0 else "Price on request")
             # (a whole page of twelve, or what's left on the last one)
     slot_h = (H - head_h - foot_h - 6 * mm) / 2
     for k, it in enumerate(items if layout != "swatches" else []):
@@ -320,7 +330,7 @@ def render(*, title: str, items: list, preset: dict, tenant_id: str, office: Opt
                 c.drawString(x + 4 * mm, slot_bottom + 5 * mm, qpdf.inr(price))
                 c.setFont(font, 7.5)
                 c.setFillColor(grey)
-                c.drawRightString(x + w - 4 * mm, slot_bottom + 5.5 * mm, f"per {it.get('unit') or 'piece'}")
+                c.drawRightString(x + w - 4 * mm, slot_bottom + 5.5 * mm, f"per {unit_word(it.get('unit'))}")
             else:
                 c.setFont(bold, 10)
                 c.drawString(x + 4 * mm, slot_bottom + 5 * mm, "Price on request")
