@@ -104,8 +104,10 @@ def cutout(data: bytes, tolerance: int = 26) -> tuple[Image.Image, bool]:
 
 
 def png_bytes(img: Image.Image) -> bytes:
+    # Normal compression: optimize=True made each cut-out take ~1.7 s (a
+    # 24-shade render kit 40 s) to save a few percent of size.
     buf = io.BytesIO()
-    img.save(buf, "PNG", optimize=True)
+    img.save(buf, "PNG", compress_level=6)
     return buf.getvalue()
 
 
